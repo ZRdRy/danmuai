@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+*.tmp
+*.bak
+
+# Local environments
+.env
+.env.*
+.venv/
+venv/
+
+# Desktop app local data and secrets
+*.db
+*.sqlite
+*.sqlite3
+*.key
+log/
+ph/
+
+# Build and caches
+.npmcache/
+dist/
+build/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python tool caches
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+
+# Local tool directories
+.agents/
+.trae/
+
+# Scratch and draft files
+scratchpad.md
+
+# IDE lock files
+skills-lock.json
+
+# Test/temp resources
+test_icon.png

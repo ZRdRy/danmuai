@@ -1,0 +1,18 @@
+---
+name: Feature Request
+about: 建议新功能或改进
+title: "[Feature] "
+labels: enhancement
+---
+
+## 需求场景
+
+你希望在什么场景下使用这个功能？
+
+## 当前替代方案
+
+目前有没有变通方法？
+
+## 建议方案
+
+如果有的话，描述你期望的实现方式。
