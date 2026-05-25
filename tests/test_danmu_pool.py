@@ -25,7 +25,7 @@ def test_danmu_pool_enabled_from_config(tmp_path):
     from app.danmu_pool import danmu_pool_enabled_from_config
 
     store = ConfigStore(db_path=tmp_path / "pool_flag.db")
-    assert danmu_pool_enabled_from_config(store) is True
+    assert danmu_pool_enabled_from_config(store) is False
     store.set("danmu_pool_enabled", "1")
     assert danmu_pool_enabled_from_config(store) is True
     store.set("danmu_pool_enabled", "0")

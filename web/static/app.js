@@ -1,6 +1,7 @@
 /** DanmuAI Web Console — 温馨 Qwen 原型 */
 
 const API = { token: null, base: '' };
+const MASKED_API_KEY = '********';
 
 const CONFIG_FIELDS = [
   'api_endpoint', 'api_mode', 'model', 'temperature', 'max_tokens',
@@ -689,8 +690,8 @@ function collectFormData() {
   data.empty_accel = document.getElementById('empty_accel')?.checked ? '1' : '0';
   data.danmu_pool_enabled = document.getElementById('danmu_pool_enabled')?.checked ? '1' : '0';
   data.mic_mode_enabled = document.getElementById('mic_mode_enabled')?.checked ? '1' : '0';
-  const key = document.getElementById('api_key').value;
-  if (key) data.api_key = key;
+  const key = (document.getElementById('api_key')?.value || '').trim();
+  if (key && key !== MASKED_API_KEY) data.api_key = key;
   return data;
 }
 
@@ -774,7 +775,7 @@ function fillForm(cfg) {
   if (dropStale) dropStale.checked = cfg.drop_stale !== '0';
   if (emptyAccel) emptyAccel.checked = cfg.empty_accel !== '0';
   const danmuPool = document.getElementById('danmu_pool_enabled');
-  if (danmuPool) danmuPool.checked = cfg.danmu_pool_enabled !== '0';
+  if (danmuPool) danmuPool.checked = cfg.danmu_pool_enabled === '1';
   updateDanmuPoolControls();
   const memoryMode = document.getElementById('memory_mode');
   if (memoryMode) {
@@ -811,7 +812,7 @@ function fillForm(cfg) {
   const modelEl = document.getElementById('model');
   if (modelEl) modelEl.value = modelId;
   syncVisionModelPickerFromForm(modelId);
-  document.getElementById('api_key').value = cfg.has_api_key ? '********' : '';
+  document.getElementById('api_key').value = cfg.has_api_key ? MASKED_API_KEY : '';
 }
 
 async function reloadConfigFromServer() {
@@ -2095,8 +2096,8 @@ async function init() {
         loadPersonaTemplate().catch(console.error);
       }
       const keyInput = document.getElementById('api_key');
-      if (keyInput?.value && keyInput.value !== '********') {
-        keyInput.value = '********';
+      if (keyInput?.value && keyInput.value !== MASKED_API_KEY) {
+        keyInput.value = MASKED_API_KEY;
       }
     } catch (err) {
       showToast(err.message || '保存时出了点小状况', true);
@@ -2116,12 +2117,13 @@ async function init() {
 
   document.getElementById('btnProbe').addEventListener('click', async () => {
     const data = collectFormData();
+    const keyField = (document.getElementById('api_key')?.value || '').trim();
     try {
       const res = await apiFetch('/api/probe', {
         method: 'POST',
         body: JSON.stringify({
           api_endpoint: data.api_endpoint,
-          api_key: data.api_key,
+          api_key: keyField === MASKED_API_KEY ? MASKED_API_KEY : (data.api_key || ''),
           model: data.model,
           api_mode: data.api_mode,
         }),

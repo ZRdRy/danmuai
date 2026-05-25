@@ -160,6 +160,44 @@ def test_apply_config_patch_skips_masked_key():
     assert config.get_api_key() == "keep-me"
 
 
+def test_apply_config_patch_skips_blank_key():
+    config = FakeConfig({"_api_key": "keep-me"})
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(app, {"api_key": "   ", "api_endpoint": "https://x.com"})
+
+    assert config.get_api_key() == "keep-me"
+
+
+def test_apply_config_patch_preserves_masked_custom_model_key_by_identity():
+    config = FakeConfig()
+    config.set_custom_models(
+        [
+            {"name": "A", "modelId": "model-a", "apiKey": "sk-a", "endpoint": "https://a", "mode": "openai"},
+            {"name": "B", "modelId": "model-b", "apiKey": "sk-b", "endpoint": "https://b", "mode": "openai"},
+        ]
+    )
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(
+        app,
+        {
+            "custom_models": [
+                {"name": "B", "modelId": "model-b", "apiKey": "********", "endpoint": "https://b2", "mode": "openai"},
+                {"name": "A", "modelId": "model-a", "apiKey": "********", "endpoint": "https://a2", "mode": "openai"},
+            ]
+        },
+    )
+
+    models = config.get_custom_models()
+    assert models[0]["apiKey"] == "sk-b"
+    assert models[1]["apiKey"] == "sk-a"
+
+
 def _make_status_app():
     app = MagicMock()
     app.engine.running = False

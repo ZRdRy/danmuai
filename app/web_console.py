@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 STATIC_DIR = resource_path("web", "static")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18765
+MASKED_API_KEY = "********"
 
 
 def _prepare_stdio_for_uvicorn() -> None:
@@ -194,7 +195,21 @@ class WebStatusSnapshot:
 
 
 def _mask_api_key(config) -> str:
-    return "********" if config.get_api_key() else ""
+    return MASKED_API_KEY if config.get_api_key() else ""
+
+
+def _submitted_api_key(value: Any) -> str:
+    key = str(value or "").strip()
+    if not key or key == MASKED_API_KEY:
+        return ""
+    return key
+
+
+def _custom_model_identity(model: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(model.get("modelId") or model.get("model") or "").strip(),
+        str(model.get("name") or "").strip(),
+    )
 
 
 def export_config(config) -> dict[str, Any]:
@@ -337,9 +352,9 @@ def apply_config_patch(danmu_app: "DanmuApp", payload: dict[str, Any]) -> None:
         if model_id:
             config.set_default_model_id(model_id)
 
-    api_key = payload.get("api_key", "")
-    if api_key and api_key != "********":
-        config.set_api_key(str(api_key).strip())
+    api_key = _submitted_api_key(payload.get("api_key", ""))
+    if api_key:
+        config.set_api_key(api_key)
 
     if "default_model_id" in payload:
         model_id = str(payload.get("default_model_id", "")).strip()
@@ -350,14 +365,21 @@ def apply_config_patch(danmu_app: "DanmuApp", payload: dict[str, Any]) -> None:
     if "custom_models" in payload and isinstance(payload["custom_models"], list):
         from app.web_api.custom_models import MASKED_KEY
 
-        existing = list(config.get_custom_models())
+        existing = [m for m in config.get_custom_models() if isinstance(m, dict)]
+        existing_by_identity = {
+            _custom_model_identity(m): m
+            for m in existing
+            if any(_custom_model_identity(m))
+        }
         merged: list[dict] = []
         for i, inc in enumerate(payload["custom_models"]):
             if not isinstance(inc, dict):
                 continue
             row = dict(inc)
             key = (row.get("apiKey") or row.get("api_key") or "").strip()
-            prev = existing[i] if i < len(existing) else None
+            prev = existing_by_identity.get(_custom_model_identity(row))
+            if prev is None and i < len(existing):
+                prev = existing[i]
             if key == MASKED_KEY and prev:
                 row["apiKey"] = prev.get("apiKey", "")
             elif key == MASKED_KEY:

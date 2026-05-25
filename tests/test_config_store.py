@@ -42,6 +42,7 @@ def test_first_run_seeds_config_defaults(tmp_path):
     assert store.get("freshness") == "medium"
     assert store.get("eviction_mode") == "natural"
     assert store.get("hotkey") == "Ctrl+Shift+B"
+    assert store.get("danmu_pool_enabled") == "0"
     store.close()
 
 

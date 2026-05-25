@@ -15,10 +15,10 @@ _POOL_VERSION = 1
 
 
 def danmu_pool_enabled_from_config(config) -> bool:
-    """True when local formula pool is enabled (default on if unset)."""
+    """True when local formula pool is enabled (default off if unset)."""
     raw = config.get("danmu_pool_enabled", "")
     if raw in ("", None):
-        return True
+        return False
     return str(raw).strip() != "0"
 
 

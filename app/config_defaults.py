@@ -36,7 +36,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "font_size": "24",
     "freq_mode": "auto",
     "capture_mode": "continuous",
-    "danmu_pool_enabled": "1",
+    "danmu_pool_enabled": "0",
     "min_on_screen": "5",
     "freshness": "medium",
     "drop_stale": "1",
