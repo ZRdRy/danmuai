@@ -57,6 +57,7 @@
       <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M17 11a3 3 0 1 0 0-6"/><path d="M22 21a5 5 0 0 0-5-5"/></symbol>
       <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-graduation" viewBox="0 0 24 24"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></symbol>
     </defs>
   </svg>
 
@@ -89,6 +90,9 @@
       </div>
       <button type="button" data-page="logs" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
         <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-book"></use></svg> 弹幕日记
+      </button>
+      <button type="button" data-page="tutorial" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
+        <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-graduation"></use></svg> 教程
       </button>
     </nav>
   </aside>
@@ -573,6 +577,23 @@
       </div>
     </section>
 
+    <!-- 教程 -->
+    <section id="page-tutorial" class="page-panel" aria-label="使用教程">
+      <header class="mb-8">
+        <h2 class="text-2xl font-bold text-warmText">教程</h2>
+        <p class="text-gray-500 mt-1">在浏览器中打开下方链接查看完整使用说明</p>
+      </header>
+      <div class="card p-8">
+        <a
+          id="tutorialLink"
+          href="https://rcnp42h3qtlx.feishu.cn/wiki/BKiMwLW1tipDY5kzrOYcsvBNnTg"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="tutorial-link break-all"
+        >https://rcnp42h3qtlx.feishu.cn/wiki/BKiMwLW1tipDY5kzrOYcsvBNnTg</a>
+      </div>
+    </section>
+
     <!-- 日志 -->
     <section id="page-logs" class="page-panel">
       <header class="mb-8 flex flex-wrap justify-between items-start gap-4">
@@ -650,6 +671,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260525-logs-poll"></script>
+  <script src="/static/app.js?v=20260526-tutorial-link"></script>
 </body>
 </html>

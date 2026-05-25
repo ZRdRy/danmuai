@@ -374,6 +374,17 @@ textarea:focus {
   display: block;
 }
 
+.tutorial-link {
+  color: var(--color-primary, #ff8585);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.tutorial-link:hover {
+  color: var(--color-primary-hover, #ff6b6b);
+}
+
 .log-panel {
   position: relative;
   min-height: 320px;

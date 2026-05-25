@@ -15,6 +15,7 @@ htmlcov/
 .env.*
 !.env.example
 .venv/
+.venv-build-*/
 venv/
 
 # Desktop app local data and secrets
@@ -29,6 +30,7 @@ ph/
 .npmcache/
 dist/
 build/
+release/
 
 # IDE and OS
 .idea/
