@@ -14,6 +14,7 @@ from app.web_api import persona as persona_api
 def persona_app(tmp_path):
     db = tmp_path / "config.db"
     config = ConfigStore(db_path=db)
+    config.set("danmu_display_mode", "realtime")
     personae = PersonaManager(config)
     templates = TemplateManager(config)
     app = SimpleNamespace(

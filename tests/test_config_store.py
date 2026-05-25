@@ -82,6 +82,7 @@ def test_missing_config_file_has_friendly_notice(tmp_path):
 
     assert store.is_first_run is True
     assert "未找到配置文件" in store.get_startup_notice()
+    assert store.get("danmu_display_mode") == "normal"
 
     store.close()
 

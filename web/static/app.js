@@ -796,7 +796,7 @@ function fillForm(cfg) {
   const replyFiller = document.getElementById('reply_filler_count');
   if (replyFiller && !cfg.reply_filler_count) replyFiller.value = '3';
   const displayMode = document.getElementById('danmu_display_mode');
-  if (displayMode && !cfg.danmu_display_mode) displayMode.value = 'realtime';
+  if (displayMode && !cfg.danmu_display_mode) displayMode.value = 'normal';
   const layoutMode = document.getElementById('layout_mode');
   if (layoutMode) {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
@@ -1370,7 +1370,7 @@ const SETTINGS_FIELD_TIPS = {
   reply_filler_count:
     '每批弹幕里，气氛向、可泛用的有几条（2–7）。与「画面相关」条数相加就是每批总数。',
   danmu_display_mode:
-    '实时模式（实验）：约每秒识图，适合跟直播/游戏节奏；切换时会提示并自动进入全面模式。普通模式：按固定间隔识图，一次出一整批弹幕。',
+    '普通模式（默认）：按固定间隔识图，一次出一整批弹幕。实时模式（实验）：约每秒识图，适合跟直播/游戏节奏；切换时会提示并自动进入全面模式。',
   normal_recognition_interval_sec:
     '普通模式下，每隔多少秒识图并生成一批弹幕（1–60 秒）。',
   normal_reply_count:

@@ -23,7 +23,7 @@
 
 | key | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `danmu_display_mode` | string | `realtime` | `realtime` 为当前实时模式，`normal` 为普通模式 |
+| `danmu_display_mode` | string | `normal` | `normal` 为普通模式（默认），`realtime` 为实时模式 |
 | `normal_recognition_interval_sec` | int | `5` | 普通模式每隔多少秒识别一次画面，建议范围 1-60 |
 | `normal_reply_count` | int | `5` | 普通模式每次要求 AI 生成多少条弹幕，建议范围 1-20 |
 
@@ -31,7 +31,7 @@
 
 兼容策略：
 
-- 未写入 `danmu_display_mode` 时按 `realtime` 处理。
+- 未写入 `danmu_display_mode` 时按 `normal` 处理（与 `app/config_defaults.py` 一致）。
 - `normal_reply_count` 非法时回退到 5。
 - `normal_recognition_interval_sec` 非法时回退到 5。
 - 切换模式时不清空配置库，只切换运行时调度策略。
@@ -80,7 +80,7 @@
    - `normal_reply_count`
 
 2. `apply_config_patch()` 增加钳制：
-   - `danmu_display_mode` 只允许 `realtime` / `normal`，否则回退 `realtime`。
+   - `danmu_display_mode` 只允许 `realtime` / `normal`，否则回退 `normal`。
    - `normal_recognition_interval_sec` 钳制到 1-60。
    - `normal_reply_count` 钳制到 1-20。
 
@@ -133,7 +133,7 @@
 
 ```python
 def _display_mode(self) -> str:
-    return "normal" if self.config.get("danmu_display_mode", "realtime") == "normal" else "realtime"
+    return "normal" if self.config.get("danmu_display_mode", "normal") == "normal" else "realtime"
 
 def _is_normal_mode(self) -> bool:
     return self._display_mode() == "normal"
@@ -256,7 +256,7 @@ self.reply_buffer.prepend_batch(batch_items, preserve_existing=...)
 - `test_web_config_keys_include_display_mode_settings`
   - 断言 3 个新 key 在 `WEB_CONFIG_KEYS`。
 - `test_apply_config_patch_clamps_display_mode_settings`
-  - 非法模式回退 `realtime`。
+  - 非法模式回退 `normal`。
   - interval 小于 1 变 1，大于 60 变 60。
   - count 小于 1 变 1，大于 20 变 20。
 
@@ -315,7 +315,7 @@ python main.py --web-browser
 
 ## 验收标准
 
-- 默认配置下行为与当前实时模式一致。
+- 默认配置下为普通模式（定时识图 + 整批弹幕）；已显式保存为 `realtime` 的配置库不受影响。
 - Web「弹幕显示」tab 能切换普通/实时模式，并正确保存、刷新后保留。
 - 普通模式下按 x 秒触发一次画面识别。
 - 普通模式下每次请求契约要求生成 y 条弹幕。

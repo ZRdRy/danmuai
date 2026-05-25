@@ -42,7 +42,8 @@ class FakeLogger:
 
 class FakeConfig:
     def __init__(self, values=None):
-        self.values = values or {}
+        self.values = {"danmu_display_mode": "realtime"}
+        self.values.update(values or {})
 
     def get(self, key, default=""):
         return self.values.get(key, default)

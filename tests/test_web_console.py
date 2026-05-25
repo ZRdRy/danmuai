@@ -314,7 +314,7 @@ def test_apply_config_patch_clamps_display_mode_settings():
         },
     )
 
-    assert config.get("danmu_display_mode") == "realtime"
+    assert config.get("danmu_display_mode") == "normal"
     assert config.get("normal_recognition_interval_sec") == "1"
     assert config.get("normal_reply_count") == "20"
 

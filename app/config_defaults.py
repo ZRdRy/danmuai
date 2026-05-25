@@ -53,7 +53,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "mic_window_sec": "5",
     "reply_scene_count": str(DEFAULT_REPLY_SCENE_COUNT),
     "reply_filler_count": str(DEFAULT_REPLY_FILLER_COUNT),
-    "danmu_display_mode": "realtime",
+    "danmu_display_mode": "normal",
     "normal_recognition_interval_sec": "5",
     "normal_reply_count": str(DEFAULT_NORMAL_REPLY_COUNT),
 }

@@ -10,7 +10,8 @@ from app.translations import tr
 
 class FakeConfig:
     def __init__(self, data=None):
-        self._data = dict(data or {})
+        self._data = {"danmu_display_mode": "realtime"}
+        self._data.update(data or {})
 
     def get(self, key, default=""):
         return self._data.get(key, default)

@@ -273,6 +273,7 @@ def test_on_scene_generation_advanced_resets_memory_when_enabled():
         "memory_mode": "scene_card",
         "memory_clear_policy": "strict",
         "freshness": "loose",
+        "danmu_display_mode": "realtime",
     }.get(key, default)
 
     app = _make_minimal_app()

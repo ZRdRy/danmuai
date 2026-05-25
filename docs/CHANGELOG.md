@@ -8,6 +8,7 @@
 
 ### Changed
 
+- 弹幕显示默认模式改为 **普通模式**（`danmu_display_mode=normal`）；新装/缺省键种子与 Web 表单默认一致；已保存为 `realtime` 的配置库不变
 - `DanmuApp` 始终启动 Web 控制台；废弃启动参数将 `sys.exit(2)` 并打印迁移说明
 - `docs/qt6_ui_redesign_plan.md` 移至 `docs/archive/`（只读历史）
 

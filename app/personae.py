@@ -97,7 +97,7 @@ def normal_reply_count_from_config(config: ConfigStore | None) -> int:
 def is_normal_display_mode(config: ConfigStore | None) -> bool:
     if config is None:
         return False
-    return config.get("danmu_display_mode", "realtime").strip().lower() == "normal"
+    return config.get("danmu_display_mode", "normal").strip().lower() == "normal"
 
 
 def _json_example_zh(total: int) -> str:

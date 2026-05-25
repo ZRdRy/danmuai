@@ -103,7 +103,7 @@ python main.py --web-browser    # 系统浏览器
 
 节奏与图像相关键：`freq_mode`、`capture_mode`、`min_on_screen`（默认 **5**，可见弹幕不足时从 `danmu_pool_zh.json` 补足；**0** 关闭）、`eviction_mode`、`image_max_width`、`image_quality`（默认 **85**，未写入 config 时生效），以及 `drop_stale`、`empty_accel` 复选框。
 
-弹幕显示 · **显示模式** `danmu_display_mode`：`realtime`（默认，1 秒截图 + 200ms 节奏预触发）或 `normal`（按 `normal_recognition_interval_sec` 秒：截图后**立即**触发 AI，默认 **5** 秒，范围 1–60；每次 `normal_reply_count` 条弹幕，默认 **5**，范围 1–20）。普通模式不探测场景跳变、不启用 rhythm/场景 gate/场景后本地 fallback；上一请求 in-flight 时跳过本轮；入队为 append。
+弹幕显示 · **显示模式** `danmu_display_mode`：`normal`（**默认**，按 `normal_recognition_interval_sec` 秒：截图后**立即**触发 AI，默认 **5** 秒，范围 1–60；每次 `normal_reply_count` 条弹幕，默认 **5**，范围 1–20）或 `realtime`（1 秒截图 + 200ms 节奏预触发）。普通模式不探测场景跳变、不启用 rhythm/场景 gate/场景后本地 fallback；上一请求 in-flight 时跳过本轮；入队为 append。
 
 实时模式 · 每次生成弹幕数：`reply_scene_count`（画面强相关，默认 **2**，范围 2–7）、`reply_filler_count`（泛用氛围，默认 **3**，范围 2–7）。普通模式使用单一总数契约，不拆分 scene/filler。
 
