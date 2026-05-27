@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -312,8 +311,11 @@ def test_build_diagnostic_report_formats_existing_snapshot():
 
 
 def test_diagnostics_panel_files_use_independent_endpoint_and_render_targets():
-    app_js = Path("E:/test/danmu/web/static/app.js").read_text(encoding="utf-8")
-    index_html = Path("E:/test/danmu/web/static/index.html").read_text(encoding="utf-8")
+    from app.bundle_paths import project_root
+
+    root = project_root()
+    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    index_html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
     assert "/api/diagnostics" in app_js
     assert "btnCopyDiagnosticsReport" in app_js
