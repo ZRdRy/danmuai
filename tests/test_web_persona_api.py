@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from app.config_store import ConfigStore
-from app.personae import PersonaManager
+from app.personae import BUILTIN_PERSONAE, PersonaManager
 from app.templates import TemplateManager
 from app.web_api import persona as persona_api
 
@@ -79,14 +79,13 @@ def test_builtin_restore_clears_saved_override(persona_app):
     assert "临时覆盖" not in detail["system_custom"]
 
 
-def test_reply_contract_follows_config_counts(persona_app):
-    persona_app.config.set("reply_scene_count", "4")
-    persona_app.config.set("reply_filler_count", "5")
+def test_reply_contract_follows_normal_reply_count(persona_app):
+    persona_app.config.set("normal_reply_count", "9")
     detail = persona_api.get_template_detail(persona_app, "吐槽型")
     contract = detail["reply_contract"]
     assert "固定返回 9 条弹幕" in contract
-    assert "前 4 条必须强相关当前画面" in contract
-    assert "后 5 条必须是适合直播间氛围的泛用弹幕" in contract
+    assert "必须与当前画面或直播氛围相关" in contract
+    assert "前 4 条必须强相关当前画面" not in contract
 
 
 def test_reply_contract_follows_danmu_max_chars(persona_app):
@@ -106,3 +105,25 @@ def test_delete_custom_persona(persona_app):
     persona_api.delete_persona(persona_app, "待删人格")
     with pytest.raises(ValueError):
         persona_api.get_template_detail(persona_app, "待删人格")
+
+
+_NEW_STYLE_PERSONAE = (
+    "傲娇型",
+    "腹黑型",
+    "中二型",
+    "治愈型",
+    "毒舌型",
+    "元气型",
+    "社恐型",
+)
+
+
+def test_new_style_builtin_personae(persona_app):
+    for name in _NEW_STYLE_PERSONAE:
+        assert name in BUILTIN_PERSONAE
+        detail = persona_api.get_template_detail(persona_app, name)
+        assert detail["builtin"]
+        assert detail["system_custom"]
+        system_pt, user_pt = persona_app.personae.get_prompt(name)
+        assert system_pt
+        assert user_pt

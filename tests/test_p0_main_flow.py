@@ -12,9 +12,13 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from app.application.generation_pipeline_state import GenerationPipelineState
+from app.application.stats_state import StatsState
+from app.application.web_runtime_state import WebRuntimeState
 from app.reply_queue import AIReplyFIFOBuffer, QueuedReply
 from app.runnable import AiRunnable
 from app.scene_memory import SceneMemoryStore
+from app.memory.activity import RecentActivityState
 from main import DanmuApp, compress_screenshot
 
 from tests.fakes import FakeLifetimeStats
@@ -42,7 +46,7 @@ class FakeLogger:
 
 class FakeConfig:
     def __init__(self, values=None):
-        self.values = {"danmu_display_mode": "realtime"}
+        self.values = {}
         self.values.update(values or {})
 
     def get(self, key, default=""):
@@ -229,14 +233,13 @@ def _make_minimal_app():
     app._queue_batch_size = 5
     app._reply_scene_count = 2
     app._reply_filler_count = 3
-    app.danmu_count = 0
+    app.stats_state = StatsState()
     app.screenshot_round = 0
     app._latest_displayed_round = 0
     app._rtt_history = []
     app._request_started_at_by_id = {}
     app.config = FakeConfig()
-    app._web_error_message = ""
-    app._web_error_is_error = False
+    app.web_runtime_state = WebRuntimeState()
     app._consecutive_failures = 0
     app._failure_backoff_paused = False
     app._last_error_message = ""
@@ -264,9 +267,6 @@ def _make_minimal_app():
     app._current_batch = None
     app._latest_screenshot = None
     app._latest_screenshot_time = 0.0
-    app._total_input_tokens = 0
-    app._total_output_tokens = 0
-    app._start_time = 0.0
     app._inflight_screenshot_id = 0
     app._inflight_started_at = 0.0
     app._stale_drop_count = 0
@@ -276,18 +276,15 @@ def _make_minimal_app():
     app._local_fallback_for_batch = 0
     app._publish_live_status = lambda: None
     app.web_bridge = None
-    app._web_error_message = ""
-    app._web_error_is_error = False
     app.ai_worker = Mock()
     app._scene_memory = SceneMemoryStore()
+    app._activity_state = RecentActivityState()
+    app._last_activity_collect_at = 0.0
     app.lifetime_stats = FakeLifetimeStats()
     app.session_run_log = Mock()
     app._lifetime_flush_timer = FakeTimer()
-    app._rhythm_check_timer = FakeTimer()
     app._live_status_timer = FakeTimer()
     app._sync_reply_batch_config = DanmuApp._sync_reply_batch_config.__get__(app, DanmuApp)
-    app._display_mode = DanmuApp._display_mode.__get__(app, DanmuApp)
-    app._is_normal_mode = DanmuApp._is_normal_mode.__get__(app, DanmuApp)
     app._normal_recognition_interval_ms = DanmuApp._normal_recognition_interval_ms.__get__(app, DanmuApp)
     app._normal_reply_count = DanmuApp._normal_reply_count.__get__(app, DanmuApp)
     app._queue_capacity = DanmuApp._queue_capacity.__get__(app, DanmuApp)
@@ -301,7 +298,6 @@ def _make_minimal_app():
     app._update_stats = DanmuApp._update_stats.__get__(app, DanmuApp)
     app._estimated_reply_gap_ms = DanmuApp._estimated_reply_gap_ms.__get__(app, DanmuApp)
     app._record_scene_memory_display = lambda *a, **k: None
-    app._trigger_api_call_if_ready = DanmuApp._trigger_api_call_if_ready.__get__(app, DanmuApp)
     app.state_changed = Mock()
     app._sync_reply_batch_config()
     return app
@@ -332,17 +328,10 @@ def _start_app_timers(app):
     """Exercise timer setup from DanmuApp.start() without full UI stack."""
     app.reply_buffer.set_max_items(app._queue_capacity())
     app.screenshot_timer.stop()
-    if app._is_normal_mode():
-        app.screenshot_timer.setInterval(app._normal_recognition_interval_ms())
-        app.screenshot_timer.start()
-        app._live_status_timer.start()
-        app._lifetime_flush_timer.start()
-    else:
-        app.screenshot_timer.setInterval(1000)
-        app.screenshot_timer.start()
-        app._live_status_timer.start()
-        app._lifetime_flush_timer.start()
-        app._rhythm_check_timer.start(200)
+    app.screenshot_timer.setInterval(app._normal_recognition_interval_ms())
+    app.screenshot_timer.start()
+    app._live_status_timer.start()
+    app._lifetime_flush_timer.start()
 
 
 def test_normal_mode_start_uses_configured_capture_interval():
@@ -358,16 +347,6 @@ def test_normal_mode_start_uses_configured_capture_interval():
     _start_app_timers(app)
     assert app.screenshot_timer._interval == 7000
     assert app.screenshot_timer.active
-    assert not app._rhythm_check_timer.active
-
-
-def test_realtime_mode_behavior_unchanged():
-    app = _make_minimal_app()
-    app.config = FakeConfig({"danmu_display_mode": "realtime", "api_key": "test-key"})
-    app._sync_reply_batch_config()
-    _start_app_timers(app)
-    assert app.screenshot_timer._interval == 1000
-    assert app._rhythm_check_timer.active
 
 
 def test_normal_mode_enqueues_full_batch_without_prepend_replacement():
@@ -392,18 +371,6 @@ def test_normal_mode_enqueues_full_batch_without_prepend_replacement():
     assert app.reply_buffer.size() == 4
     popped = [app.reply_buffer.pop().content for _ in range(4)]
     assert popped == ["a", "b", "c", "d"]
-
-
-def test_normal_mode_capture_skips_scene_probe():
-    app = _make_minimal_app()
-    app.config = FakeConfig({"danmu_display_mode": "normal"})
-    app.engine.running = True
-    app.capturer = FakeCapturer(FakePixmap(0))
-    called: list[int] = []
-    app._probe_scene_change = lambda _pixmap: called.append(1)
-    app._capture_screenshot()
-    assert called == []
-    assert app._latest_screenshot_id == 1
 
 
 def test_normal_tick_skips_while_in_flight():
@@ -530,8 +497,31 @@ def test_ai_success_reply_enqueued():
     assert app._failure_backoff_paused is False
 
 
-def test_older_reply_dropped_after_newer_request():
-    """测试更新截图已发出时，旧截图回复不再展示"""
+def test_legacy_stat_fields_proxy_to_stats_state():
+    app = _make_minimal_app()
+
+    app.danmu_count = 3
+    app._total_input_tokens = 11
+    app._total_output_tokens = 7
+    app._start_time = 5.5
+
+    assert app.stats_state.danmu_count == 3
+    assert app.stats_state.total_input_tokens == 11
+    assert app.stats_state.total_output_tokens == 7
+    assert app.stats_state.start_time == 5.5
+
+
+def test_legacy_web_error_fields_proxy_to_web_runtime_state():
+    app = _make_minimal_app()
+
+    DanmuApp._set_error_status_safe(app, "AI timeout", True)
+
+    assert app.web_runtime_state.error_message == "AI timeout"
+    assert app.web_runtime_state.is_error is True
+
+
+def test_older_reply_not_dropped_in_normal_mode():
+    """普通模式不做 newer-frame supersede，旧截图回复仍会入队展示"""
     app = _make_minimal_app()
     app.ai_in_flight = 1
     app._latest_requested_screenshot_id = 11
@@ -539,8 +529,8 @@ def test_older_reply_dropped_after_newer_request():
     app._on_ai_reply('["old reply"]', "persona-1", 10, 10, time.monotonic(), 0)
 
     assert app.ai_in_flight == 0
-    assert app.engine.calls == []
-    assert any("superseded_by_newer_request" in msg for msg in app.logger.info_messages)
+    assert len(app.engine.calls) >= 1
+    assert not any("superseded_by_newer_request" in msg for msg in app.logger.info_messages)
 
 
 def test_low_water_buffer_can_schedule_prefetch():
@@ -659,45 +649,39 @@ def test_screenshot_loop_respects_backoff():
     assert app._latest_screenshot is None
 
 
-def test_scene_change_clears_buffer_and_advances_generation(monkeypatch):
-    from tests.test_scene_freshness import _patch_fingerprint
-
+def test_capture_does_not_advance_scene_generation(monkeypatch):
+    """普通模式截图不探测场景跳变，代际保持不变"""
     app = _make_minimal_app()
     app.engine.running = True
     app._last_scene_hash = 0xAAAAAAAAAAAAAAAA
     app.reply_buffer.push(QueuedReply("p", 0, 0, "old", scene_generation=0))
-    _patch_fingerprint(monkeypatch, [0x5555555555555555])
     app.capturer = FakeCapturer(FakePixmap(0b1))
 
     app._capture_screenshot()
 
-    assert app._scene_generation == 1
-    assert app.reply_buffer.is_empty()
+    assert app._scene_generation == 0
+    assert app.reply_buffer.size() == 1
     assert app._latest_screenshot is not None
 
 
-def test_scene_probe_forces_refresh_while_buffer_draining(monkeypatch):
-    from tests.test_scene_freshness import _patch_fingerprint
-
+def test_capture_while_in_flight_still_updates_frame(monkeypatch):
     app = _make_minimal_app()
     app.engine.running = True
-    app._last_scene_hash = 0xAAAAAAAAAAAAAAAA
-    _patch_fingerprint(monkeypatch, [0x5555555555555555])
+    app._latest_screenshot_id = 3
+    app.ai_in_flight = 1
     app.capturer = FakeCapturer(FakePixmap((1 << 16) - 1))
 
     app._capture_screenshot()
 
-    assert app._scene_generation == 1
+    assert app._scene_generation == 0
+    assert app._latest_screenshot_id == 4
     assert app._latest_screenshot is not None
 
 
-def test_scene_probe_replenishes_when_scene_unchanged(monkeypatch):
-    from tests.test_scene_freshness import _patch_fingerprint
-
+def test_repeated_capture_keeps_scene_generation(monkeypatch):
     app = _make_minimal_app()
     app.engine.running = True
     app._last_scene_hash = 0xAAAAAAAAAAAAAAAA
-    _patch_fingerprint(monkeypatch, [0xAAAAAAAAAAAAAAAA ^ (1 << 2)])
     app.capturer = FakeCapturer(FakePixmap(0b1))
 
     app._capture_screenshot()
@@ -733,3 +717,36 @@ def test_capture_failure_reschedules_next_screenshot():
     app._capture_screenshot()
 
     assert app._latest_screenshot is None
+
+
+def test_legacy_overlay_cache_fields_proxy_to_web_runtime_state():
+    app = _make_minimal_app()
+
+    app._cached_danmu_lines = 14
+    app._cached_layout_mode = "windowed"
+
+    assert app.web_runtime_state.cached_danmu_lines == 14
+    assert app.web_runtime_state.cached_layout_mode == "windowed"
+
+
+def test_generation_pipeline_state_is_read_only_projection():
+    app = _make_minimal_app()
+    app._active_scene_probe_size = 32
+    app._scene_generation_bumped_at = 4.5
+    app._last_activity_collect_at = 2.5
+    app._latest_displayed_round = 6
+    app._latest_requested_screenshot_id = 12
+    app._latest_queued_screenshot_id = 11
+    app._latest_displayed_screenshot_id = 10
+
+    state = GenerationPipelineState.from_app(app)
+
+    assert state.active_scene_probe_size == 32
+    assert state.scene_generation_bumped_at == 4.5
+    assert state.last_activity_collect_at == 2.5
+    assert state.latest_displayed_round == 6
+    assert state.latest_requested_screenshot_id == 12
+    assert state.latest_queued_screenshot_id == 11
+    assert state.latest_displayed_screenshot_id == 10
+    assert app._active_scene_probe_size == 32
+    assert app._scene_generation_bumped_at == 4.5

@@ -21,7 +21,6 @@ def _bind_main_methods(app):
         "_default_batch_interval",
         "_log_reply_drop",
         "_consume_request_timing",
-        "_trigger_api_call_if_ready",
         "_publish_live_status",
         "_consume_reply_queue",
     ):
@@ -83,8 +82,8 @@ def test_mic_reply_stale_skips_newer_frame_supersede(app):
     assert stale is False
 
     stale_ai, reason_ai = app._is_reply_stale(10, captured, 0, source="ai")
-    assert stale_ai is True
-    assert reason_ai == "superseded_by_newer_frame"
+    assert stale_ai is False
+    assert reason_ai == ""
 
 
 def test_on_ai_reply_mic_does_not_decrement_visual_inflight(app):

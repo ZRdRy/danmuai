@@ -1,12 +1,10 @@
-"""API rhythm scheduling: in-flight gate, cold-start interval, scene cooldown."""
+"""API scheduling: in-flight gate and min-interval pacing."""
 
 import time
 from unittest.mock import MagicMock
 
 import pytest
 from app.api_schedule import ENGINE_BASE_FPS, min_api_interval_ms, time_to_anchor_boundary
-from app.live_freshness import SCENE_RHYTHM_PAUSE_SEC
-from main import BatchTracker
 
 from tests.test_p0_main_flow import FakeLogger, _make_minimal_app
 
@@ -19,9 +17,6 @@ def _bind_schedule(app, **overrides):
         "_latest_screenshot_id": 1,
         "_latest_requested_screenshot_id": 0,
         "_scene_generation": 0,
-        "_scene_rhythm_pause_until": 0.0,
-        "_scene_captures_after_change": 0,
-        "_scene_api_gate_active": False,
         "_last_api_trigger_at": 0.0,
         "_is_generating": False,
         "ai_in_flight": 0,
@@ -56,75 +51,36 @@ def schedule_app():
 
     _bind_schedule(app)
     app._trigger_api_call = _record  # type: ignore[method-assign]
-    app._visible_display_count = lambda: 0  # type: ignore[method-assign]
-    app._rtt_avg = lambda: 0.0  # type: ignore[method-assign]
     app.calls = calls
     return app
 
 
-def test_max_in_flight_no_concurrent_burst(schedule_app):
+def test_max_in_flight_blocks_trigger(schedule_app):
     schedule_app.ai_in_flight = 1
     schedule_app._is_generating = True
-    for _ in range(10):
-        schedule_app._check_rhythm_trigger()
+    schedule_app._trigger_api_call(source="normal_interval")
     assert schedule_app.calls == []
 
 
-def test_cold_start_min_interval(monkeypatch, schedule_app):
+def test_min_interval_between_triggers(monkeypatch, schedule_app):
     times = [1000.0]
 
     def mono():
         return times[-1]
 
     monkeypatch.setattr("main.time.monotonic", mono)
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == ["cold_start"]
+    schedule_app._trigger_api_call(source="normal_interval")
+    assert schedule_app.calls == ["normal_interval"]
 
     schedule_app._is_generating = False
     schedule_app.ai_in_flight = 0
     times.append(1000.2)
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == ["cold_start"]
+    schedule_app._trigger_api_call(source="normal_interval")
+    assert schedule_app.calls == ["normal_interval"]
 
     times.append(1000.0 + min_api_interval_ms() / 1000.0 + 0.05)
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == ["cold_start", "cold_start"]
-
-
-def test_rhythm_once_per_batch(schedule_app):
-    batch = BatchTracker(batch_id=1)
-    batch.next_generation_time = 0.0
-    batch.next_generation_triggered = False
-    schedule_app._current_batch = batch
-
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == ["rhythm"]
-    assert batch.next_generation_triggered is True
-
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == ["rhythm"]
-
-
-def test_if_ready_respects_in_flight(schedule_app):
-    schedule_app.ai_in_flight = 1
-    schedule_app.reply_buffer.clear()
-    schedule_app._trigger_api_call_if_ready()
-    assert schedule_app.calls == []
-
-
-def test_scene_cooldown_blocks_rhythm(monkeypatch, schedule_app):
-    t = 2000.0
-    monkeypatch.setattr("main.time.monotonic", lambda: t)
-    schedule_app._scene_rhythm_pause_until = t + SCENE_RHYTHM_PAUSE_SEC
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == []
-
-
-def test_scene_settle_blocks_until_capture(schedule_app):
-    schedule_app._scene_api_gate_active = True
-    schedule_app._scene_captures_after_change = 0
-    schedule_app._check_rhythm_trigger()
-    assert schedule_app.calls == []
+    schedule_app._trigger_api_call(source="normal_interval")
+    assert schedule_app.calls == ["normal_interval", "normal_interval"]
 
 
 def test_anchor_uses_60fps_baseline():

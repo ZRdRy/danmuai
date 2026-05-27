@@ -1,3 +1,23 @@
+"""弹幕引擎：多轨道分配、去重、加速动画与可见性统计。
+
+轨道分配策略（_pick_track）：
+  1. 空闲轨道优先（随机选一条）
+  2. 无空闲时按入口区逆密度加权随机（入口区越空权重越高）
+  3. 全满 fallback：从 rightmost_edge 最小的前 3 条中随机选，并调整 item.x 避免重叠
+
+去重算法（_is_duplicate）：
+  - 精确集合匹配（recent_exact_set）O(1) → 命中即重复
+  - 长度预剪枝：|len(a)-len(b)| / max_len > (1-threshold) 时跳过
+  - Levenshtein 相似度 > threshold（默认 0.5）时判定重复
+  - 容许趣味性变体（"哈哈" vs "哈哈哈"），过滤实质重复
+
+加速动画（trigger_acceleration）：
+  先升后降三次曲线：前 33% 升速到 peak，后 67% 降回原速。
+  用于场景切换时快速清空旧弹幕。
+
+调用方：DanmuOverlay._tick() → engine.update()；DanmuApp.add_text() → engine.add_text()
+"""
+
 import os
 import random
 import time
@@ -10,19 +30,22 @@ from PyQt6.QtGui import QColor, QPixmap
 from app.api_schedule import ENGINE_BASE_FPS
 from app.translations import Translator
 
-# Keep in sync with app.config_defaults (avoid importing config_defaults → circular import).
+# 与 app.config_defaults 保持同步（避免循环导入）
 _DANMU_SPEED_FALLBACK = 2.0
 _DEDUP_THRESHOLD_FALLBACK = 0.5
 
-FADE_IN_PX = 120.0
-FADE_OUT_PX = 90.0
-ENTRY_ZONE_PX = 300.0
+# 淡入淡出与入口区像素距离（与 overlay._item_opacity 协同）
+FADE_IN_PX = 120.0    # 右侧淡入区宽度，弹幕从右侧进入时在此区间渐显
+FADE_OUT_PX = 90.0    # 左侧淡出区宽度，弹幕离开时在此区间渐隐
+ENTRY_ZONE_PX = 300.0 # 入口区宽度，轨道选择和过载判断用此值
 
-DEFAULT_DANMU_MAX_CHARS_ZH = 15
-DEFAULT_DANMU_MAX_CHARS_EN = 40
+# 弹幕最大字数（截断阈值 + ... 后缀）
+DEFAULT_DANMU_MAX_CHARS_ZH = 15   # 中文默认最大字数
+DEFAULT_DANMU_MAX_CHARS_EN = 40   # 英文默认最大字符数
 DANMU_MAX_CHARS_MIN = 5
 DANMU_MAX_CHARS_MAX = 80
 
+# 轨道行数范围
 DANMU_LINES_MIN = 12
 DANMU_LINES_MAX = 20
 DEFAULT_DANMU_LINES = 20
@@ -144,6 +167,7 @@ def _get_levenshtein_ratio():
 
 @dataclass
 class DanmuItem:
+    """单条弹幕条目，包含位置/速度/可见性/渲染缓存等动画状态。"""
     content: str
     persona: str = ""
     color: QColor = field(default_factory=lambda: QColor(255, 255, 255))
@@ -153,25 +177,32 @@ class DanmuItem:
     width: float = 0.0
     batch_id: int = 0
     scene_generation: int = 0
-    _pixmap: QPixmap | None = field(default=None, repr=False, compare=False)
-    _opacity_cache_bucket: int | None = field(default=None, repr=False, compare=False)
-    _cached_opacity: float | None = field(default=None, repr=False, compare=False)
-    _vis_on_screen: bool = field(default=False, repr=False, compare=False)
-    _right_vis_on_screen: bool = field(default=False, repr=False, compare=False)
-    _in_fade_zone: bool = field(default=False, repr=False, compare=False)
+    _pixmap: QPixmap | None = field(default=None, repr=False, compare=False)  # 预渲染后的弹幕像素图缓存
+    _opacity_cache_bucket: int | None = field(default=None, repr=False, compare=False)  # 不透明度分桶缓存键
+    _cached_opacity: float | None = field(default=None, repr=False, compare=False)  # 不透明度分桶缓存值
+    _vis_on_screen: bool = field(default=False, repr=False, compare=False)  # 是否在可见区域内
+    _right_vis_on_screen: bool = field(default=False, repr=False, compare=False)  # 是否在右侧 2/3 区域内
+    _in_fade_zone: bool = field(default=False, repr=False, compare=False)  # 是否在淡入淡出区内
 
 
 class Track:
+    """单条水平轨道：持有该行的 DanmuItem 列表，负责间距与入口区密度统计。"""
+
     def __init__(self, y: float):
         self.y = y
         self.items: list[DanmuItem] = []
 
     def can_accept(self, item: DanmuItem, screen_width: float, min_gap: float = 150.0) -> bool:
+        """队尾弹幕右缘 + min_gap 仍小于屏宽则可接新条；与 entry_zone_overloaded 分工不同。"""
         if not self.items:
             return True
         last = self.items[-1]
         w = last.width if last.width > 0 else (len(last.content) * 25.0)
         return last.x + w + min_gap < screen_width
+
+    def entry_zone_count(self, screen_width: float, zone: float = ENTRY_ZONE_PX) -> int:
+        zone_left = screen_width - zone
+        return sum(1 for it in self.items if it.x + it.width > zone_left and it.x < screen_width)
 
     def rightmost_edge(self) -> float:
         if not self.items:
@@ -210,6 +241,13 @@ class Track:
 
 
 class DanmuEngine(QObject):
+    """弹幕引擎核心：多轨道列表、deque(30) 去重窗口、可见性惰性计数与加速动画状态。
+
+    不负责 AI 请求、Web/API、主链路调度；仅由 DanmuApp._consume_reply_queue 调用 add_text。
+    _pick_track 为加权随机（非轮询），单测需 monkeypatch random.choices 才能确定性断言。
+    overlay 持有本实例并在 _tick 中调用 update()；宽度测量与 pixmap 预渲染暂依赖 Overlay（Phase 2 待收口）。
+    """
+
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -417,6 +455,7 @@ class DanmuEngine(QObject):
         self._visibility_counts_seeded = True
 
     def visibility_counts(self) -> tuple[int, int]:
+        """返回 (全屏可见数, 右侧 2/3 可见数)；_visibility_stale 时惰性全量重建。"""
         if self._visibility_stale or not self._visibility_counts_seeded:
             self._rebuild_visibility_counts()
         return self._visible_count, self._right_visible_count
@@ -442,6 +481,10 @@ class DanmuEngine(QObject):
         *,
         skip_dedup: bool = False,
     ) -> DanmuItem | None:
+        """弹幕入轨：截断 → 去重 → 入口区过载检查 → _pick_track → 记入 recent 窗口。
+
+        初始 x 在屏幕右缘外（待滚入）；skip_dedup 用于池补齐等已在外层去重的文本。
+        """
         content = normalize_danmu_display_text(content, self.config)
 
         if not skip_dedup and self._is_duplicate(content):
@@ -488,25 +531,28 @@ class DanmuEngine(QObject):
         if idle:
             return random.choice(idle)
 
-        # 2. 可接受轨道：按逆密度加权随机（items 越少权重越高）
+        # 2. 可接受轨道：按入口区逆密度加权随机（入口区越空权重越高）
         acceptable = [t for t in self.tracks if t.can_accept(item, self.screen_width, min_gap)]
         if acceptable:
-            weights = [1.0 / (1 + len(t.items)) for t in acceptable]
+            weights = [1.0 / (1 + t.entry_zone_count(self.screen_width)) for t in acceptable]
             total = sum(weights)
             weights = [w / total for w in weights]
             return random.choices(acceptable, weights=weights, k=1)[0]
 
-        # 3. 全满 fallback：入口区已过载或队尾过远则拒绝，否则选 rightmost_edge 最小的轨道
+        # 3. 全满 fallback：入口区已过载或队尾过远则拒绝，否则从 rightmost_edge 最小的前 3 条中随机选
         if self.entry_zone_overloaded():
             return None
-        best_track = min(self.tracks, key=lambda t: t.rightmost_edge())
+        candidates = sorted(self.tracks, key=lambda t: t.rightmost_edge())[:3]
+        best_track = random.choice(candidates)
         tail_edge = best_track.rightmost_edge()
         if tail_edge > self.screen_width + ENTRY_ZONE_PX:
             return None
         item.x = max(item.x, tail_edge + random.uniform(50.0, 250.0))
+        if item.x < tail_edge + min_gap:
+            item.x = tail_edge + min_gap
         cap = self.screen_width + FADE_IN_PX - 1.0
         if item.x > cap:
-            item.x = cap
+            return None
         return best_track
 
     def danmu_pool_enabled(self) -> bool:
@@ -515,9 +561,9 @@ class DanmuEngine(QObject):
         return danmu_pool_enabled_from_config(self.config)
 
     def min_on_screen(self) -> int:
-        if not self.danmu_pool_enabled():
-            return 0
-        return self.config.get_int("min_on_screen", 5)
+        from app.danmu_pool import effective_min_on_screen
+
+        return effective_min_on_screen(self.config)
 
     def deficit_below_min(self) -> int:
         min_n = self.min_on_screen()
@@ -555,6 +601,7 @@ class DanmuEngine(QObject):
         return count
 
     def visible_display_count(self) -> int:
+        """当前在屏可见弹幕数（与 min_on_screen / needs_refill 联动）。"""
         if self._visibility_stale or not self._visibility_counts_seeded:
             self._rebuild_visibility_counts()
         return self._visible_count
@@ -603,6 +650,7 @@ class DanmuEngine(QObject):
         self.recent_exact_set.clear()
 
     def drop_pending_below_generation(self, min_generation: int) -> int:
+        """丢弃旧场景代际且仍在屏外的 pending 弹幕（medium 策略：保留已滚入可见区的）。"""
         dropped = 0
         sw = self.screen_width
         for track in self.tracks:
@@ -620,6 +668,7 @@ class DanmuEngine(QObject):
         return dropped
 
     def drop_items_below_scene_generation(self, min_generation: int) -> int:
+        """丢弃 scene_generation < min_generation 的全部弹幕（loose 策略清屏）。"""
         dropped = 0
         for track in self.tracks:
             kept: list[DanmuItem] = []
@@ -651,6 +700,7 @@ class DanmuEngine(QObject):
         return self._visible_count < min_n
 
     def trigger_acceleration(self, duration_frames: int = 60, peak: float = 2.0):
+        """场景切换时触发先升后降加速；update() 内按进度在 1.0～peak 间插值。"""
         self._accel_peak = peak
         self._accel_total = duration_frames
         self._accel_remaining = duration_frames
@@ -662,6 +712,7 @@ class DanmuEngine(QObject):
         return snapshot_dedup_profile()
 
     def _is_duplicate(self, content: str) -> bool:
+        """去重：recent_exact_set O(1) → 长度预剪枝 → Levenshtein > dedup_threshold。"""
         profile = dedup_profile_enabled()
         started = time.perf_counter_ns() if profile else 0
 
@@ -733,6 +784,7 @@ class DanmuEngine(QObject):
         return result
 
     def update(self, speed_factor: float = 1.0, dt_sec: float = 1.0 / 60.0):
+        # 加速段：前 33% 进度升到 peak，后 67% 落回 1.0（与 trigger_acceleration 配对）
         if self._accel_remaining > 0 and self._accel_total > 0:
             progress = 1.0 - (self._accel_remaining / self._accel_total)
             if progress < 0.33:

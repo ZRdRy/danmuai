@@ -1,5 +1,8 @@
 """Tests for persisted lifetime counters."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 from app.lifetime_stats import (
     STATS_LIFETIME_DANMU,
     STATS_LIFETIME_INPUT_TOKENS,
@@ -10,6 +13,38 @@ from app.lifetime_stats import (
 )
 
 from tests.test_web_console import FakeConfig
+
+
+def _make_bridge_status_app(**attrs):
+    """Minimal DanmuApp stand-in whose build_status_snapshot matches production."""
+    from main import DanmuApp
+
+    fields = {
+        "engine": SimpleNamespace(running=False),
+        "reply_buffer": SimpleNamespace(size=lambda: 0),
+        "_visible_display_count": lambda: 0,
+        "_total_input_tokens": 0,
+        "_total_output_tokens": 0,
+        "_start_time": 0.0,
+        "_web_error_message": "",
+        "_web_error_is_error": False,
+        "danmu_count": 0,
+        "personae": SimpleNamespace(get_active=lambda: []),
+        "config": FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        "lifetime_stats": SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        "session_run_log": SimpleNamespace(list_dicts_newest_first=lambda: []),
+        "_build_live_status_snapshot": lambda: None,
+        # WebConsoleBridge.__init__ wires these Qt slots/signals
+        "start": MagicMock(),
+        "stop": MagicMock(),
+        "toggle": MagicMock(),
+        "logger": MagicMock(),
+        "state_changed": MagicMock(),
+    }
+    fields.update(attrs)
+    app = SimpleNamespace(**fields)
+    app.build_status_snapshot = lambda: DanmuApp.build_status_snapshot(app)
+    return app
 
 
 def test_lifetime_stats_loads_from_config():
@@ -66,12 +101,12 @@ def test_lifetime_stats_persists_increments():
 def test_refresh_status_includes_lifetime_fields():
     from app.web_console import WebConsoleBridge
 
-    from tests.test_web_console import _make_status_app
-
-    app = _make_status_app()
-    app.lifetime_stats = LifetimeStats(FakeConfig({STATS_LIFETIME_DANMU: "7", STATS_LIFETIME_TOKENS: "42"}))
-    app._start_time = 0
-
+    app = _make_bridge_status_app(
+        lifetime_stats=LifetimeStats(
+            FakeConfig({STATS_LIFETIME_DANMU: "7", STATS_LIFETIME_TOKENS: "42"})
+        ),
+        _start_time=0,
+    )
     bridge = WebConsoleBridge(app)
     status = bridge.refresh_status()
 
@@ -85,11 +120,10 @@ def test_refresh_status_includes_lifetime_fields():
 def test_refresh_status_exposes_session_input_output_tokens():
     from app.web_console import WebConsoleBridge
 
-    from tests.test_web_console import _make_status_app
-
-    app = _make_status_app()
-    app._total_input_tokens = 120
-    app._total_output_tokens = 30
+    app = _make_bridge_status_app(
+        _total_input_tokens=120,
+        _total_output_tokens=30,
+    )
     bridge = WebConsoleBridge(app)
     status = bridge.refresh_status()
     assert status.input_tokens == 120

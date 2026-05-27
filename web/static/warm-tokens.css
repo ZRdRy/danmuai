@@ -385,6 +385,61 @@ textarea:focus {
   color: var(--color-primary-hover, #ff6b6b);
 }
 
+.feedback-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: min(72vh, 640px);
+}
+
+.feedback-notice {
+  line-height: 1.75;
+  font-size: 15px;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius-md);
+  background: rgba(var(--color-primary-rgb), 0.06);
+  border: 1px solid rgba(var(--color-primary-rgb), 0.2);
+}
+
+.feedback-qr-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.feedback-qr-img {
+  max-width: min(320px, 100%);
+  height: auto;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-warm, 0 4px 15px -3px rgba(255, 165, 165, 0.2));
+}
+
+.feedback-reward-fab {
+  padding: 0.4rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text, #5d5757);
+  background: #fff;
+  border: 1px solid rgba(var(--color-primary-rgb), 0.45);
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgba(var(--color-primary-rgb), 0.15);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.feedback-reward-fab:hover {
+  background: rgba(var(--color-primary-rgb), 0.08);
+  border-color: var(--color-primary, #ff8585);
+}
+
+.reward-qr-img {
+  max-width: min(280px, 100%);
+  height: auto;
+}
+
 .log-panel {
   position: relative;
   min-height: 320px;
@@ -691,7 +746,6 @@ textarea:focus {
   display: none;
 }
 
-/* 普通模式：节奏与图像中仅实时模式生效的项 */
 .pool-min-on-screen.is-disabled label {
   opacity: 0.55;
 }
@@ -701,22 +755,29 @@ textarea:focus {
   pointer-events: none;
 }
 
-.realtime-only-field.is-disabled label {
-  color: #9ca3af;
-  cursor: not-allowed;
+.danmu-pool-page .danmu-pool-section + .danmu-pool-section {
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(93, 87, 87, 0.12);
 }
 
-.realtime-only-field.is-disabled input,
-.realtime-only-field.is-disabled select,
-.realtime-only-field.is-disabled .settings-field-control {
-  opacity: 0.55;
-  cursor: not-allowed;
-  background-color: #f3f4f6;
-  color: #9ca3af;
+.danmu-pool-textarea {
+  resize: vertical;
+  min-height: 8rem;
 }
 
-.realtime-only-field.is-disabled input[type="checkbox"] {
-  pointer-events: none;
+.danmu-pool-custom-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.danmu-pool-custom-item {
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-md);
+  background: #fff;
+  border: 1px solid rgba(255, 229, 217, 0.9);
 }
 
 ::-webkit-scrollbar { width: 8px; }

@@ -1,0 +1,77 @@
+"""请求耗时样本：拥有 request_started_at_by_id 与 rtt_history，供 RTT/cooldown 计算。"""
+from __future__ import annotations
+
+
+class RequestTimingService:
+    """mark_started 在 _trigger_api_call；consume_timing 在 _on_ai_reply/_on_ai_error。"""
+
+    def __init__(
+        self,
+        *,
+        request_started_at_by_id: dict[int, float] | None = None,
+        rtt_history: list[float] | None = None,
+    ) -> None:
+        self.request_started_at_by_id = request_started_at_by_id or {}
+        self.rtt_history = rtt_history or []
+
+    def reset_started(self) -> None:
+        self.request_started_at_by_id = {}
+
+    def clear_started(self) -> None:
+        self.request_started_at_by_id.clear()
+
+    def reset_rtt_history(self) -> None:
+        self.rtt_history = []
+
+    def clear_rtt_history(self) -> None:
+        self.rtt_history.clear()
+
+    def mark_started(
+        self,
+        *,
+        request_id: int,
+        now: float,
+    ) -> float:
+        self.request_started_at_by_id[int(request_id)] = float(now)
+        return float(now)
+
+    def consume_timing(
+        self,
+        *,
+        request_id: int,
+        now: float,
+        max_samples: int = 20,
+    ) -> float | None:
+        started_at = self.request_started_at_by_id.pop(int(request_id), None)
+        if started_at is None:
+            return None
+        rtt = float(now) - float(started_at)
+        self.record_rtt(rtt=rtt, max_samples=max_samples)
+        return rtt
+
+    def record_rtt(
+        self,
+        *,
+        rtt: float,
+        max_samples: int = 20,
+    ) -> None:
+        self.rtt_history.append(float(rtt))
+        if len(self.rtt_history) > max_samples:
+            self.rtt_history.pop(0)
+
+    def avg_rtt(self) -> float:
+        if not self.rtt_history:
+            return 0.0
+        return sum(self.rtt_history) / len(self.rtt_history)
+
+    def smart_cooldown_ms(
+        self,
+        *,
+        fallback_interval_sec: int,
+    ) -> int:
+        if len(self.rtt_history) >= 3:
+            sorted_rtt = sorted(self.rtt_history)
+            idx = int(len(sorted_rtt) * 0.9)
+            p90 = sorted_rtt[min(idx, len(sorted_rtt) - 1)]
+            return max(1500, min(int(p90 * 0.9 * 1000), 30000))
+        return max(2000, int(fallback_interval_sec) * 1000)

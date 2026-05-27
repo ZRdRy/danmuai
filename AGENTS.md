@@ -31,11 +31,11 @@ python main.py
 
 | 模块 | 职责 |
 |------|------|
-| `app/ai_client.py` | 双 API：`doubao` → `/responses` 流式；`openai` → `/chat/completions` SSE |
+| `app/ai_client.py` | 双 API：`doubao` → `/responses` 流式；`openai` → `/chat/completions` SSE；请求固定 `thinking: disabled`（`THINKING_DISABLED`），流式只收集 `content` |
 | `app/danmu_engine.py` | 多轨道 Track；`_pick_track` 加权随机（非轮询） |
 | `app/overlay.py` | Qt 透明置顶渲染；16ms QTimer 有动画时 60fps |
-| `app/live_freshness.py` | 过时丢弃、截图退避、本地兜底批次 |
-| `app/scene_fingerprint.py` | 灰度 hash 场景代际；freshness TTL loose 12s / medium 8s / strict 5s |
+| `app/live_freshness.py` | 截图退避、本地兜底批次（实时模式 TTL/节奏预触发已移除） |
+| `app/scene_fingerprint.py` | 灰度 hash（`scene_generation` 元数据保留；Web 不再配置 `scene_probe_size`） |
 | `app/memory/` + `app/memory_prompt_builder.py` | 场景状态记忆 + 弹幕去重；`memory_mode`: off / dedup_only / scene_card / strong |
 | `app/scene_memory.py` | 兼容 re-export（`SceneMemoryStore`、`memory_window_from_config`） |
 | `app/reply_parser.py` | AI 回复 JSON 解析与标准化 |
@@ -45,8 +45,8 @@ python main.py
 | `app/mic_utterance.py` | RMS 语音端点检测（无 VAD 库），4 状态机 |
 | `app/mic_capture.py` | `sounddevice` 录音；`mic_encode.py` → WAV data URI |
 | `app/mic_prompt.py` | 麦克风插入提示词组装 |
-| `app/model_providers.py` | 服务商预设与校验；`is_doubao_mode`、`model_likely_supports_mic_audio` |
-| `app/model_catalog.py` | 模型目录与定价元数据（Web 控制台模型选择器） |
+| `app/model_providers.py` | 8 个服务商预设 + 2 个自定义（火山方舟、百炼、智谱、Moonshot、硅基流动、**小米 MiMo**、OpenAI/豆包自定义）；`guess_provider_from_endpoint` |
+| `app/model_catalog.py` | 四平台模型目录（`doubao` / `dashscope` / `siliconflow` / `mimo`）与定价元数据（Web 视觉模型选择器） |
 | `app/translations.py` | 中英翻译表；`Translator.set_language()` 在 `DanmuApp.__init__` 调用 |
 | `app/image_compress.py` | PIL + JPEG + Base64，max_width 768 quality 85，无临时文件 |
 | `app/danmu_pool.py` | 本地弹幕库 `data/danmu_pool_zh.json`（1000 条，见 `scripts/extract_danmu_pool.py`） |
@@ -85,10 +85,12 @@ CI：`.github/workflows/ci.yml` — Python 3.12 `windows-latest`
 
 - **加密锁死**：丢失 `%APPDATA%/DanmuAI/.key` → 已加密 Key 不可恢复
 - **弹幕截断**：15 中文字 / 40 英文字 + `...`
-- **本地公式化弹幕库**：`danmu_pool_enabled=0` 时全应用禁用 `danmu_pool_zh.json`（AI 补齐、轻量兜底、同屏补足）；`min_on_screen` 默认 5，仅开关开启时生效，**0** 关闭补足
+- **公式化弹幕库**：Web 页「公式化弹幕库」管理；`danmu_pool_enabled`（内置）或 `danmu_pool_use_custom`（自定义）任一开启时 `min_on_screen` 补足生效（默认 5，**0** 关闭）；自定义句经 `/api/danmu-pool/custom`，不进 `PUT /api/config`
 - **去重**：`deque(30)` + `recent_exact_set` + Levenshtein `dedup_threshold=0.5`
 - **失败退避**：连续 5 次暂停；401/403/402 立即暂停
-- **输出 token 下限**：普通 ≥512，thinking ≥1024
+- **输出 token 下限**：`resolve_danmu_max_output_tokens` 下限 **512**（运行时固定关闭 thinking，忽略 `use_thinking` 开启）
+- **思考模式**：豆包/OpenAI 请求均发 `thinking: {"type":"disabled"}`；勿把 `reasoning_content` 当弹幕；MiMo 未关闭时易「AI 返回为空」
+- **小米 MiMo**：预设 `https://api.xiaomimimo.com/v1`（OpenAI 兼容）；目录模型 `mimo-v2.5`（截图推荐）、`mimo-v2-omni`；**开麦仅豆包** `input_audio`，MiMo 走 OpenAI 路径不发音频
 - **全屏截图**：`ScreenCapturer.grab()` 按 `screen_index` 截全屏；`region_*` 未参与裁剪
 - **Web 写配置**：`PUT /api/config` → bridge 信号 → 主线程 `apply_config_patch`；**勿在 HTTP 线程直接改 Qt 对象**
 - **GET 自定义模型**：返回掩码 `apiKey`
@@ -119,7 +121,13 @@ CI：`.github/workflows/ci.yml` — Python 3.12 `windows-latest`
 
 ## 文档
 
+- [docs/README.md](docs/README.md) — 文档索引
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构总览
+- [docs/CONTRIBUTING_ARCHITECTURE.md](docs/CONTRIBUTING_ARCHITECTURE.md) — 贡献边界与 Boundary Guard
+- [docs/MAIN_PIPELINE.md](docs/MAIN_PIPELINE.md) — 主链路（普通模式）
+- [docs/RUNTIME_STATE.md](docs/RUNTIME_STATE.md) — 运行态与快照
+- [docs/BOUNDARY_GUARD.md](docs/BOUNDARY_GUARD.md) — `scripts/boundary_guard.py`
 - [docs/WEB_CONSOLE.md](docs/WEB_CONSOLE.md) — Web API 与页面地图
-- [docs/MEMORY_SYSTEM_PLAN.md](docs/MEMORY_SYSTEM_PLAN.md) — 记忆系统四档与场景切换策略
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构细节
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 记忆四档 `memory_mode`（`app/memory/`）
+- 维护者登记：`docs/runtime-state-map.md`、`docs/main-pipeline-sequence.md`、`docs/final-architecture-baseline.md`
 - 文档与源码不一致时，以 `main.py` 与 `app/` 源码为准

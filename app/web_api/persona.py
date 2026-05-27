@@ -1,4 +1,4 @@
-"""Persona / template operations for the web console."""
+"""人格/模板 Web 逻辑；由 routes 调用，写配置经 DanmuApp/ConfigStore 既有入口。"""
 
 from __future__ import annotations
 

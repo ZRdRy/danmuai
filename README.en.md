@@ -5,7 +5,7 @@
 
 Windows desktop overlay danmaku (scrolling comments) powered by vision models. Captures the **selected display**, sends compressed in-memory screenshots to your configured API, and renders transparent Qt overlays. Default UI is a **local Web console** (`127.0.0.1:18765`) in a pywebview shell.
 
-Full documentation is in [README.md](README.md) (Chinese).
+Full documentation is in [README.md](README.md) (Chinese). Agent/contributor notes: [AGENTS.md](AGENTS.md).
 
 ## Quick start
 
@@ -19,6 +19,21 @@ python main.py
 - **Windows** with WebView2 (pywebview)
 - Python ≥ 3.12
 - Config and secrets: `%APPDATA%/DanmuAI/` (see [SECURITY.md](SECURITY.md))
+
+## API providers (Assistant settings)
+
+Built-in presets (see `app/model_providers.py`) include Volcengine Ark (Doubao), Alibaba DashScope, Zhipu, Moonshot, SiliconFlow, **Xiaomi MiMo**, plus custom OpenAI-compatible and Doubao Responses entries.
+
+| Preset | Default endpoint | Protocol | Vision danmu example |
+|--------|------------------|----------|----------------------|
+| Volcengine Ark | `https://ark.cn-beijing.volces.com/api/v3` | Doubao `/responses` | `doubao-seed-1-6-flash-250828` |
+| Xiaomi MiMo | `https://api.xiaomimimo.com/v1` | OpenAI-compatible | `mimo-v2.5` (recommended), `mimo-v2-omni` |
+
+Platforms with a model picker catalog: Doubao, DashScope, SiliconFlow, MiMo (`GET /api/model-catalog`).
+
+**Thinking mode** is always sent as `disabled` on outbound requests (`app/ai_client.py`). Streaming parsers use `content` only, not `reasoning_content`.
+
+**Microphone mode** sends `input_audio` only on the Doubao Responses path. OpenAI-compatible presets (including MiMo) are screenshot + text only; use a Doubao multimodal model such as `doubao-seed-2-0-mini-260428` for mic.
 
 ## Contributing
 

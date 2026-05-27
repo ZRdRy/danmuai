@@ -1,4 +1,14 @@
-"""RMS-based utterance-end detection for mic insert mode (no VAD library)."""
+"""RMS-based utterance-end detection for mic insert mode (no VAD library).
+
+MicUtteranceDetector 由 DanmuApp._poll_mic_utterance 周期轮询 PCM 块，无 VAD 库。
+四状态机：IDLE → SPEAKING → SILENCE_PENDING → COOLDOWN → IDLE。
+- 进入：RMS ≥ 动态 enter 阈值（噪声底 + 配置下限）
+- 结束：静音持续 silence_ms 且此前语音 ≥ min_speech_ms → 回调 on_utterance_end
+- 冷却：cooldown_sec 内忽略新语音，避免连发触发多次 mic API
+
+动态阈值：enter 取 max(配置, floor+120, floor*1.6+60) 抬高门槛抑制环境噪声误触；
+exit 取 max(80, floor+40, peak*0.45) 相对峰值回落判定「说完了」，避免单帧抖动。
+"""
 
 from __future__ import annotations
 
@@ -11,10 +21,12 @@ from app.mic_test import QUIET_RMS, pcm_metrics
 
 
 class UtteranceState(str, Enum):
-    IDLE = "idle"
-    SPEAKING = "speaking"
-    SILENCE_PENDING = "silence_pending"
-    COOLDOWN = "cooldown"
+    """端点检测状态；poll() 每 400ms 左右推进一次。"""
+
+    IDLE = "idle"  # 等待语音，RMS 超 enter 阈值进入 SPEAKING
+    SPEAKING = "speaking"  # 累计 peak_rms，RMS 跌破 exit 阈值进入 SILENCE_PENDING
+    SILENCE_PENDING = "silence_pending"  # 计时静音；过短则回 IDLE，够长且语音够长则触发回调
+    COOLDOWN = "cooldown"  # 已触发 on_utterance_end，冷却期内不检测
 
 
 @dataclass(frozen=True)
@@ -26,6 +38,7 @@ class MicUtteranceConfig:
 
 
 def mic_utterance_config_from_store(config) -> MicUtteranceConfig:
+    """从 ConfigStore 读取 mic_* 键，与 Web 控制台配置项对齐。"""
     return MicUtteranceConfig(
         speech_rms=config.get_int("mic_speech_rms", QUIET_RMS),
         silence_ms=config.get_int("mic_silence_ms", 400),
@@ -35,13 +48,17 @@ def mic_utterance_config_from_store(config) -> MicUtteranceConfig:
 
 
 def calibrate_noise_floor_rms(pcm: bytes) -> int:
-    """Estimate ambient RMS from a short pre-roll buffer."""
+    """用开麦前短缓冲估计环境噪声底 RMS，供 set_noise_floor 抬高 enter/exit 基准。"""
     rms, _ = pcm_metrics(pcm)
     return max(0, rms)
 
 
 class MicUtteranceDetector:
-    """Poll recent PCM chunks; fire callback once per completed utterance."""
+    """轮询 PCM 块，每完成一句语音调用一次 on_utterance_end（经 COOLDOWN 防抖）。
+
+    生命周期：reset() 清空状态；开麦前 calibrate_noise_floor_rms + set_noise_floor；
+    poll() 由主线程定时驱动。不使用 WebRTC VAD，仅用 RMS 与双阈值滞回。
+    """
 
     def __init__(
         self,
@@ -66,6 +83,7 @@ class MicUtteranceDetector:
         self._config = config
 
     def reset(self) -> None:
+        """停麦或模式切换时清空状态机与噪声底，避免沿用上一会话阈值。"""
         self._state = UtteranceState.IDLE
         self._speech_started_at = 0.0
         self._silence_started_at = 0.0
@@ -74,12 +92,15 @@ class MicUtteranceDetector:
         self._peak_rms = 0
 
     def set_noise_floor(self, floor_rms: int) -> None:
+        """开麦校准后写入；enter/exit 阈值均相对 floor 抬高，抑制环境底噪误触。"""
         self._noise_floor = max(0, int(floor_rms))
 
     def enter_threshold(self) -> int:
+        """当前进入阈值（调试/UI 展示用）。"""
         return self._speech_enter_threshold()
 
     def _speech_enter_threshold(self) -> int:
+        # 三者取 max：配置下限、绝对偏移(+120)、相对噪声底(*1.6+60)，环境越吵门槛越高
         floor = self._noise_floor
         return max(
             self._config.speech_rms,
@@ -88,10 +109,12 @@ class MicUtteranceDetector:
         )
 
     def _speech_exit_threshold(self) -> int:
+        # 相对本次 utterance 的 peak 回落到 45% 以下视为「音量下降」；并与噪声底+40 取 max
         floor = self._noise_floor
         return max(80, floor + 40, int(self._peak_rms * 0.45))
 
     def poll(self, pcm_chunk: bytes, *, now: float | None = None) -> None:
+        """推进状态机；COOLDOWN 到期回 IDLE，其余状态按 RMS 与时长转换。"""
         now = now if now is not None else time.monotonic()
         if self._state == UtteranceState.COOLDOWN:
             if now >= self._cooldown_until:
@@ -104,6 +127,7 @@ class MicUtteranceDetector:
         enter_threshold = self._speech_enter_threshold()
 
         if self._state == UtteranceState.IDLE:
+            # 语音开始：锁定 speech_started_at 与初始 peak
             if rms >= enter_threshold:
                 self._state = UtteranceState.SPEAKING
                 self._speech_started_at = now
@@ -116,15 +140,18 @@ class MicUtteranceDetector:
             self._peak_rms = max(self._peak_rms, rms)
             if rms >= exit_threshold:
                 return
+            # 音量跌破 exit：开始计静音，不要求立刻结束（防换气短静音）
             self._state = UtteranceState.SILENCE_PENDING
             self._silence_started_at = now
             return
 
         if self._state == UtteranceState.SILENCE_PENDING:
+            # 静音段内再次大声：视为同一句继续（如句中停顿），回到 SPEAKING
             if rms >= enter_threshold:
                 self._state = UtteranceState.SPEAKING
                 self._peak_rms = max(self._peak_rms, rms)
                 return
+            # enter > exit 形成滞回：RMS 在 [exit, enter) 仍视为「未够安静」，继续计静音
             if rms >= exit_threshold:
                 return
             silence_ms = (now - self._silence_started_at) * 1000.0
@@ -132,12 +159,14 @@ class MicUtteranceDetector:
                 return
             speech_ms = (self._silence_started_at - self._speech_started_at) * 1000.0
             if speech_ms >= self._config.min_speech_ms:
-                self._fire(now)
+                self._fire(now)  # 有效 utterance：进入 COOLDOWN 并回调
             else:
+                # 过短语音（咳嗽/按键声）丢弃，不触发 mic API
                 self._state = UtteranceState.IDLE
                 self._peak_rms = 0
 
     def _fire(self, now: float) -> None:
+        """有效 utterance 结束：先进入 COOLDOWN 再回调，避免回调内重入 poll 连发 mic API。"""
         self._state = UtteranceState.COOLDOWN
         self._cooldown_until = now + self._config.cooldown_sec
         self._peak_rms = 0

@@ -14,7 +14,7 @@ from app.personae import (
 
 class FakeConfig:
     def __init__(self, data=None):
-        self._data = {"danmu_display_mode": "realtime"}
+        self._data = {}
         self._data.update(data or {})
 
     def get(self, key, default=""):
@@ -113,9 +113,9 @@ def test_strip_reply_contract_removes_legacy_and_dynamic():
 
 def test_ensure_reply_contract_replaces_old_counts():
     old = build_reply_contract_zh(2, 3) + " 保留补充"
-    cfg = FakeConfig({"reply_scene_count": "4", "reply_filler_count": "3"})
+    cfg = FakeConfig({"normal_reply_count": "4"})
     merged = ensure_reply_contract(old, cfg)
-    assert "前 4 条必须强相关当前画面" in merged
-    assert "后 3 条必须是适合直播间氛围的泛用弹幕" in merged
+    assert "固定返回 4 条弹幕" in merged
+    assert "必须与当前画面或直播氛围相关" in merged
     assert "保留补充" in merged
     assert "前 2 条必须强相关当前画面" not in merged

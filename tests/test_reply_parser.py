@@ -10,7 +10,7 @@ from app.translations import tr
 
 class FakeConfig:
     def __init__(self, data=None):
-        self._data = {"danmu_display_mode": "realtime"}
+        self._data = {}
         self._data.update(data or {})
 
     def get(self, key, default=""):
@@ -139,16 +139,16 @@ def test_build_local_fallback_batch_ignores_pool_when_disabled(monkeypatch):
 def test_builtin_persona_prompt_contains_release_contract():
     manager = PersonaManager(FakeConfig())
     system_pt, _ = manager.get_prompt("吐槽型")
-    assert REPLY_CONTRACT in system_pt
     assert "固定返回 5 条弹幕" in system_pt
-    assert "前 2 条必须强相关当前画面" in system_pt
-    assert "后 3 条必须是适合直播间氛围的泛用弹幕" in system_pt
+    assert "必须与当前画面或直播氛围相关" in system_pt
+    assert "前 2 条必须强相关当前画面" not in system_pt
+    assert "泛用弹幕" not in system_pt
 
 
-def test_builtin_persona_prompt_reflects_config_counts():
-    cfg = FakeConfig({"reply_scene_count": "4", "reply_filler_count": "5"})
+def test_builtin_persona_prompt_reflects_normal_reply_count():
+    cfg = FakeConfig({"normal_reply_count": "9"})
     manager = PersonaManager(cfg)
     system_pt, _ = manager.get_prompt("吐槽型")
     assert "固定返回 9 条弹幕" in system_pt
-    assert "前 4 条必须强相关当前画面" in system_pt
-    assert "后 5 条必须是适合直播间氛围的泛用弹幕" in system_pt
+    assert "必须与当前画面或直播氛围相关" in system_pt
+    assert "前 4 条必须强相关当前画面" not in system_pt

@@ -1,4 +1,9 @@
-"""Register extended FastAPI routes on the web console app."""
+"""扩展 FastAPI 路由：协议适配层，委托 DanmuApp 公开 façade 与 web_api 子模块。
+
+- /api/status 在 web_console 内注册，本文件不重复
+- /api/diagnostics 必须 build_diagnostic_snapshot()，与 status 分离
+- 写操作需 Bearer；勿在路由内直接改 DanmuApp 私有字段或 QTimer
+"""
 
 from typing import TYPE_CHECKING, Callable
 from urllib.parse import unquote
@@ -8,6 +13,7 @@ from pydantic import BaseModel
 
 from app.image_compress import compress_image_bytes
 from app.web_api import custom_models as cm_api
+from app.web_api import danmu_pool as pool_api
 from app.web_api import persona as persona_api
 
 if TYPE_CHECKING:
@@ -69,6 +75,18 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         model: str = ""
         api_mode: str = "doubao"
 
+    class DanmuPoolSettingsPayload(BaseModel):
+        builtin_enabled: bool | None = None
+        custom_enabled: bool | None = None
+        min_on_screen: int | None = None
+
+    class DanmuPoolCustomAppendPayload(BaseModel):
+        text: str = ""
+        items: list[str] | None = None
+
+    class DanmuPoolCustomDeletePayload(BaseModel):
+        texts: list[str]
+
     def _danmu():
         return bridge.danmu_app
 
@@ -77,6 +95,14 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
             return fn(*args, **kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/diagnostics")
+    def get_diagnostics():
+        # 只读诊断；调度/timing 数据经 DanmuApp 公开入口，不读 _last_api_trigger_at 等私有字段
+        return {
+            "ok": True,
+            "diagnostics": _danmu().build_diagnostic_snapshot(),
+        }
 
     @app.get("/api/personae/{name}/template")
     def get_persona_template(name: str):
@@ -122,6 +148,7 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         return _run_main(persona_api.restore_builtin_default, _danmu(), unquote(name))
 
+    # 活跃人格：委托 DanmuApp.set_active_personae（主线程由 bridge 槽保证）
     @app.put("/api/personae/active")
     def put_active_personae(
         body: ActivePersonaePayload,
@@ -130,9 +157,40 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         if not body.active:
             raise HTTPException(status_code=400, detail="请至少选择一个人格")
-        _danmu().personae.set_active(body.active)
-        _danmu().config_changed.emit()
+        _danmu().set_active_personae(body.active)
         return {"ok": True}
+
+    @app.get("/api/danmu-pool/meta")
+    def get_danmu_pool_meta():
+        return pool_api.get_meta(_danmu())
+
+    @app.put("/api/danmu-pool/settings")
+    def put_danmu_pool_settings(
+        body: DanmuPoolSettingsPayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        return _run_main(pool_api.save_settings, _danmu(), body.model_dump(exclude_none=True))
+
+    @app.get("/api/danmu-pool/custom")
+    def get_danmu_pool_custom():
+        return pool_api.list_custom(_danmu())
+
+    @app.post("/api/danmu-pool/custom")
+    def post_danmu_pool_custom(
+        body: DanmuPoolCustomAppendPayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        return _run_main(pool_api.append_custom, _danmu(), body.model_dump(exclude_none=True))
+
+    @app.delete("/api/danmu-pool/custom")
+    def delete_danmu_pool_custom(
+        body: DanmuPoolCustomDeletePayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        return _run_main(pool_api.delete_custom, _danmu(), body.model_dump())
 
     @app.get("/api/custom-models")
     def get_custom_models():
@@ -222,41 +280,8 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         }
 
     def _mic_test_response(body: MicTestPayload):
-        from dataclasses import asdict
-
         danmu_app = _danmu()
-        if body.send_to_ai:
-            from app.mic_test_send import run_mic_test_send
-
-            resolved = danmu_app.ai_worker._resolve_request_credentials()
-            active_model = resolved[2] if resolved else ""
-            result = run_mic_test_send(danmu_app, body.duration_sec)
-            danmu_app.logger.info(
-                "mic test send "
-                f"model={active_model or 'unknown'} "
-                f"ok={result.ok} level={result.level} pcm_bytes={result.pcm_bytes} "
-                f"rms={result.rms} audio_attached={result.audio_attached} "
-                f"input_tokens={result.input_tokens} output_tokens={result.output_tokens} "
-                f"error={result.error or 'none'}"
-            )
-            return asdict(result)
-
-        from app.mic_service import mic_mode_enabled
-        from app.mic_test import run_mic_test
-
-        keep_running = mic_mode_enabled(danmu_app.config)
-        result = run_mic_test(
-            danmu_app._mic_service,
-            body.duration_sec,
-            keep_running=keep_running,
-        )
-        danmu_app.logger.info(
-            "mic test "
-            f"ok={result.ok} level={result.level} pcm_bytes={result.pcm_bytes} "
-            f"rms={result.rms} peak={result.peak} wav_ok={result.wav_ok} "
-            f"device={result.default_input or 'unknown'}"
-        )
-        return asdict(result)
+        return danmu_app.run_mic_test(body.duration_sec, send_to_ai=body.send_to_ai)
 
     @app.post("/api/mic/test")
     def mic_test(

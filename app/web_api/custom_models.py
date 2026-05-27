@@ -1,9 +1,10 @@
-"""Custom model list operations for the web console."""
+"""自定义模型 CRUD；默认模型切换须复用 set_default_model_selection 双写规则。"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from app.application.config_service import set_default_model_selection
 from app.model_providers import is_model_config_complete, validate_model_config
 
 if TYPE_CHECKING:
@@ -92,8 +93,7 @@ def delete_custom_model(app: "DanmuApp", index: int) -> None:
     if removed.get("modelId") == default_id:
         fallback = models[0].get("modelId", "") if models else app.config.get("model", "")
         if fallback:
-            app.config.set_default_model_id(fallback)
-            app.config.set("model", fallback)
+            set_default_model_selection(app.config, fallback)
     app.config_changed.emit()
 
 
@@ -106,7 +106,6 @@ def set_default_custom_model(app: "DanmuApp", index: int) -> dict:
     if not model_id:
         raise ValueError("模型 ID 为空")
 
-    app.config.set_default_model_id(model_id)
-    app.config.set("model", model_id)
+    set_default_model_selection(app.config, model_id)
     app.config_changed.emit()
     return {"default_model_id": model_id}

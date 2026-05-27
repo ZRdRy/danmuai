@@ -1,96 +1,116 @@
 # Architecture
 
-## 总体结构
+DanmuAI is a desktop overlay danmaku assistant: it captures the screen on a fixed interval, calls a vision-language model, parses short comments, and renders them on a transparent Qt overlay. Configuration and control live in a local Web console (pywebview shell); the overlay and system tray always run with the app.
 
-- `main.py`
-  - `DanmuApp` 负责状态机、截图调度、回复消费、失败退避和统一退出
-  - **Web 控制台**（`app/web_console.py` + `web/static/` + `app/webview_shell.py`）始终启动；遗留 Qt 主窗已移除
-- `app/web_console.py` + `app/web_api/`
-  - 默认 UI：设置、人格工坊、自定义模型、压缩预览、日志过滤；详见 [`WEB_CONSOLE.md`](WEB_CONSOLE.md)
-- `app/snipper.py`
-  - `ScreenCapturer` 按 `screen_index` 抓取所选显示器；`region_w/h > 0` 时按相对所选屏幕左上角的 `region_x/y/w/h` 裁剪，否则全屏
-- `app/ai_client.py`
-  - `AiWorker` 在 `QThreadPool` 线程中通过 `httpx` 发起同步请求，并把结果通过 Qt 信号回送主线程
-- `app/reply_queue.py`
-  - `AIReplyFIFOBuffer` 维护有限长度回复队列，避免内存无限增长
-- `app/reply_parser.py`
-  - 解析模型输出并标准化为固定 5 条弹幕
-- `app/overlay.py` + `app/danmu_engine.py`
-  - 负责弹幕布局、轨道调度、碰撞规避和渲染（**独立于主窗 UI 主题**）
-
-## 默认 UI：Web 控制台
-
-| 能力 | 状态 |
-|------|------|
-| 运行启停 / 配置 | ✅ |
-| 节奏 / 截图 / 图像参数 | ✅ |
-| 人格提示词 + 版本 | ✅ 人格工坊 |
-| 自定义模型 CRUD | ✅ |
-| 截图压缩预览 | ✅ API + 上传 |
-| 日志多选 / 复制 | ✅ |
-| 英文 Web UI | ❌ 暂缓（`language` 字段保留，Web 侧未切换） |
-
-Web 视觉原型：[`prototype/Qwen_html_20260524_481u8vlmv.html`](../prototype/Qwen_html_20260524_481u8vlmv.html)。历史 Qt 主窗见 [archive/qt6_ui_redesign_plan.md](archive/qt6_ui_redesign_plan.md)。
-
-## 麦克风模式（双轨并行）
-
-已实现：Visual 截图轨与 Mic 插入轨并行；麦克风默认关；音频不落盘；日志不输出完整音频 Base64。隐私说明见 [`PRIVACY.md`](PRIVACY.md)。
+## Runtime layout
 
 ```text
-Visual 轨
-  screenshot_timer → _rhythm_check_timer → _trigger_api_call()
-  → AiRunnable（仅 JPEG）→ 5 条弹幕 → 更新 BatchTracker 节奏锚点
-
-Mic 插入轨
-  MicCaptureService → MicUtteranceDetector（RMS 100ms 轮询）
-  → 说话结束 → _trigger_mic_api_call()
-  → AiRunnable（JPEG + WAV）→ 5 条弹幕 prepend 插队
-  → 不更新 BatchTracker；与 visual 各 1 个 in-flight 槽并行
+python main.py
+├─ DanmuApp (main.py)           bootstrap, lifecycle, screenshot/AI orchestration
+├─ uvicorn thread               app/web_console.py — FastAPI on 127.0.0.1:18765
+├─ pywebview thread             app/webview_shell.py — desktop shell
+├─ web/static/                  default control UI (index.html, app.js, warm-tokens.css)
+├─ app/web_api/                 personas, custom models, danmu pool, diagnostics routes
+└─ DanmuOverlay (app/overlay.py) + DanmuEngine — always-on transparent danmaku layer
 ```
 
-| 文件 | 职责 |
-|------|------|
-| `app/mic_buffer.py` | PCM 环形缓冲 + `take_recent_ms` |
-| `app/mic_capture.py` / `app/mic_service.py` | sounddevice 采集与 snapshot |
-| `app/mic_utterance.py` | RMS 状态机（idle → speaking → silence → fire → cooldown） |
-| `app/mic_encode.py` | PCM → `data:audio/wav;base64,...` |
-| `app/mic_prompt.py` | `build_mic_insert_user_pt()` 插入专用 prompt |
-| `main.py` | `_trigger_mic_api_call`、`_pending_request_meta`、`from_mic_insert` 入队 |
-| `app/runnable.py` | 线程池内编码音频（mic 轨专用） |
-| `app/ai_client.py` | `_request_doubao` 附加 `input_audio` |
+**UI facts**
 
-| 配置键 | 默认 | 说明 |
-|--------|------|------|
-| `mic_mode_enabled` | `0` | Web 开关 |
-| `mic_window_sec` | `5` | utterance 结束时 snapshot 窗口（秒） |
-| `mic_speech_rms` | `400` | 语音 RMS 阈值（内部默认，Web 未暴露） |
-| `mic_silence_ms` | `500` | 静音判定时长 |
-| `mic_min_speech_ms` | `400` | 最短有效语音 |
-| `mic_cooldown_sec` | `4` | 触发后冷却 |
+- Default: Web console + pywebview + Qt overlay/tray. Legacy Qt main window and `--qt-ui` / `--legacy-ui` are removed (`sys.exit(2)`).
+- New product features belong in `web/static/` and `app/web_api/` (`routes.py` registration).
+- Overlay is independent of which control UI is used.
 
-边界：Mic 回复 `source=mic`、`prepend_batch`，不重置 `BatchTracker`；Mic 错误不计入 visual 连续失败退避；**Mic 与普通模式均不做 `stale_ttl` 硬过期**（实时模式视觉回复仍可按 `drop_stale` + `freshness` 丢弃）。不改 Overlay / 弹幕 JSON / 去重核心。豆包 Responses 需支持 `input_audio` 的模型（如 `doubao-seed-2-0-mini`）。
+## Core modules
 
-## 关键时序
+| Module | Role |
+|--------|------|
+| [main.py](../main.py) | `DanmuApp`: timers, capture, API trigger, reply queue consumption, mic insert |
+| [app/web_console.py](../app/web_console.py) | HTTP/WebSocket bridge; config patches via signals to main thread |
+| [app/web_api/](../app/web_api/) | REST routes; must use public `DanmuApp` facades |
+| [app/ai_client.py](../app/ai_client.py) | Doubao `/responses` stream + OpenAI-compatible SSE; thinking disabled |
+| [app/reply_parser.py](../app/reply_parser.py) | JSON parse + batch normalize (`normal_reply_count`) |
+| [app/reply_queue.py](../app/reply_queue.py) | `AIReplyFIFOBuffer`, adaptive dequeue delay |
+| [app/danmu_engine.py](../app/danmu_engine.py) | Tracks, dedup, collision-aware placement |
+| [app/overlay.py](../app/overlay.py) | Transparent topmost render loop (~60 fps when animating) |
+| [app/danmu_pool.py](../app/danmu_pool.py) | Built-in/custom formula pool for on-screen top-up |
+| [app/config_store.py](../app/config_store.py) | SQLite config, Fernet-encrypted keys (`%APPDATA%/DanmuAI`) |
+| [app/application/](../app/application/) | Read-only projections, status/diagnostics snapshots, scheduling/timing services |
 
-1. `DanmuApp.start()` 重置状态并触发下一次截图调度。
-2. 主线程按节奏抓取所选屏幕（可 region 裁剪），生成新的 `screenshot_id`。
-3. **场景探测**（`app/scene_fingerprint.py`）：对截图计算灰度 hash；若判定场景切换则递增 `_scene_generation`（strict 模式下可清屏上旧批弹幕）。`DANMU_SCENE_DEBUG=1` 可输出探测日志。
-4. `AiRunnable.run()` 在线程池里压缩截图，再调用 `AiWorker._request()`。
-5. `AiWorker` 返回后触发 `finished` 或 `error` 信号。
-6. `DanmuApp._on_ai_reply()` 先做过期判定（`screenshot_id`、`scene_generation`、`app/live_freshness.py` 新鲜度 TTL），再把回复标准化为 5 条，放入有限队列。
-7. `DanmuApp._consume_reply_queue()` 按右侧密度自适应节奏逐条送入 `DanmuEngine`。
+### `app/application/` (state boundaries)
 
-## 稳定性约束
+| Component | Responsibility |
+|-----------|----------------|
+| `runtime_state.py` | Read-only runtime projection (`RuntimeState.from_app`) |
+| `status_snapshot.py` | `/api/status` via `StatusSnapshotBuilder` |
+| `diagnostic_snapshot.py` | `/api/diagnostics` (read-only, separate from status) |
+| `generation_pipeline_state.py` | Read-only projection of generation-related fields |
+| `request_scheduler.py` | API schedule gates; owns `last_api_trigger_at` |
+| `request_timing_service.py` | RTT samples, `request_started_at_by_id`, cooldown inputs |
+| `stats_state.py` | Session counters (danmu count, tokens, runtime) |
+| `web_runtime_state.py` | Web error banner + display cache |
+| `config_service.py` | Web config apply path |
 
-- 每次截图都有单调递增的 `screenshot_id`
-- **场景代际**（`scene_generation`）：`fingerprint_from_pixmap` / `is_scene_change` 推进代际；回复携带的代际低于当前值则丢弃（`stale_scene` / `stale_scene_in_flight`）
-- **新鲜度**（`app/live_freshness.py`）：按 `drop_stale` 档位丢弃超出 TTL 的回复（loose 12s / medium 8s / strict 5s）；截图退避与本地兜底批次亦在此模块
-- `AiWorker` 使用请求超时和连续失败退避，避免无限挂起
-- `quit()` 会先 `stop()`、标记停止、关闭 HTTP 客户端并等待线程池短暂收尾
+`DanmuApp` remains the **bootstrap / lifecycle owner** and a thin **façade** for Web and tests. Do not move queue, screenshot `QPixmap`, or in-flight request ownership out of `main.py` without an explicit architecture change (see [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md)).
 
-## 发布边界
+## Visual main pipeline (normal mode)
 
-- 支持多屏索引选择；默认截图为所选屏全屏
-- `region_*` 使用相对所选屏幕左上角的坐标；宽高大于 0 时 `ScreenCapturer` 会裁剪截图
-- 历史记录默认只保存弹幕文本，不保存截图原图
-- 控制台 UI 为 Web（`web/static/`），弹幕层为 Qt Overlay
+Only **normal mode** is active: fixed screenshot interval (`normal_recognition_interval_ms`) and one visual API call per successful capture when no visual request is in flight. Legacy `danmu_display_mode=realtime` is normalized to `normal` on load.
+
+```text
+screenshot_timer
+  → _on_screenshot_timer()
+  → _on_normal_capture_tick()
+  → _capture_screenshot()
+  → _trigger_api_call()
+  → AiRunnable (QThreadPool) → AiWorker
+  → _on_ai_reply()
+  → reply_parser → _enqueue_reply_batch()
+  → _consume_reply_queue()
+  → DanmuEngine.add_text()
+  → DanmuOverlay paint loop
+```
+
+Details: [MAIN_PIPELINE.md](MAIN_PIPELINE.md). Machine-checked sequence table: [main-pipeline-sequence.md](main-pipeline-sequence.md).
+
+**Mic insert** (optional): parallel path via `MicService` → `_trigger_mic_api_call()` → same `_on_ai_reply()` / queue, with `prepend_batch` and separate in-flight slot. Does not reset visual batch pacing.
+
+## Threading
+
+- Screenshot timers run on the **Qt main thread**.
+- AI HTTP runs in **QThreadPool** (`MAX_IN_FLIGHT=1` for visual).
+- HTTP handlers must not touch Qt objects directly; use `WebConsoleBridge` signals or `QTimer.singleShot(0, ...)`.
+
+## Memory modes
+
+Process-local scene memory and bullet dedup (`app/memory/`, `app/memory_prompt_builder.py`). **Not persisted** across sessions; configured in the Web console (`memory_mode`, `memory_window`).
+
+| `memory_mode` | Behavior |
+|---------------|----------|
+| `off` | No memory injection |
+| `dedup_only` | Dedup hints + output constraints |
+| `scene_card` | Scene state card + dedup + constraints (default-style) |
+| `strong` | Same as `scene_card` with larger prompt budget and scene-switch carryover |
+
+`memory_window` (1–20, default 10) bounds recent bullet history for dedup. Mic insert path does not inject memory. Web/API details: [WEB_CONSOLE.md](WEB_CONSOLE.md). Historical design notes: [archive/planning/MEMORY_SYSTEM_PLAN.md](archive/planning/MEMORY_SYSTEM_PLAN.md).
+
+## Scene metadata
+
+- Scene fingerprint helpers exist (`app/scene_fingerprint.py`); `scene_generation` is carried on requests/replies for memory and logging. Runtime scene-advance / API gate paths are largely idle (`_scene_api_block_reason()` returns empty).
+- Reply staleness: `_is_reply_stale()` currently does not TTL-drop visual/mic replies (avoids dropping backlog). Screenshot backoff still uses `app/live_freshness.py` helpers.
+
+## Stability
+
+- Monotonic `screenshot_id` per accepted frame.
+- Consecutive API failures → backoff pause; 401/403/402 pause immediately.
+- `quit()`: `stop()` → release hotkeys/tray → close `AiWorker` → `waitForDone` thread pool → flush history/config.
+
+## Where to change things
+
+| Goal | Start here |
+|------|------------|
+| Web UI / new API | `web/static/`, `app/web_api/routes.py` |
+| Overlay / tracks | `app/overlay.py`, `app/danmu_engine.py` (high risk) |
+| Capture / AI orchestration | `main.py` (high risk; read pipeline docs first) |
+| Models / providers | `app/model_providers.py`, `app/model_catalog.py` |
+
+Contributors: [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md). Agents: [AGENTS.md](../AGENTS.md). Web API map: [WEB_CONSOLE.md](WEB_CONSOLE.md).

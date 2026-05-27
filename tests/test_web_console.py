@@ -1,9 +1,14 @@
 """Tests for local web console helpers."""
 
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from app.application.generation_pipeline_state import GenerationPipelineState
+from app.application.stats_state import StatsState
+from app.application.web_runtime_state import WebRuntimeState
+from main import DanmuApp
 from app.web_console import (
     WEB_CONFIG_KEYS,
     WebConsoleBridge,
@@ -71,7 +76,9 @@ def test_export_config_fills_defaults_for_empty_store(tmp_path):
     assert data["danmu_speed"] == "2"
     assert data["danmu_lines"] == "20"
     assert data["dedup_threshold"] == "0.5"
-    assert data["freshness"] == "medium"
+    assert data["normal_recognition_interval_sec"] == "5"
+    assert data["normal_reply_count"] == "5"
+    assert "freshness" not in data
     assert data["eviction_mode"] == "natural"
     assert data["opacity"] == "100"
     assert data["font_size"] == "24"
@@ -200,64 +207,288 @@ def test_apply_config_patch_preserves_masked_custom_model_key_by_identity():
 
 def _make_status_app():
     app = MagicMock()
-    app.engine.running = False
-    app.engine.get_dedup_profile_snapshot.return_value = {
-        "enabled": True,
-        "duplicate_checks": 3,
+    app.build_status_snapshot.return_value = {
+        "running": False,
+        "danmu_count": 0,
+        "queue_count": 0,
+        "display_count": 0,
+        "total_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "runtime_sec": 0.0,
+        "error_message": "",
+        "is_error": False,
+        "live_analyzing": False,
+        "live_local_fallback": False,
+        "live_delay_sec": 0.0,
+        "live_stale_drops": 0,
+        "live_message": "",
+        "persona_names": [],
+        "screen_index": 0,
+        "has_api_key": True,
+        "dedup_profile": None,
+        "lifetime_danmu_count": 0,
+        "lifetime_runtime_sec": 0.0,
+        "lifetime_total_tokens": 0,
+        "lifetime_input_tokens": 0,
+        "lifetime_output_tokens": 0,
+        "session_runs": [
+            {
+                "started_at": 1000.0,
+                "ended_at": 1060.0,
+                "model": "gpt-test",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "danmu_count": 2,
+            }
+        ],
     }
-    app.danmu_count = 0
-    app.reply_buffer.size.return_value = 0
-    app._visible_display_count.return_value = 0
-    app._start_time = 0
-    app._total_input_tokens = 0
-    app._total_output_tokens = 0
-    app.personae.get_active.return_value = []
-    app.config.get_int.return_value = 0
-    app.config.get_api_key.return_value = "sk-test"
-    app._web_error_message = ""
-    app._web_error_is_error = False
-    app.window = None
-    app.session_run_log = MagicMock()
-    app.session_run_log.list_dicts_newest_first.return_value = [
-        {
-            "started_at": 1000.0,
-            "ended_at": 1060.0,
-            "model": "gpt-test",
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "total_tokens": 15,
-            "danmu_count": 2,
-        }
-    ]
     return app
 
 
-def test_refresh_status_omits_dedup_profile_when_disabled(monkeypatch):
-    from app.danmu_engine import reset_dedup_profile_for_tests
-
-    monkeypatch.delenv("DANMU_DEDUP_PROFILE", raising=False)
-    reset_dedup_profile_for_tests()
-
+def test_refresh_status_uses_public_status_snapshot():
     bridge = WebConsoleBridge(_make_status_app())
     status = bridge.refresh_status()
 
     assert status.dedup_profile is None
     assert len(status.session_runs) == 1
     assert status.session_runs[0]["model"] == "gpt-test"
-    bridge.danmu_app.engine.get_dedup_profile_snapshot.assert_not_called()
+    bridge.danmu_app.build_status_snapshot.assert_called_once()
 
 
-def test_refresh_status_includes_dedup_profile_when_enabled(monkeypatch):
+def test_build_status_snapshot_delegates_to_builder(monkeypatch):
+    calls = []
+
+    class FakeBuilder:
+        def __init__(self, app):
+            calls.append(app)
+
+        def build(self):
+            return {"running": True}
+
+    monkeypatch.setattr("main.StatusSnapshotBuilder", FakeBuilder)
+    app = SimpleNamespace()
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status == {"running": True}
+    assert calls == [app]
+
+
+def test_build_status_snapshot_omits_dedup_profile_when_disabled(monkeypatch):
     from app.danmu_engine import reset_dedup_profile_for_tests
+
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock(return_value={"enabled": True})),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        _total_input_tokens=0,
+        _total_output_tokens=0,
+        _start_time=0.0,
+        _web_error_message="",
+        _web_error_is_error=False,
+        danmu_count=0,
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+    )
+
+    monkeypatch.delenv("DANMU_DEDUP_PROFILE", raising=False)
+    reset_dedup_profile_for_tests()
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["dedup_profile"] is None
+    app.engine.get_dedup_profile_snapshot.assert_not_called()
+
+
+def test_build_status_snapshot_includes_dedup_profile_when_enabled(monkeypatch):
+    from app.danmu_engine import reset_dedup_profile_for_tests
+
+    app = SimpleNamespace(
+        engine=SimpleNamespace(
+            running=True,
+            get_dedup_profile_snapshot=MagicMock(
+                return_value={"enabled": True, "duplicate_checks": 3}
+            ),
+        ),
+        reply_buffer=SimpleNamespace(size=lambda: 2),
+        _visible_display_count=lambda: 1,
+        _total_input_tokens=7,
+        _total_output_tokens=5,
+        _start_time=time.monotonic() - 3.0,
+        _web_error_message="",
+        _web_error_is_error=False,
+        danmu_count=4,
+        personae=SimpleNamespace(get_active=lambda: ["吐槽型"]),
+        config=FakeConfig({"screen_index": "1", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {"lifetime_total_tokens": 12}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: SimpleNamespace(
+            analyzing=True,
+            local_fallback=False,
+            delay_sec=1.2,
+            stale_drops=2,
+            primary_message=lambda: "analyzing",
+        ),
+    )
 
     monkeypatch.setenv("DANMU_DEDUP_PROFILE", "1")
     reset_dedup_profile_for_tests()
 
-    bridge = WebConsoleBridge(_make_status_app())
-    status = bridge.refresh_status()
+    status = DanmuApp.build_status_snapshot(app)
 
-    assert status.dedup_profile == {"enabled": True, "duplicate_checks": 3}
-    bridge.danmu_app.engine.get_dedup_profile_snapshot.assert_called_once()
+    assert status["dedup_profile"] == {"enabled": True, "duplicate_checks": 3}
+    assert status["live_message"] == "analyzing"
+    app.engine.get_dedup_profile_snapshot.assert_called_once()
+
+
+def test_build_status_snapshot_prefers_web_runtime_state_cache_and_keeps_output_compatible():
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        stats_state=StatsState(danmu_count=2, total_input_tokens=5, total_output_tokens=4),
+        web_runtime_state=WebRuntimeState(
+            error_message="warn",
+            is_error=True,
+            cached_danmu_lines=18,
+            cached_layout_mode="windowed",
+        ),
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["error_message"] == "warn"
+    assert status["is_error"] is True
+    assert status["total_tokens"] == 9
+    assert "cached_danmu_lines" not in status
+    assert "cached_layout_mode" not in status
+
+
+def test_build_status_snapshot_collects_generation_projection_without_exposing_new_fields():
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        stats_state=StatsState(),
+        web_runtime_state=WebRuntimeState(),
+        _active_scene_probe_size=24,
+        _scene_generation_bumped_at=12.5,
+        _last_activity_collect_at=7.5,
+        _latest_displayed_round=9,
+        _latest_requested_screenshot_id=11,
+        _latest_queued_screenshot_id=10,
+        _latest_displayed_screenshot_id=8,
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+    )
+
+    runtime_state = GenerationPipelineState.from_app(app)
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert runtime_state.active_scene_probe_size == 24
+    assert runtime_state.scene_generation_bumped_at == 12.5
+    assert runtime_state.last_activity_collect_at == 7.5
+    assert runtime_state.latest_displayed_round == 9
+    assert runtime_state.latest_requested_screenshot_id == 11
+    assert runtime_state.latest_queued_screenshot_id == 10
+    assert runtime_state.latest_displayed_screenshot_id == 8
+    assert "active_scene_probe_size" not in status
+    assert "scene_generation_bumped_at" not in status
+    assert "latest_displayed_round" not in status
+    assert "latest_requested_screenshot_id" not in status
+    assert "latest_queued_screenshot_id" not in status
+    assert "latest_displayed_screenshot_id" not in status
+
+
+def test_build_status_snapshot_prefers_state_objects_when_present():
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        stats_state=StatsState(
+            danmu_count=9,
+            total_input_tokens=13,
+            total_output_tokens=8,
+            start_time=0.0,
+        ),
+        web_runtime_state=WebRuntimeState(error_message="web failed", is_error=True),
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "2", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["danmu_count"] == 9
+    assert status["input_tokens"] == 13
+    assert status["output_tokens"] == 8
+    assert status["total_tokens"] == 21
+    assert status["error_message"] == "web failed"
+    assert status["is_error"] is True
+
+
+def test_bridge_save_config_uses_public_app_entry():
+    app = _make_status_app()
+    bridge = WebConsoleBridge(app)
+
+    bridge._on_save_config({"api_endpoint": "https://new.example/v1"})
+
+    app.apply_web_config_payload.assert_called_once_with({"api_endpoint": "https://new.example/v1"})
+    assert app.build_status_snapshot.call_count >= 1
+
+
+def test_apply_config_patch_syncs_default_model_id_to_legacy_model():
+    config = FakeConfig({"model": "old-model"})
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(app, {"default_model_id": "model-b"})
+
+    assert config.get_default_model_id() == "model-b"
+    assert config.get("model") == "model-b"
+
+
+def test_web_status_timer_lifecycle_public_api():
+    first = MagicMock()
+    second = MagicMock()
+    app = SimpleNamespace()
+
+    attached = DanmuApp.attach_web_status_timer(app, first)
+    DanmuApp.attach_web_status_timer(app, second)
+    DanmuApp.stop_web_status_timer(app)
+    detached = DanmuApp.detach_web_status_timer(app)
+
+    assert attached is first
+    first.stop.assert_called_once_with()
+    second.stop.assert_called_once_with()
+    assert detached is second
+    assert getattr(app, "_web_status_timer", None) is None
+
+
+def test_resolve_request_credentials_public_wrapper():
+    app = SimpleNamespace(ai_worker=MagicMock())
+    app.ai_worker._resolve_request_credentials.return_value = ("https://x", "sk", "model", "doubao")
+
+    resolved = DanmuApp.resolve_request_credentials(app)
+
+    assert resolved == ("https://x", "sk", "model", "doubao")
+    app.ai_worker._resolve_request_credentials.assert_called_once_with()
 
 
 def test_extract_config_payload_accepts_wrapped_and_flat():
@@ -279,23 +510,20 @@ def test_web_config_keys_cover_core_settings():
     assert "hotkey" in WEB_CONFIG_KEYS
     assert "danmu_speed" in WEB_CONFIG_KEYS
     assert "danmu_max_chars" in WEB_CONFIG_KEYS
-    assert "freq_mode" in WEB_CONFIG_KEYS
-    assert "capture_mode" in WEB_CONFIG_KEYS
-    assert "danmu_pool_enabled" in WEB_CONFIG_KEYS
-    assert "min_on_screen" in WEB_CONFIG_KEYS
+    assert "freq_mode" not in WEB_CONFIG_KEYS
+    assert "capture_mode" not in WEB_CONFIG_KEYS
+    assert "danmu_pool_enabled" not in WEB_CONFIG_KEYS
+    assert "min_on_screen" not in WEB_CONFIG_KEYS
     assert "eviction_mode" in WEB_CONFIG_KEYS
     assert "image_max_width" in WEB_CONFIG_KEYS
     assert "image_quality" in WEB_CONFIG_KEYS
-    assert "scene_probe_size" in WEB_CONFIG_KEYS
+    assert "scene_probe_size" not in WEB_CONFIG_KEYS
     assert "memory_mode" in WEB_CONFIG_KEYS
     assert "mic_mode_enabled" in WEB_CONFIG_KEYS
     assert "mic_window_sec" in WEB_CONFIG_KEYS
-    assert "reply_scene_count" in WEB_CONFIG_KEYS
-    assert "reply_filler_count" in WEB_CONFIG_KEYS
-
-
-def test_web_config_keys_include_display_mode_settings():
-    assert "danmu_display_mode" in WEB_CONFIG_KEYS
+    assert "reply_scene_count" not in WEB_CONFIG_KEYS
+    assert "reply_filler_count" not in WEB_CONFIG_KEYS
+    assert "danmu_display_mode" not in WEB_CONFIG_KEYS
     assert "normal_recognition_interval_sec" in WEB_CONFIG_KEYS
     assert "normal_reply_count" in WEB_CONFIG_KEYS
 
@@ -305,7 +533,7 @@ def test_model_catalog_api_payload():
     from app.model_catalog import list_platform_catalogs
 
     platforms = list_platform_catalogs()
-    assert len(platforms) == 3
+    assert len(platforms) == 4
     by_id = {p["platform_id"]: p for p in platforms}
 
     doubao = by_id["doubao"]
@@ -330,14 +558,103 @@ def test_model_catalog_api_payload():
     assert dash_mic == {"qwen-omni-turbo", "qwen2.5-omni-7b"}
 
     siliconflow = by_id["siliconflow"]
-    assert siliconflow["platform_label"] == "轨迹流动"
+    assert siliconflow["platform_label"] == "硅基流动"
     assert len(siliconflow["models"]) == 9
     sf_cheapest = [m for m in siliconflow["models"] if m["cheapest"]]
     assert len(sf_cheapest) == 1
     assert sf_cheapest[0]["id"] == "Qwen/Qwen3-VL-8B-Instruct"
 
+    mimo = by_id["mimo"]
+    assert mimo["provider_id"] == "mimo"
+    assert len(mimo["models"]) == 2
+    mimo_ids = {m["id"] for m in mimo["models"]}
+    assert mimo_ids == {"mimo-v2.5", "mimo-v2-omni"}
 
-def test_apply_config_patch_clamps_display_mode_settings():
+
+def test_providers_excludes_deepseek():
+    """GET /api/providers is built from PROVIDERS; DeepSeek is not an official preset."""
+    from app.model_providers import PROVIDERS
+
+    ids = [p.id for p in PROVIDERS]
+    assert "deepseek" not in ids
+    assert "doubao" in ids
+    assert "dashscope" in ids
+    assert "siliconflow" in ids
+    assert "mimo" in ids
+    assert "custom_openai" in ids
+
+
+def test_web_settings_ui_uses_custom_wording_not_manual_fill():
+    from app.bundle_paths import project_root
+
+    root = project_root()
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "手动填写" not in html
+    assert "手动输入" not in html
+    assert "手动填写" not in app_js
+    assert "手动输入" not in app_js
+    assert 'value="">自定义</option>' in html or ">自定义</option>" in html
+    assert "自定义模型" in app_js
+    assert '选「自定义」则需自己逐项设置' in app_js
+
+
+def test_web_app_js_provider_switch_resets_vision_model():
+    from app.bundle_paths import project_root
+
+    app_js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function pickDefaultCatalogModelId" in app_js
+    assert "providerSwitch: true" in app_js
+    assert "function syncProviderPresetFromEndpoint" in app_js
+    assert "renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true })" in app_js
+    assert "apiKeyEl.value = ''" in app_js
+
+
+def test_apply_config_patch_dashscope_model_syncs_default_model_id():
+    from app.model_catalog import default_catalog_model_id
+
+    dash_model = default_catalog_model_id("dashscope")
+    config = FakeConfig(
+        {
+            "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_mode": "openai",
+            "model": "doubao-seed-1-6-flash-250828",
+        }
+    )
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(
+        app,
+        {
+            "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_mode": "openai",
+            "model": dash_model,
+        },
+    )
+
+    assert config.get("model") == dash_model
+    assert config.get_default_model_id() == dash_model
+
+
+def test_export_config_mismatched_model_still_loads():
+    from app.model_catalog import is_catalog_model_for_provider
+
+    cfg = FakeConfig(
+        {
+            "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_mode": "openai",
+            "model": "doubao-seed-1-6-flash-250828",
+            "default_model_id": "doubao-seed-1-6-flash-250828",
+        }
+    )
+    data = export_config(cfg)
+    assert data["model"] == "doubao-seed-1-6-flash-250828"
+    assert not is_catalog_model_for_provider("dashscope", data["active_model_id"])
+
+
+def test_apply_config_patch_clamps_normal_batch_settings():
     config = FakeConfig({})
     app = MagicMock()
     app.config = config
@@ -346,15 +663,25 @@ def test_apply_config_patch_clamps_display_mode_settings():
     apply_config_patch(
         app,
         {
-            "danmu_display_mode": "invalid",
             "normal_recognition_interval_sec": "0",
             "normal_reply_count": "99",
         },
     )
 
-    assert config.get("danmu_display_mode") == "normal"
     assert config.get("normal_recognition_interval_sec") == "1"
     assert config.get("normal_reply_count") == "20"
+
+
+def test_apply_config_patch_normalizes_legacy_realtime_display_mode():
+    config = FakeConfig({"danmu_display_mode": "realtime"})
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(app, {"danmu_display_mode": "realtime", "normal_reply_count": "6"})
+
+    assert config.get("danmu_display_mode") == "normal"
+    assert config.get("normal_reply_count") == "6"
 
 
 def test_apply_config_patch_clamps_danmu_lines():
@@ -373,18 +700,6 @@ def test_apply_config_patch_clamps_danmu_lines():
     assert config.get("danmu_lines") == "16"
 
 
-def test_apply_config_patch_clamps_reply_counts():
-    config = FakeConfig({})
-    app = MagicMock()
-    app.config = config
-    app.personae = MagicMock()
-
-    apply_config_patch(app, {"reply_scene_count": "1", "reply_filler_count": "99"})
-
-    assert config.get("reply_scene_count") == "2"
-    assert config.get("reply_filler_count") == "7"
-
-
 def test_apply_config_patch_validates_memory_settings():
     config = FakeConfig({})
     app = MagicMock()
@@ -395,16 +710,13 @@ def test_apply_config_patch_validates_memory_settings():
         app,
         {
             "memory_mode": "evil",
-            "memory_clear_policy": "bogus",
             "memory_window": "abc",
         },
     )
 
     assert config.get("memory_mode") == "off"
-    assert config.get("memory_clear_policy") == "medium"
     assert config.get("memory_window") == "10"
     assert "evil" not in config.values.values()
-    assert "bogus" not in config.values.values()
     assert "abc" not in config.values.values()
 
     apply_config_patch(app, {"memory_window": "-1"})
@@ -420,12 +732,10 @@ def test_apply_config_patch_validates_memory_settings():
         app,
         {
             "memory_mode": "scene_card",
-            "memory_clear_policy": "strict",
             "memory_window": "15",
         },
     )
     assert config.get("memory_mode") == "scene_card"
-    assert config.get("memory_clear_policy") == "strict"
     assert config.get("memory_window") == "15"
 
     apply_config_patch(app, {"memory_mode": "dedup_only"})
@@ -508,7 +818,8 @@ def test_web_console_server_stop_schedules_shutdown_callback():
     class _FakeUvicornServer:
         should_exit = False
 
-    bridge = WebConsoleBridge(MagicMock())
+    danmu_app = MagicMock()
+    bridge = WebConsoleBridge(danmu_app)
     server = WebConsoleServer(bridge)
     server._server = _FakeUvicornServer()
     loop = MagicMock()
@@ -516,11 +827,50 @@ def test_web_console_server_stop_schedules_shutdown_callback():
 
     server.stop()
 
+    danmu_app.stop_web_status_timer.assert_called_once_with()
+    danmu_app.detach_web_status_timer.assert_called_once_with()
     loop.call_soon_threadsafe.assert_called_once()
     callback = loop.call_soon_threadsafe.call_args[0][0]
     assert callable(callback)
     callback()
     assert server._server.should_exit is True
+
+
+def test_quit_stops_web_status_timer_before_server_shutdown(monkeypatch):
+    import PyQt6.QtCore as qtcore
+
+    fake_pool = MagicMock()
+
+    class _FakeQThreadPool:
+        @staticmethod
+        def globalInstance():
+            return fake_pool
+
+    monkeypatch.setattr(qtcore, "QThreadPool", _FakeQThreadPool)
+    quit_mock = MagicMock()
+    monkeypatch.setattr("main.QApplication.quit", quit_mock)
+
+    app = SimpleNamespace(
+        logger=MagicMock(),
+        stop=MagicMock(),
+        hotkey=MagicMock(),
+        tray=MagicMock(),
+        ai_worker=MagicMock(),
+        history_writer=MagicMock(),
+        config=MagicMock(),
+        overlay=MagicMock(),
+        webview_shell=None,
+        web_server=MagicMock(),
+        stop_web_status_timer=MagicMock(),
+    )
+
+    DanmuApp.quit(app)
+
+    app.stop.assert_called_once_with()
+    app.stop_web_status_timer.assert_called_once_with()
+    app.web_server.stop.assert_called_once_with()
+    fake_pool.waitForDone.assert_called_once_with(2000)
+    quit_mock.assert_called_once_with()
 
 
 def test_probe_route_accepts_json_body(monkeypatch):
@@ -564,6 +914,81 @@ def test_probe_route_accepts_json_body(monkeypatch):
     body = res.json()
     assert body["ok"] is True
     assert body["message"] == "连接成功"
+
+
+def test_mic_test_route_uses_public_app_entry():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.run_mic_test.return_value = {
+        "ok": True,
+        "level": "ok",
+        "pcm_bytes": 4096,
+        "rms": 0.12,
+    }
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.post("/api/mic/test", json={"duration_sec": 2.5, "send_to_ai": False})
+
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    bridge.danmu_app.run_mic_test.assert_called_once_with(2.5, send_to_ai=False)
+
+
+def test_mic_test_send_route_uses_public_app_entry():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.run_mic_test.return_value = {
+        "ok": True,
+        "level": "ok",
+        "pcm_bytes": 2048,
+        "audio_attached": True,
+    }
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.post("/api/mic/test-send", json={"duration_sec": 3.0, "send_to_ai": False})
+
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    bridge.danmu_app.run_mic_test.assert_called_once_with(3.0, send_to_ai=True)
+
+
+def test_active_personae_route_uses_public_app_entry():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.put("/api/personae/active", json={"active": ["吐槽型"]})
+
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+    bridge.danmu_app.set_active_personae.assert_called_once_with(["吐槽型"])
 
 
 def test_session_route_does_not_require_query_request():

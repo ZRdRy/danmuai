@@ -126,6 +126,19 @@ DASHSCOPE_MODELS: tuple[CatalogModel, ...] = (
     ),
 )
 
+MIMO_MODELS: tuple[CatalogModel, ...] = (
+    CatalogModel(
+        "MiMo v2.5",
+        "mimo-v2.5",
+        ModelPrice(input=0.8, audio=None, output=2.4),
+    ),
+    CatalogModel(
+        "MiMo v2 Omni",
+        "mimo-v2-omni",
+        ModelPrice(input=0.6, audio=None, output=2.0),
+    ),
+)
+
 SILICONFLOW_MODELS: tuple[CatalogModel, ...] = (
     CatalogModel(
         "Qwen3-VL-8B-Instruct",
@@ -189,9 +202,15 @@ PLATFORM_CATALOGS: tuple[PlatformCatalog, ...] = (
     ),
     PlatformCatalog(
         platform_id="siliconflow",
-        platform_label="轨迹流动",
+        platform_label="硅基流动",
         provider_id="siliconflow",
         models=SILICONFLOW_MODELS,
+    ),
+    PlatformCatalog(
+        platform_id="mimo",
+        platform_label="小米 MiMo",
+        provider_id="mimo",
+        models=MIMO_MODELS,
     ),
 )
 
@@ -233,3 +252,30 @@ def get_catalog_for_provider(provider_id: str) -> dict[str, Any] | None:
 def get_catalog_for_platform(platform_id: str) -> dict[str, Any] | None:
     platform = _CATALOG_BY_PLATFORM.get((platform_id or "").strip())
     return platform.to_dict() if platform else None
+
+
+def catalog_model_ids(provider_id: str) -> frozenset[str]:
+    """Model IDs listed in the vision catalog for a provider preset."""
+    platform = _CATALOG_BY_PROVIDER.get((provider_id or "").strip())
+    if platform is None:
+        return frozenset()
+    return frozenset(m.id for m in platform.models)
+
+
+def default_catalog_model_id(provider_id: str) -> str:
+    """Default vision model when switching provider: cheapest in catalog, else first."""
+    platform = _CATALOG_BY_PROVIDER.get((provider_id or "").strip())
+    if platform is None or not platform.models:
+        return ""
+    enriched = enrich_platform_models(platform.models)
+    for model in enriched:
+        if model.get("cheapest"):
+            return str(model["id"])
+    return platform.models[0].id
+
+
+def is_catalog_model_for_provider(provider_id: str, model_id: str) -> bool:
+    mid = (model_id or "").strip()
+    if not mid:
+        return False
+    return mid in catalog_model_ids(provider_id)

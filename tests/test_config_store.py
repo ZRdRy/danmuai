@@ -39,7 +39,8 @@ def test_set_batch_persists_to_db(tmp_path):
 def test_first_run_seeds_config_defaults(tmp_path):
     store = ConfigStore(db_path=tmp_path / "new.db")
     assert store.get("danmu_speed") == "2"
-    assert store.get("freshness") == "medium"
+    assert store.get("normal_reply_count") == "5"
+    assert store.get("freshness") == ""
     assert store.get("eviction_mode") == "natural"
     assert store.get("hotkey") == "Ctrl+Shift+B"
     assert store.get("danmu_pool_enabled") == "0"
@@ -83,7 +84,7 @@ def test_missing_config_file_has_friendly_notice(tmp_path):
 
     assert store.is_first_run is True
     assert "未找到配置文件" in store.get_startup_notice()
-    assert store.get("danmu_display_mode") == "normal"
+    assert store.get("normal_reply_count") == "5"
 
     store.close()
 

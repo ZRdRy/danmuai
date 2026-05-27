@@ -32,6 +32,29 @@ def test_danmu_pool_enabled_from_config(tmp_path):
     assert danmu_pool_enabled_from_config(store) is False
 
 
+def test_danmu_pool_use_custom_from_config(tmp_path):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import danmu_pool_use_custom_from_config
+
+    store = ConfigStore(db_path=tmp_path / "custom_flag.db")
+    assert danmu_pool_use_custom_from_config(store) is False
+    store.set("danmu_pool_use_custom", "1")
+    assert danmu_pool_use_custom_from_config(store) is True
+
+
+def test_any_danmu_pool_source_enabled(tmp_path):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import any_danmu_pool_source_enabled
+
+    store = ConfigStore(db_path=tmp_path / "any_source.db")
+    assert any_danmu_pool_source_enabled(store) is False
+    store.set("danmu_pool_enabled", "1")
+    assert any_danmu_pool_source_enabled(store) is True
+    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "1")
+    assert any_danmu_pool_source_enabled(store) is True
+
+
 def test_pool_for_config_disabled_returns_empty(tmp_path):
     from app.config_store import ConfigStore
     from app.danmu_pool import (
@@ -42,12 +65,33 @@ def test_pool_for_config_disabled_returns_empty(tmp_path):
 
     store = ConfigStore(db_path=tmp_path / "pool_gate.db")
     store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "0")
     assert load_danmu_pool_for_config(store) == []
     assert sample_danmu_for_config(store, 5) == []
     if load_danmu_pool():
         store.set("danmu_pool_enabled", "1")
         assert load_danmu_pool_for_config(store)
         assert sample_danmu_for_config(store, 3)
+
+
+def test_custom_only_pool_for_config(tmp_path):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import (
+        effective_min_on_screen,
+        load_danmu_pool_for_config,
+        sample_danmu_for_config,
+    )
+
+    store = ConfigStore(db_path=tmp_path / "custom_only.db")
+    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "1")
+    store.set_custom_danmu_pool(["自定义A", "自定义B", "自定义C"])
+    assert load_danmu_pool_for_config(store) == ["自定义A", "自定义B", "自定义C"]
+    picked = sample_danmu_for_config(store, 2)
+    assert len(picked) == 2
+    assert all(p in store.get_custom_danmu_pool() for p in picked)
+    store.set("min_on_screen", "5")
+    assert effective_min_on_screen(store) == 5
 
 
 def test_load_danmu_pool_has_merged_bootstrap():

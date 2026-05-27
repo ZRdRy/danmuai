@@ -267,29 +267,6 @@ def test_append_memory_to_user_pt_no_block_unchanged():
     assert append_memory_to_user_pt("prompt", "") == "prompt"
 
 
-def test_on_scene_generation_advanced_resets_memory_when_enabled():
-    cfg = FakeConfig()
-    cfg.get = lambda key, default="": {
-        "memory_mode": "scene_card",
-        "memory_clear_policy": "strict",
-        "freshness": "loose",
-        "danmu_display_mode": "realtime",
-    }.get(key, default)
-
-    app = _make_minimal_app()
-    app.config = cfg
-    app._scene_memory = _store_with_bullets("旧内容", gen=0)
-    app._scene_generation = 1
-    app.engine.running = True
-    app.reply_buffer = AIReplyFIFOBuffer(max_items=8)
-    app._current_persona = "p1"
-
-    app._on_scene_generation_advanced(prev_hash=0xAAAA)
-
-    assert app._scene_memory.context.scene_generation == 1
-    assert app._scene_memory.dedup.recent_bullets == []
-
-
 def test_enqueue_reply_batch_sets_memory_eligible():
     app = _make_minimal_app()
     app._batch_id = 1

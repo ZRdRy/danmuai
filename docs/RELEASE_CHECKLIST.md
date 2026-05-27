@@ -41,7 +41,8 @@
 ## Windows exe（可选）
 
 - [ ] 按 [PACKAGING_WINDOWS.md](PACKAGING_WINDOWS.md) 在干净环境构建成功
-- [ ] `.\scripts\build_exe.ps1` 成功，产物为 `dist\DanmuAI\` 整目录
+- [ ] `.\scripts\build_exe.ps1` 或 `.\scripts\publish_windows_release.ps1` 成功
+- [ ] `release\DanmuAI-windows-x64\DanmuAI.exe` 与 `release\DanmuAI-windows-x64.zip` 已生成（GitHub 附件）
 - [ ] 在未装 Python 的机器上启动 `DanmuAI.exe`，pywebview 控制台与 Overlay 正常
 - [ ] `%APPDATA%\DanmuAI\startup.log` 无 uvicorn/pywebview 崩溃栈
 - [ ] WebView2 缺失时文档说明安装 Runtime 或 `--web-browser` 回退
@@ -49,5 +50,6 @@
 ## Git 与发布
 
 - [ ] `git add -n .` 预演无意外文件
-- [ ] Tag 格式：`vX.Y.Z`
-- [ ] GitHub Release 描述包含变更摘要和已知问题
+- [ ] Tag 格式：`vX.Y.Z` 或日期 tag `vYYYY.MM.DD`（见 [release/README.md](release/README.md)）
+- [ ] GitHub Release 描述从 [release/](release/) 复制或链接 CHANGELOG 对应章节
+- [ ] `docs/CHANGELOG.md` 已固化本次版本（非空 Unreleased）

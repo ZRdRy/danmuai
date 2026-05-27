@@ -16,6 +16,11 @@
 - **Web 控制台成为默认 UI**（FastAPI + pywebview + `web/static/`）
 - 人格工坊、自定义模型 CRUD、图像压缩预览、日志多选过滤迁入 Web
 - `app/web_api/` 服务层；Web 成为唯一控制台 UI
+- **公式化弹幕库** Web 页：内置/自定义库开关、同屏补足、`/api/danmu-pool/*`（见 [WEB_CONSOLE.md](WEB_CONSOLE.md)）
+- **移除实时弹幕模式**：仅普通模式（固定识图间隔 + `normal_reply_count`）；历史见 [archive/planning/DANMU_DISPLAY_MODE_PLAN.md](archive/planning/DANMU_DISPLAY_MODE_PLAN.md)
+- 场景记忆四档（`memory_mode`）与 `app/memory/` 模块（见 [ARCHITECTURE.md](ARCHITECTURE.md#memory-modes)）
+- 人格工坊内置人格扩展（傲娇/腹黑/中二等 7 种）；前台窗口活动感知（`window_info` + `activity`）
+- 架构文档治理、`app/application/` 运行态拆分、Boundary Guard / 验收脚本（见 [CHANGELOG.md](CHANGELOG.md#2026-05-27)）
 
 ## 下一步
 

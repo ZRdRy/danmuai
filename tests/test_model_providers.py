@@ -73,10 +73,18 @@ def test_validate_model_config_invalid_endpoint():
     assert "custom_model.error_endpoint_invalid" in errors
 
 
+def test_apply_provider_to_form_mimo():
+    form = apply_provider_to_form("mimo")
+    assert "api.xiaomimimo.com" in form["endpoint"]
+    assert form["mode"] == "openai-compatible"
+    assert form["lock_mode"] is True
+
+
 def test_guess_provider_from_endpoint():
-    assert guess_provider_from_endpoint("https://api.deepseek.com/v1") == "deepseek"
+    assert guess_provider_from_endpoint("https://api.deepseek.com/v1") == DEFAULT_PROVIDER_ID
     assert guess_provider_from_endpoint("https://unknown.example/v1", "doubao") == "custom_doubao"
     assert guess_provider_from_endpoint("") == DEFAULT_PROVIDER_ID
+    assert guess_provider_from_endpoint("https://api.xiaomimimo.com/v1") == "mimo"
 
 
 class _Cfg:

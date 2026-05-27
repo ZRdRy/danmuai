@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.personae import (
-    DEFAULT_NORMAL_REPLY_COUNT,
-    DEFAULT_REPLY_FILLER_COUNT,
-    DEFAULT_REPLY_SCENE_COUNT,
-)
-from app.scene_fingerprint import DEFAULT_SCENE_PROBE_SIZE
+from app.personae import DEFAULT_NORMAL_REPLY_COUNT
 
 if TYPE_CHECKING:
     from app.config_store import ConfigStore
@@ -25,7 +20,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "api_mode": "doubao",
     "temperature": "0.7",
     "max_tokens": "512",
-    "screenshot_interval": "3",
+    "use_thinking": "0",
     "danmu_speed": "2",
     "danmu_lines": "20",
     "danmu_max_chars": "15",
@@ -34,26 +29,18 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "layout_mode": "fullscreen",
     "opacity": "100",
     "font_size": "24",
-    "freq_mode": "auto",
-    "capture_mode": "continuous",
     "danmu_pool_enabled": "0",
+    "danmu_pool_use_custom": "0",
     "min_on_screen": "5",
-    "freshness": "medium",
-    "drop_stale": "1",
     "empty_accel": "1",
     "eviction_mode": "natural",
     "image_max_width": "768",
     "image_quality": "85",
-    "scene_probe_size": str(DEFAULT_SCENE_PROBE_SIZE),
     "hotkey": "Ctrl+Shift+B",
     "memory_mode": "off",
     "memory_window": "10",
-    "memory_clear_policy": "medium",
     "mic_mode_enabled": "0",
     "mic_window_sec": "5",
-    "reply_scene_count": str(DEFAULT_REPLY_SCENE_COUNT),
-    "reply_filler_count": str(DEFAULT_REPLY_FILLER_COUNT),
-    "danmu_display_mode": "normal",
     "normal_recognition_interval_sec": "5",
     "normal_reply_count": str(DEFAULT_NORMAL_REPLY_COUNT),
 }

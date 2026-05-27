@@ -1,5 +1,7 @@
+import json
 import threading
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 from app.ai_client import (
     DANMU_MIN_OUTPUT_TOKENS,
@@ -68,6 +70,32 @@ def test_request_openai_enables_stream_usage_option():
             worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
 
     assert captured["data"]["stream_options"] == {"include_usage": True}
+    assert captured["data"]["thinking"] == {"type": "disabled"}
+    worker.close()
+
+
+def test_stream_openai_ignores_reasoning_content():
+    worker = AiWorker(FakeConfig())
+
+    @contextmanager
+    def fake_stream(*_args, **_kwargs):
+        chunk = {"choices": [{"delta": {"reasoning_content": "内部推理不应作为弹幕"}}]}
+        lines = [f"data: {json.dumps(chunk)}", "data: [DONE]"]
+
+        class Resp:
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                return iter(lines)
+
+        yield Resp()
+
+    client = MagicMock()
+    client.stream.side_effect = fake_stream
+    text, in_tok, out_tok = worker._stream_openai(client, "https://api.xiaomimimo.com/v1/chat/completions", {}, {})
+    assert text == ""
+    assert in_tok == 0 and out_tok == 0
     worker.close()
 
 
@@ -115,13 +143,14 @@ def test_request_doubao_includes_input_audio_when_provided():
     worker.close()
 
 
-def test_request_doubao_thinking_raises_output_budget():
+def test_request_doubao_always_disables_thinking():
     worker = AiWorker(FakeConfig(data={"max_tokens": "200", "use_thinking": "1"}))
     with patch.object(worker, "_stream_doubao", return_value=("test", 100, 50, "")) as mock_stream:
         with patch.object(worker, "_emit_safe"):
             worker._request_doubao("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
     payload = mock_stream.call_args[0][3]
-    assert payload["max_output_tokens"] == DANMU_MIN_OUTPUT_TOKENS_THINKING
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_output_tokens"] == DANMU_MIN_OUTPUT_TOKENS
     worker.close()
 
 

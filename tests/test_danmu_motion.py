@@ -36,15 +36,15 @@ def test_pick_track_prefers_least_congested_track(config_store, monkeypatch):
     engine.set_screen_height(400.0)
     engine.reload_tracks()
 
-    engine.tracks[0].add(DanmuItem(content="busy1", x=100.0, width=10.0))
-    engine.tracks[0].add(DanmuItem(content="busy2", x=200.0, width=10.0))
-    engine.tracks[0].add(DanmuItem(content="busy3", x=300.0, width=10.0))
+    engine.tracks[0].add(DanmuItem(content="busy1", x=850.0, width=10.0))
+    engine.tracks[0].add(DanmuItem(content="busy2", x=880.0, width=10.0))
+    engine.tracks[0].add(DanmuItem(content="busy3", x=910.0, width=10.0))
     engine.tracks[1].add(DanmuItem(content="free", x=100.0, width=10.0))
 
-    def _pick_least_congested(population, weights=None, k=1):
-        return [min(population, key=lambda track: len(track.items))]
+    def _pick_least_entry_density(population, weights=None, k=1):
+        return [min(population, key=lambda track: track.entry_zone_count(engine.screen_width))]
 
-    monkeypatch.setattr("app.danmu_engine.random.choices", _pick_least_congested)
+    monkeypatch.setattr("app.danmu_engine.random.choices", _pick_least_entry_density)
 
     track = engine._pick_track(DanmuItem(content="incoming", width=120.0))
 
@@ -53,8 +53,18 @@ def test_pick_track_prefers_least_congested_track(config_store, monkeypatch):
 
 def test_min_on_screen_default_0_when_pool_disabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_pool_use_custom", "0")
     engine = DanmuEngine(store)
     assert engine.min_on_screen() == 0
+
+
+def test_min_on_screen_when_custom_only_enabled(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "1")
+    store.set("min_on_screen", "5")
+    engine = DanmuEngine(store)
+    assert engine.min_on_screen() == 5
 
 
 def test_min_on_screen_default_5_when_pool_enabled(tmp_path):
@@ -436,3 +446,115 @@ def test_reload_tracks_drops_offscreen_items(config_store):
     engine.reload_tracks(preserve_visible=True)
     assert engine.current_display_count() == 0
     assert not engine.needs_render_tick()
+
+
+def test_entry_zone_count_only_counts_items_in_entry_zone(tmp_path):
+    from app.danmu_engine import ENTRY_ZONE_PX
+
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "3")
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1000.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    engine.tracks[0].add(DanmuItem(content="left1", x=50.0, width=50.0))
+    engine.tracks[0].add(DanmuItem(content="left2", x=100.0, width=50.0))
+    engine.tracks[0].add(DanmuItem(content="entry1", x=850.0, width=50.0))
+
+    zone_left = 1000.0 - ENTRY_ZONE_PX
+    assert engine.tracks[0].entry_zone_count(1000.0) == 1
+
+
+def test_rolled_away_items_do_not_lower_track_weight(config_store, monkeypatch):
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
+    engine = DanmuEngine(config_store)
+    engine.set_screen_width(1000.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    engine.tracks[0].add(DanmuItem(content="old1", x=50.0, width=50.0))
+    engine.tracks[0].add(DanmuItem(content="old2", x=100.0, width=50.0))
+    engine.tracks[0].add(DanmuItem(content="old3", x=150.0, width=50.0))
+    engine.tracks[1].add(DanmuItem(content="entry1", x=880.0, width=50.0))
+    engine.tracks[1].add(DanmuItem(content="entry2", x=920.0, width=50.0))
+
+    def _pick_least_entry_density(population, weights=None, k=1):
+        return [min(population, key=lambda track: track.entry_zone_count(engine.screen_width))]
+
+    monkeypatch.setattr("app.danmu_engine.random.choices", _pick_least_entry_density)
+
+    track = engine._pick_track(DanmuItem(content="incoming", width=120.0))
+    assert track is engine.tracks[0]
+
+
+def test_fallback_distributes_across_tracks(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(4, int(v)))
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "4")
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    engine.tracks[0].add(DanmuItem(content="b0", x=1700.0, width=50.0))
+    engine.tracks[1].add(DanmuItem(content="b1", x=1700.0, width=50.0))
+    engine.tracks[2].add(DanmuItem(content="b2", x=1700.0, width=50.0))
+    engine.tracks[3].add(DanmuItem(content="b3", x=1700.0, width=50.0))
+
+    selected_tracks = set()
+    for i in range(20):
+        incoming = DanmuItem(content=f"inc-{i}", width=100.0, x=1950.0)
+        track = engine._pick_track(incoming)
+        if track is not None:
+            selected_tracks.add(id(track))
+            track.add(incoming)
+
+    assert len(selected_tracks) > 1
+
+
+def test_fallback_rejects_when_min_gap_exceeds_cap(config_store, monkeypatch):
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
+    engine = DanmuEngine(config_store)
+    engine.set_screen_width(1000.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    for track in engine.tracks:
+        track.add(DanmuItem(content="tail", x=980.0, width=80.0))
+
+    monkeypatch.setattr("app.danmu_engine.random.uniform", lambda a, b: 50.0)
+
+    incoming = DanmuItem(content="incoming", width=300.0, x=1050.0)
+    result = engine._pick_track(incoming)
+    if result is not None:
+        min_gap = max(80.0, incoming.width * 0.5)
+        tail_edge = max(
+            t.rightmost_edge() for t in engine.tracks if t is result
+        )
+        assert incoming.x >= tail_edge + min_gap
+
+
+def test_high_density_no_same_track_cluster(config_store, monkeypatch):
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(6, int(v)))
+    store = config_store
+    store.set("danmu_lines", "6")
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    for i in range(60):
+        item = DanmuItem(
+            content=f"d{i}", width=150.0, x=1920.0 + (i % 10) * 10.0
+        )
+        track = engine._pick_track(item)
+        if track is None:
+            break
+        track.add(item)
+
+    max_per_track = max(len(t.items) for t in engine.tracks)
+    total_tracks = len(engine.tracks)
+    assert max_per_track <= (60 // total_tracks + 3)

@@ -26,7 +26,7 @@ python main.py --web-browser    # 系统浏览器
 | 组件 | 路径 | 说明 |
 |------|------|------|
 | HTTP API | `app/web_console.py` | FastAPI，`127.0.0.1:18765`，Bearer 鉴权 |
-| 扩展路由 | `app/web_api/routes.py` | 人格、自定义模型、压缩预览 |
+| 扩展路由 | `app/web_api/routes.py` | 人格、自定义模型、公式化弹幕库、压缩预览 |
 | 静态页 | `web/static/` | Qwen 温馨风格 |
 | 桌面壳 | `app/webview_shell.py` | pywebview（Windows WebView2） |
 | Overlay | `app/overlay.py` | Qt 透明置顶弹幕 |
@@ -37,8 +37,11 @@ python main.py --web-browser    # 系统浏览器
 |------|------|
 | 运行概览 | 启停、状态、会话统计与持久累计（生成总弹幕、运行总时长、消耗总 Token） |
 | 助手设置 | 全局配置、节奏/截图、图像压缩预览、自定义模型 |
+| 公式化弹幕库 | 内置/自定义公式化短句开关、最小同屏补足、自定义句增删 |
 | 人格工坊 | 提示词编辑、版本回滚预览、新建/删除自定义人格 |
 | 弹幕日记 | 多级别过滤、复制可见、自动滚动 |
+| 教程 | 飞书文档外链 |
+| 问题反馈 | 社群说明、QQ 群二维码、赞赏码弹窗 |
 
 ## API 摘要
 
@@ -54,7 +57,7 @@ python main.py --web-browser    # 系统浏览器
 | GET | `/api/model-catalog` | 否 | 视觉模型平台目录（模型 ID、价格、最便宜/麦克风标记） |
 | GET | `/api/meta` | 否 | UI 模式、快捷键等 |
 
-**视觉模型（助手设置 · API 页）**：选择带目录的服务商（火山方舟、阿里云百炼/DashScope、轨迹流动/SiliconFlow 等）后，列表仅展示模型 ID；「本平台最便宜」「支持麦克风」等标识显示在 info 图标左侧，悬停 info 可查看名称与价格详情。无目录或自定义 ID 时使用「其他」文本框。扩展新平台时只需在 `app/model_catalog.py` 追加数据。
+**视觉模型（助手设置 · API 页）**：选择带目录的服务商（火山方舟、阿里云百炼/DashScope、硅基流动/SiliconFlow 等）后，列表仅展示模型 ID；「本平台最便宜」「支持麦克风」等标识显示在 info 图标左侧，悬停 info 可查看名称与价格详情。切换服务商预设时会重置为该平台默认视觉模型（目录中最便宜项）并清空 API 密钥输入框；无目录或自选 ID 时使用「自定义模型」。扩展新平台时只需在 `app/model_catalog.py` 追加数据。
 | GET | `/api/personae` | 否 | 人格列表与激活状态 |
 | POST | `/api/start` `/api/stop` `/api/toggle` | Bearer | 生成/停止弹幕 |
 | POST | `/api/probe` | Bearer | 全局 API 连接测试 |
@@ -84,6 +87,25 @@ python main.py --web-browser    # 系统浏览器
 | POST | `/api/custom-models/{index}/default` | Bearer | 设为默认并写入全局 `model` |
 | POST | `/api/custom-models/probe` | Bearer | 单模型连接测试 |
 
+### 公式化弹幕库（`app/web_api/danmu_pool.py`）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/danmu-pool/meta` | 否 | 内置/自定义开关、`min_on_screen`、库条数、`effective_pool_enabled` |
+| PUT | `/api/danmu-pool/settings` | Bearer | body `{builtin_enabled, custom_enabled, min_on_screen}` → `danmu_pool_enabled` / `danmu_pool_use_custom` / `min_on_screen` |
+| GET | `/api/danmu-pool/custom` | 否 | 自定义句列表 |
+| POST | `/api/danmu-pool/custom` | Bearer | 批量追加（`text` 多行或 `items`）；返回 `added` / `skipped` |
+| DELETE | `/api/danmu-pool/custom` | Bearer | body `{texts: string[]}` 按文本删除 |
+
+自定义句存 SQLite `custom_danmu_pool`（JSON），**不**经 `PUT /api/config`。补足条件：内置库 **或** 自定义库任一开启时 `min_on_screen` 生效；合并池见 `app/danmu_pool.py`。
+
+**行为说明**
+
+- **双来源 OR**：内置库（`data/danmu_pool_zh.json`，Web 只读开关）与自定义库可独立开启；运行时合并为同一抽样池。
+- **同屏补足**：`min_on_screen` 默认 **5**；设为 **0** 关闭补足。任一库开启且 `min_on_screen > 0` 时，当屏上弹幕不足则从合并池随机补位（`main._maybe_pool_topup`）。
+- **自定义句**：侧栏页批量追加/多选删除；不在 Web 中编辑内置 JSON 全文。
+- **与助手设置分离**：`danmu_pool_*` / `min_on_screen` 仅通过 `/api/danmu-pool/*` 读写，勿写入 `PUT /api/config`。
+
 ### 图像压缩预览
 
 | 方法 | 路径 | 鉴权 | 说明 |
@@ -101,15 +123,15 @@ python main.py --web-browser    # 系统浏览器
 
 除 `WEB_CONFIG_KEYS` 外，表单还通过 `PUT /api/config` 提交 `api_key`（掩码不覆盖）、`active_personae`。
 
-节奏与图像相关键：`freq_mode`、`capture_mode`、`min_on_screen`（默认 **5**，可见弹幕不足时从 `danmu_pool_zh.json` 补足；**0** 关闭）、`eviction_mode`、`image_max_width`、`image_quality`（默认 **85**，未写入 config 时生效），以及 `drop_stale`、`empty_accel` 复选框。
+图像相关键：`eviction_mode`、`image_max_width`、`image_quality`（默认 **85**，未写入 config 时生效），以及 `empty_accel` 复选框。
 
-弹幕显示 · **显示模式** `danmu_display_mode`：`normal`（**默认**，按 `normal_recognition_interval_sec` 秒：截图后**立即**触发 AI，默认 **5** 秒，范围 1–60；每次 `normal_reply_count` 条弹幕，默认 **5**，范围 1–20）或 `realtime`（1 秒截图 + 200ms 节奏预触发）。普通模式不探测场景跳变、不启用 rhythm/场景 gate/场景后本地 fallback；上一请求 in-flight 时跳过本轮；入队为 append。
+公式化弹幕库（专用 API，不在 `WEB_CONFIG_KEYS`）：`danmu_pool_enabled`（内置库）、`danmu_pool_use_custom`（自定义库）、`min_on_screen`（默认 **5**，任一库开启且值 **>0** 时从合并池补足；两库都关则运行时不补足）。
 
-实时模式 · 每次生成弹幕数：`reply_scene_count`（画面强相关，默认 **2**，范围 2–7）、`reply_filler_count`（泛用氛围，默认 **3**，范围 2–7）。普通模式使用单一总数契约，不拆分 scene/filler。
+弹幕生成 · `normal_recognition_interval_sec`（识图间隔，默认 **5** 秒，范围 1–60；截图后**立即**触发 AI）、`normal_reply_count`（每批弹幕条数，默认 **5**，范围 1–20）。上一请求 in-flight 时跳过本轮截图；回复入队为 append。
 
-记忆（助手设置 · API 页）：`memory_mode`（`off` / `dedup_only` / `scene_card` / `strong`，默认 `off`）、`memory_window`（1–20，默认 **10**）、`memory_clear_policy`（`strict` / `medium` / `loose`，默认 `medium`）。进程内短记忆，不持久化；详见 [MEMORY_SYSTEM_PLAN.md](MEMORY_SYSTEM_PLAN.md)。
+记忆（助手设置 · API 页，**简化/全面模式均显示**）：`memory_mode`（`off` / `dedup_only` / `scene_card` / `strong`，默认 `off`）、`memory_window`（1–20，默认 **10**）。进程内短记忆，不持久化；详见 [ARCHITECTURE.md](ARCHITECTURE.md#memory-modes)。
 
-保存后更新人格工坊「输出契约」与运行时 AI 批次条数；`GET /api/config` 另返回只读 `reply_batch_total`（实时为 x+y，普通为 `normal_reply_count`）。
+保存后更新人格工坊「输出契约」与运行时 AI 批次条数；`GET /api/config` 另返回只读 `reply_batch_total`（等于 `normal_reply_count`）。数据库中遗留的 `danmu_display_mode=realtime` 会在启动或 Web 保存时规范为普通模式行为。
 
 ## 视觉规范
 

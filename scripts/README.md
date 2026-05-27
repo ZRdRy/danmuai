@@ -18,6 +18,19 @@ Windows 发布包（PyInstaller onedir，`DanmuAI.spec`）。
 
 输出 `dist\DanmuAI\DanmuAI.exe`。需已存在 `data\danmu_pool_zh.json`。完整说明与问题记录见 [docs/PACKAGING_WINDOWS.md](../docs/PACKAGING_WINDOWS.md)。
 
+## `publish_windows_release.ps1`
+
+在 `build_exe.ps1` 之后，将 `dist\DanmuAI\` 复制到本地发布目录（已 gitignore）并打 zip，供 GitHub Release 附件上传：
+
+```powershell
+.\scripts\publish_windows_release.ps1
+```
+
+| 输出 | 说明 |
+|------|------|
+| `release\DanmuAI-windows-x64\` | 完整 onedir（含 `DanmuAI.exe`、`_internal\`） |
+| `release\DanmuAI-windows-x64.zip` | 同上，压缩包 |
+
 ## `bench_jpeg_quality.py`
 
 Local benchmark for `main.compress_screenshot()` (production path). Does **not** call AI APIs or write images into the repository.
@@ -73,7 +86,3 @@ python scripts/write_formula_bootstrap.py
 ## `filter_pool_sensitive.py`
 
 Post-process `data/danmu_pool_zh.json` to drop lines matching the built-in sensitive-word list. Run after `extract_danmu_pool.py` when refreshing the pool.
-
-## `_probe_mic_audio.py` (dev only)
-
-Ad-hoc microphone capture + API probe for local debugging. Not used by the desktop app; may print HTTP error bodies from providers. Do not run in shared logs.

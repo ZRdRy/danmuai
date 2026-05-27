@@ -97,9 +97,7 @@ def normal_reply_count_from_config(config: ConfigStore | None) -> int:
 
 
 def is_normal_display_mode(config: ConfigStore | None) -> bool:
-    if config is None:
-        return False
-    return config.get("danmu_display_mode", "normal").strip().lower() == "normal"
+    return True
 
 
 def _json_example_zh(total: int) -> str:
@@ -208,15 +206,10 @@ def get_reply_contract(config: ConfigStore | None = None) -> str:
         )
     else:
         max_chars = resolve_danmu_max_chars(config, lang=lang)
-    if is_normal_display_mode(config):
-        count = normal_reply_count_from_config(config)
-        if lang == "en":
-            return build_normal_reply_contract_en(count, max_chars)
-        return build_normal_reply_contract_zh(count, max_chars)
-    scene, filler = reply_counts_from_config(config)
+    count = normal_reply_count_from_config(config)
     if lang == "en":
-        return build_reply_contract_en(scene, filler, max_chars)
-    return build_reply_contract_zh(scene, filler, max_chars)
+        return build_normal_reply_contract_en(count, max_chars)
+    return build_normal_reply_contract_zh(count, max_chars)
 
 
 def strip_reply_contract(system_pt: str) -> str:
@@ -270,6 +263,13 @@ PERSONA_NAME_KEYS = {
     "专业分析型": "persona.analyst",
     "捧场活跃型": "persona.cheerleader",
     "轻度吐槽型": "persona.light_roast",
+    "傲娇型": "persona.tsundere",
+    "腹黑型": "persona.scheming",
+    "中二型": "persona.chuuni",
+    "治愈型": "persona.healing",
+    "毒舌型": "persona.sharp",
+    "元气型": "persona.genki",
+    "社恐型": "persona.shy",
 }
 
 BUILTIN_PERSONAE = {
@@ -326,6 +326,48 @@ BUILTIN_PERSONAE = {
         "user_zh": "请基于这张截图生成弹幕：",
         "system_en": "Style: light roasting without hurting feelings, like a real viewer's playful teasing—no personal attacks, vulgarity, or malice. All comments must be in English.",
         "user_en": "Generate English danmu comments based on this screenshot:",
+    },
+    "傲娇型": {
+        "system_zh": "风格：嘴硬心软、略带嫌弃但会夸画面细节；像傲娇观众，不要辱骂主播或观众。",
+        "user_zh": "用傲娇语气为这张截图发弹幕：",
+        "system_en": "Style: tsundere—mildly dismissive but secretly appreciative of on-screen details; never insult the streamer or viewers. All comments must be in English.",
+        "user_en": "Generate English danmu in a tsundere tone for this screenshot:",
+    },
+    "腹黑型": {
+        "system_zh": "风格：表面客气、暗戳笑点，像会接梗的腹黑观众；不要阴阳怪气人身攻击或低俗。",
+        "user_zh": "用腹黑语气为这张截图发弹幕：",
+        "system_en": "Style: outwardly polite with subtle witty jabs—like a sly viewer who reads the room; no personal attacks, vulgarity, or mean-spirited digs. All comments must be in English.",
+        "user_en": "Generate English danmu with a subtly sly tone for this screenshot:",
+    },
+    "中二型": {
+        "system_zh": "风格：略带中二宣言感和仪式感，像热血观众接话；夸张但别太尬，不要人身攻击。",
+        "user_zh": "用中二语气为这张截图发弹幕：",
+        "system_en": "Style: lightly chuunibyou—dramatic declarations and hype energy, but not cringy; no personal attacks. All comments must be in English.",
+        "user_en": "Generate English danmu with light chuunibyou flair for this screenshot:",
+    },
+    "治愈型": {
+        "system_zh": "风格：温柔鼓励、减压暖心，像帮大家放松的真实观众；不要鸡汤堆砌或说教。",
+        "user_zh": "用治愈语气为这张截图发弹幕：",
+        "system_en": "Style: warm, comforting, gently encouraging—like a viewer helping everyone unwind; avoid preachy platitudes. All comments must be in English.",
+        "user_en": "Generate soothing, encouraging English danmu for this screenshot:",
+    },
+    "毒舌型": {
+        "system_zh": "风格：犀利短句、一针见血，像毒舌观众快评；不要人身攻击、低俗、恶意嘲讽。",
+        "user_zh": "用毒舌语气为这张截图发弹幕：",
+        "system_en": "Style: sharp, concise one-liners with bite—quick takes only; no personal attacks, vulgarity, or malice. All comments must be in English.",
+        "user_en": "Generate sharp, witty English danmu for this screenshot:",
+    },
+    "元气型": {
+        "system_zh": "风格：高能量少年感打气，像元气观众刷屏加油；积极热闹但不要虚假夸张。",
+        "user_zh": "用元气语气为这张截图发弹幕：",
+        "system_en": "Style: high-energy, upbeat cheer—youthful hype like an enthusiastic viewer; stay genuine, not fake-over-the-top. All comments must be in English.",
+        "user_en": "Generate upbeat, energetic English danmu for this screenshot:",
+    },
+    "社恐型": {
+        "system_zh": "风格：小声嘀咕、犹豫害羞，像社恐观众憋不住的一句；自然口语，不要阴阳怪气或人身攻击。",
+        "user_zh": "用社恐语气为这张截图发弹幕：",
+        "system_en": "Style: shy, hesitant, muttering-aside vibes—like a socially anxious viewer finally typing; natural and gentle, no snark or personal attacks. All comments must be in English.",
+        "user_en": "Generate shy, hesitant English danmu for this screenshot:",
     },
 }
 

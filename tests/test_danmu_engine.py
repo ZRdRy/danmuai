@@ -13,6 +13,7 @@ from app.reply_queue import AIReplyFIFOBuffer, QueuedReply
 from main import DanmuApp
 
 from tests.conftest import bind_minimal_danmu_app
+from tests.fakes import FakeConfig
 
 
 @pytest.fixture()
@@ -196,20 +197,28 @@ def test_ai_reply_queue_uses_request_context_and_fifos_results():
         ai_in_flight=1,
         screenshot_round=10,
         _latest_screenshot_id=10,
+        config=FakeConfig({"normal_reply_count": "2"}),
     )
+    app._sync_reply_batch_config = DanmuApp._sync_reply_batch_config.__get__(app, DanmuApp)
+    app._on_ai_reply = DanmuApp._on_ai_reply.__get__(app, DanmuApp)
+    app._sync_reply_batch_config()
     app.reply_timer.active = False
 
     now = time.monotonic()
     app._on_ai_reply('["A1", "A2"]', "persona-1", 10, 10, now, 0)
     app._on_ai_reply('["B1"]', "persona-2", 11, 11, now, 0)
 
-    assert app.reply_buffer.size() == 7
-
+    # 每批 2 条；每次 _on_ai_reply consume 队首 1 条 → 先上屏 A1，再上屏 A2，B1 仍在队尾
+    assert app.reply_buffer.size() == 2
     assert app.engine.calls == [
         ("A1", "persona-1"),
-        ("B1", "persona-2"),
+        ("A2", "persona-1"),
     ]
+    assert any(
+        item.content == "B1" and item.persona_id == "persona-2"
+        for item in app.reply_buffer._items
+    )
     assert app.history_writer.calls == [
         ("A1", "persona-1", 10, None),
-        ("B1", "persona-2", 11, None),
+        ("A2", "persona-1", 10, None),
     ]

@@ -5,13 +5,12 @@ const MASKED_API_KEY = '********';
 
 const CONFIG_FIELDS = [
   'api_endpoint', 'api_mode', 'model', 'temperature', 'max_tokens',
-  'screenshot_interval', 'danmu_speed', 'danmu_lines', 'danmu_max_chars', 'dedup_threshold',
-  'screen_index', 'layout_mode', 'opacity', 'font_size', 'freshness', 'hotkey',
-  'freq_mode', 'capture_mode', 'min_on_screen', 'eviction_mode',
-  'image_max_width', 'image_quality', 'scene_probe_size',
-  'mic_window_sec', 'memory_mode', 'memory_window', 'memory_clear_policy',
-  'reply_scene_count', 'reply_filler_count',
-  'danmu_display_mode', 'normal_recognition_interval_sec', 'normal_reply_count',
+  'danmu_speed', 'danmu_lines', 'danmu_max_chars', 'dedup_threshold',
+  'screen_index', 'layout_mode', 'opacity', 'font_size', 'hotkey',
+  'eviction_mode',
+  'image_max_width', 'image_quality',
+  'mic_window_sec', 'memory_mode', 'memory_window',
+  'normal_recognition_interval_sec', 'normal_reply_count',
 ];
 
 const NORMAL_REPLY_COUNT_MIN = 1;
@@ -193,6 +192,12 @@ const RUNTIME_CLOCK = {
   tickTimer: null,
   session: null,
   lifetime: null,
+};
+
+const DIAGNOSTICS = {
+  pollTimer: null,
+  inFlight: false,
+  last: null,
 };
 
 function stopRuntimeTick() {
@@ -387,6 +392,127 @@ function applyStatus(st) {
   }
 }
 
+function formatDiagSeconds(value) {
+  const num = Number(value) || 0;
+  return `${num.toFixed(2)}s`;
+}
+
+function formatDiagMs(value) {
+  return `${Math.max(0, Math.round(Number(value) || 0))}ms`;
+}
+
+function buildDiagnosticReportText(diag) {
+  if (!diag) return '等待诊断数据...';
+  const scheduler = diag.scheduler || {};
+  const timing = diag.timing || {};
+  const runtimeState = diag.runtime_state || {};
+  const diagnosis = diag.diagnosis || {};
+  const webRuntime = runtimeState.web_runtime || {};
+  const stats = runtimeState.stats || {};
+  const generation = runtimeState.generation_pipeline || {};
+  const suggestions = [];
+  if (diagnosis.scheduler_blocked) {
+    suggestions.push(`- 检查调度阻塞原因：${scheduler.block_reason || 'unknown'}`);
+  }
+  if (diagnosis.high_rtt) {
+    suggestions.push('- 检查弱网、上游模型响应时间或过慢的视觉请求');
+  }
+  if (diagnosis.has_pending_timing) {
+    suggestions.push('- 检查请求 timing 是否长时间未消费，重点看 reply/error 清理路径');
+  }
+  if (!suggestions.length) {
+    suggestions.push('- 当前快照未发现明显调度或 timing 异常');
+  }
+  return [
+    'DanmuAI Diagnostic Report',
+    '',
+    '[scheduler]',
+    `scheduler_blocked: ${!!diagnosis.scheduler_blocked}`,
+    `block_reason: ${scheduler.block_reason || ''}`,
+    `seconds_since_last_trigger: ${scheduler.seconds_since_last_trigger ?? 0}`,
+    '',
+    '[timing]',
+    `request_started_count: ${timing.request_started_count ?? 0}`,
+    `avg_rtt: ${timing.avg_rtt ?? 0}`,
+    `smart_cooldown_ms: ${timing.smart_cooldown_ms ?? 0}`,
+    `recent_rtt_samples: ${(timing.recent_rtt_samples || []).join(', ') || '[]'}`,
+    '',
+    '[runtime]',
+    `danmu_count: ${stats.danmu_count ?? 0}`,
+    `runtime_sec: ${stats.runtime_sec ?? 0}`,
+    `cached_layout_mode: ${webRuntime.cached_layout_mode || 'fullscreen'}`,
+    `latest_displayed_round: ${generation.latest_displayed_round ?? 0}`,
+    '',
+    '[next_steps]',
+    ...suggestions,
+  ].join('\n');
+}
+
+function renderDiagnostics(diag) {
+  DIAGNOSTICS.last = diag || null;
+  const scheduler = diag?.scheduler || {};
+  const timing = diag?.timing || {};
+  const diagnosis = diag?.diagnosis || {};
+  const stats = diag?.runtime_state?.stats || {};
+
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+
+  setText('diagSchedulerBlocked', diagnosis.scheduler_blocked ? '是' : '否');
+  setText('diagBlockReason', scheduler.block_reason || '-');
+  setText('diagTriggerGap', formatDiagSeconds(scheduler.seconds_since_last_trigger));
+  setText('diagPendingTiming', String(timing.request_started_count ?? 0));
+  setText('diagAvgRtt', formatDiagSeconds(timing.avg_rtt));
+  setText('diagCooldown', formatDiagMs(timing.smart_cooldown_ms));
+  setText('diagHighRtt', diagnosis.high_rtt ? '是' : '否');
+  setText('diagRttHistoryLen', String(timing.rtt_history_len ?? 0));
+  setText(
+    'diagRecentRttSamples',
+    JSON.stringify(timing.recent_rtt_samples || []),
+  );
+  setText(
+    'diagRuntimeStats',
+    `danmu=${stats.danmu_count ?? 0} · input=${stats.total_input_tokens ?? 0} · output=${stats.total_output_tokens ?? 0} · runtime=${formatDiagSeconds(stats.runtime_sec)}`,
+  );
+  setText('diagnosticReportPreview', buildDiagnosticReportText(diag));
+}
+
+async function refreshDiagnostics() {
+  if (DIAGNOSTICS.inFlight || !API.base) return;
+  DIAGNOSTICS.inFlight = true;
+  try {
+    const payload = await apiFetch('/api/diagnostics', { method: 'GET' });
+    if (payload?.ok && payload.diagnostics) {
+      renderDiagnostics(payload.diagnostics);
+    }
+  } catch (err) {
+    console.warn('[diagnostics] refresh failed', err);
+  } finally {
+    DIAGNOSTICS.inFlight = false;
+  }
+}
+
+function startDiagnosticsPolling() {
+  if (DIAGNOSTICS.pollTimer) clearInterval(DIAGNOSTICS.pollTimer);
+  refreshDiagnostics();
+  DIAGNOSTICS.pollTimer = setInterval(refreshDiagnostics, 2500);
+}
+
+function initDiagnosticsPanel() {
+  document.getElementById('btnCopyDiagnosticsReport')?.addEventListener('click', async () => {
+    const text = buildDiagnosticReportText(DIAGNOSTICS.last);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('诊断报告已复制');
+    } catch (err) {
+      console.warn('[diagnostics] copy failed', err);
+      showToast('复制诊断报告失败', true);
+    }
+  });
+}
+
 function updateLogPanelState() {
   const panel = document.querySelector('.log-panel');
   const empty = document.getElementById('logViewEmpty');
@@ -482,20 +608,6 @@ function buildNormalReplyContractPreviewZh(count, maxChars) {
   );
 }
 
-function buildReplyContractPreviewZh(sceneCount, fillerCount, maxChars) {
-  const scene = clampReplyCount(sceneCount, 2);
-  const filler = clampReplyCount(fillerCount, 3);
-  const total = scene + filler;
-  const limit = maxChars ?? resolveDanmuMaxCharsPreview('zh');
-  const examples = Array.from({ length: total }, (_, i) => `弹幕${i + 1}`);
-  return (
-    '你是直播弹幕评论员。必须且只能返回 JSON 字符串数组，不要解释，不要 Markdown。'
-    + `固定返回 ${total} 条弹幕：前 ${scene} 条必须强相关当前画面，后 ${filler} 条必须是适合直播间氛围的泛用弹幕。`
-    + `每条不超过 ${limit} 个字，避免重复，输出格式：`
-    + `["${examples.join('", "')}"]。`
-  );
-}
-
 function updateNormalBatchPreview() {
   const countEl = document.getElementById('normal_reply_count');
   if (!countEl) return;
@@ -509,51 +621,159 @@ function updateNormalBatchPreview() {
   const preview = buildNormalReplyContractPreviewZh(count, maxChars);
   const previewEl = document.getElementById('normalBatchContractPreview');
   if (previewEl) previewEl.textContent = preview;
-  const modeEl = document.getElementById('danmu_display_mode');
-  if (modeEl?.value === 'normal') {
-    const contractEl = document.getElementById('personaContract');
-    if (contractEl) contractEl.value = preview;
+  const contractEl = document.getElementById('personaContract');
+  if (contractEl) contractEl.value = preview;
+}
+
+let danmuPoolMeta = null;
+
+function poolEffectiveEnabledLocal() {
+  const builtin = document.getElementById('poolBuiltinEnabled')?.checked;
+  const custom = document.getElementById('poolCustomEnabled')?.checked;
+  return Boolean(builtin || custom);
+}
+
+function updatePoolMinOnScreenControl() {
+  const enabled = danmuPoolMeta?.effective_pool_enabled ?? poolEffectiveEnabledLocal();
+  const minEl = document.getElementById('poolMinOnScreen');
+  const wrap = document.getElementById('poolMinOnScreenWrap');
+  if (minEl) minEl.disabled = !enabled;
+  if (wrap) wrap.classList.toggle('is-disabled', !enabled);
+  const hint = document.getElementById('poolBothOffHint');
+  if (hint) hint.classList.toggle('hidden', Boolean(enabled));
+}
+
+function parseCustomDanmuTextarea(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function renderCustomDanmuPoolList(items) {
+  const list = document.getElementById('poolCustomList');
+  const countEl = document.getElementById('poolCustomCount');
+  if (countEl) countEl.textContent = `共 ${items.length} 条`;
+  if (!list) return;
+  list.replaceChildren();
+  items.forEach((text) => {
+    const li = document.createElement('li');
+    li.className = 'danmu-pool-custom-item';
+    const label = document.createElement('label');
+    label.className = 'flex items-start gap-2 text-warmText';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'pool-custom-cb accent-warmPink mt-1';
+    const span = document.createElement('span');
+    span.textContent = text;
+    label.append(cb, span);
+    li.append(label);
+    list.append(li);
+  });
+  const selectAll = document.getElementById('poolCustomSelectAll');
+  if (selectAll) selectAll.checked = false;
+}
+
+async function loadDanmuPoolPage() {
+  const [meta, custom] = await Promise.all([
+    apiFetch('/api/danmu-pool/meta'),
+    apiFetch('/api/danmu-pool/custom'),
+  ]);
+  danmuPoolMeta = meta;
+  const builtinEl = document.getElementById('poolBuiltinEnabled');
+  const customEl = document.getElementById('poolCustomEnabled');
+  const minEl = document.getElementById('poolMinOnScreen');
+  const countHint = document.getElementById('poolBuiltinCountHint');
+  if (builtinEl) builtinEl.checked = Boolean(meta.builtin_enabled);
+  if (customEl) customEl.checked = Boolean(meta.custom_enabled);
+  if (minEl) minEl.value = String(meta.min_on_screen ?? 5);
+  if (countHint) countHint.textContent = meta.builtin_count ? `（内置约 ${meta.builtin_count} 条）` : '';
+  renderCustomDanmuPoolList(custom.items || []);
+  updatePoolMinOnScreenControl();
+}
+
+async function saveDanmuPoolSettings() {
+  const body = {
+    builtin_enabled: Boolean(document.getElementById('poolBuiltinEnabled')?.checked),
+    custom_enabled: Boolean(document.getElementById('poolCustomEnabled')?.checked),
+    min_on_screen: parseInt(document.getElementById('poolMinOnScreen')?.value, 10) || 0,
+  };
+  await apiFetch('/api/danmu-pool/settings', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  danmuPoolMeta = await apiFetch('/api/danmu-pool/meta');
+  updatePoolMinOnScreenControl();
+  showToast('公式化弹幕库设置已保存~');
+}
+
+async function addCustomDanmuPoolItems() {
+  const textarea = document.getElementById('poolCustomTextarea');
+  const text = textarea?.value || '';
+  if (!text.trim()) {
+    showToast('请先输入要追加的弹幕句', true);
+    return;
+  }
+  const result = await apiFetch('/api/danmu-pool/custom', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+  renderCustomDanmuPoolList(result.items || []);
+  danmuPoolMeta = await apiFetch('/api/danmu-pool/meta');
+  if (textarea) textarea.value = '';
+  const skipped = result.skipped || 0;
+  if (skipped > 0) {
+    showToast(`已追加 ${result.added} 条，跳过 ${skipped} 条`, skipped > 0 && !result.added);
+  } else {
+    showToast(`已追加 ${result.added} 条~`);
   }
 }
 
-const REALTIME_ONLY_FIELD_IDS = [
-  'screenshot_interval',
-  'freq_mode',
-  'capture_mode',
-  'freshness',
-  'scene_probe_size',
-  'memory_clear_policy',
-  'drop_stale',
-];
-
-const REALTIME_ONLY_HINT_IDS = [
-  'rhythmRealtimeOnlyHint',
-  'danmuRealtimeOnlyHint',
-  'memoryClearNormalHint',
-];
-
-function setRealtimeOnlyFieldsEnabled(enabled) {
-  REALTIME_ONLY_FIELD_IDS.forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.disabled = !enabled;
-    const wrap = el.closest('.realtime-only-field');
-    if (wrap) wrap.classList.toggle('is-disabled', !enabled);
+async function deleteSelectedCustomDanmuPoolItems() {
+  const texts = [...document.querySelectorAll('#poolCustomList .pool-custom-cb:checked')]
+    .map((cb) => cb.closest('label')?.querySelector('span')?.textContent)
+    .filter(Boolean);
+  if (!texts.length) {
+    showToast('请先勾选要删除的句子', true);
+    return;
+  }
+  const result = await apiFetch('/api/danmu-pool/custom', {
+    method: 'DELETE',
+    body: JSON.stringify({ texts }),
   });
-  REALTIME_ONLY_HINT_IDS.forEach((hintId) => {
-    const hint = document.getElementById(hintId);
-    if (hint) hint.classList.toggle('hidden', enabled);
-  });
+  renderCustomDanmuPoolList(result.items || []);
+  danmuPoolMeta = await apiFetch('/api/danmu-pool/meta');
+  showToast(`已删除 ${result.removed} 条~`);
 }
 
-function updateDanmuPoolControls() {
-  const poolOn = document.getElementById('danmu_pool_enabled')?.checked;
-  const minEl = document.getElementById('min_on_screen');
-  const wrap = document.getElementById('minOnScreenWrap');
-  if (minEl) minEl.disabled = !poolOn;
-  if (wrap) wrap.classList.toggle('is-disabled', !poolOn);
-  const hint = document.getElementById('danmuPoolMinHint');
-  if (hint) hint.classList.toggle('hidden', Boolean(poolOn));
+function initDanmuPoolPage() {
+  document.getElementById('btnSavePoolSettings')?.addEventListener('click', () => {
+    saveDanmuPoolSettings().catch((e) => showToast(e.message, true));
+  });
+  document.getElementById('btnPoolCustomAppend')?.addEventListener('click', () => {
+    addCustomDanmuPoolItems().catch((e) => showToast(e.message, true));
+  });
+  document.getElementById('btnPoolCustomClearInput')?.addEventListener('click', () => {
+    const textarea = document.getElementById('poolCustomTextarea');
+    if (textarea) textarea.value = '';
+  });
+  document.getElementById('btnPoolCustomDelete')?.addEventListener('click', () => {
+    deleteSelectedCustomDanmuPoolItems().catch((e) => showToast(e.message, true));
+  });
+  document.getElementById('poolCustomSelectAll')?.addEventListener('change', (e) => {
+    const checked = e.target.checked;
+    document.querySelectorAll('#poolCustomList .pool-custom-cb').forEach((cb) => {
+      cb.checked = checked;
+    });
+  });
+  ['poolBuiltinEnabled', 'poolCustomEnabled'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      if (danmuPoolMeta) {
+        danmuPoolMeta.effective_pool_enabled = poolEffectiveEnabledLocal();
+      }
+      updatePoolMinOnScreenControl();
+    });
+  });
 }
 
 const SETTINGS_UI_MODE_KEY = 'danmu_settings_ui_mode';
@@ -591,28 +811,6 @@ function applySettingsUiMode() {
   });
 }
 
-function initDanmuDisplayModeConfirm() {
-  const modeEl = document.getElementById('danmu_display_mode');
-  if (!modeEl) return;
-  let lastMode = modeEl.value;
-  modeEl.addEventListener('focus', () => {
-    lastMode = modeEl.value;
-  });
-  modeEl.addEventListener('change', () => {
-    if (modeEl.value === 'realtime' && lastMode !== 'realtime') {
-      const msg =
-        '实时模式为实验功能。切换后将自动进入「全面模式」，以显示截图间隔、新鲜度、记忆模式等全部相关设置。确定切换吗？';
-      if (!confirm(msg)) {
-        modeEl.value = lastMode;
-        return;
-      }
-      setSettingsUiMode('full');
-    }
-    lastMode = modeEl.value;
-    updateDisplayModeControls();
-  });
-}
-
 function initSettingsUiMode() {
   applySettingsUiMode();
   document.querySelectorAll('.settings-ui-mode-btn').forEach((btn) => {
@@ -620,63 +818,14 @@ function initSettingsUiMode() {
       setSettingsUiMode(btn.dataset.settingsUiMode);
     });
   });
-  initDanmuDisplayModeConfirm();
 }
 
-function updateDisplayModeControls() {
-  const modeEl = document.getElementById('danmu_display_mode');
-  const realtimeOpts = document.getElementById('realtimeModeOptions');
-  const normalOpts = document.getElementById('normalModeOptions');
-  if (!modeEl || !realtimeOpts || !normalOpts) return;
-  const isNormal = modeEl.value === 'normal';
-  realtimeOpts.classList.toggle('hidden', isNormal);
-  normalOpts.classList.toggle('hidden', !isNormal);
-  setRealtimeOnlyFieldsEnabled(!isNormal);
-  if (isNormal) {
-    updateNormalBatchPreview();
-  } else {
-    updateReplyBatchPreview();
-  }
-}
-
-function updateReplyBatchPreview() {
-  const modeEl = document.getElementById('danmu_display_mode');
-  if (modeEl?.value === 'normal') {
-    updateNormalBatchPreview();
-    return;
-  }
-  const sceneEl = document.getElementById('reply_scene_count');
-  const fillerEl = document.getElementById('reply_filler_count');
-  if (!sceneEl || !fillerEl) return;
-  const scene = clampReplyCount(sceneEl.value, 2);
-  const filler = clampReplyCount(fillerEl.value, 3);
-  sceneEl.value = String(scene);
-  fillerEl.value = String(filler);
-  const total = scene + filler;
-  const hint = document.getElementById('replyBatchTotalHint');
-  if (hint) {
-    hint.textContent = `合计 ${total} 条 · 保存后会同步到人格工坊的「输出契约」`;
-  }
-  const maxChars = resolveDanmuMaxCharsPreview('zh');
-  const preview = buildReplyContractPreviewZh(scene, filler, maxChars);
-  const previewEl = document.getElementById('replyBatchContractPreview');
-  if (previewEl) previewEl.textContent = preview;
-  const contractEl = document.getElementById('personaContract');
-  if (contractEl) contractEl.value = preview;
-}
-
-function initReplyBatchControls() {
-  ['reply_scene_count', 'reply_filler_count', 'danmu_max_chars'].forEach((id) => {
-    document.getElementById(id)?.addEventListener('input', updateReplyBatchPreview);
-    document.getElementById(id)?.addEventListener('change', updateReplyBatchPreview);
-  });
-  ['normal_reply_count', 'normal_recognition_interval_sec'].forEach((id) => {
+function initNormalBatchControls() {
+  ['normal_reply_count', 'normal_recognition_interval_sec', 'danmu_max_chars'].forEach((id) => {
     document.getElementById(id)?.addEventListener('input', updateNormalBatchPreview);
     document.getElementById(id)?.addEventListener('change', updateNormalBatchPreview);
   });
-  document.getElementById('danmu_pool_enabled')?.addEventListener('change', updateDanmuPoolControls);
-  updateDisplayModeControls();
-  updateDanmuPoolControls();
+  updateNormalBatchPreview();
 }
 
 function collectFormData() {
@@ -686,9 +835,7 @@ function collectFormData() {
     const el = document.getElementById(name);
     if (el) data[name] = el.value;
   });
-  data.drop_stale = document.getElementById('drop_stale')?.checked ? '1' : '0';
   data.empty_accel = document.getElementById('empty_accel')?.checked ? '1' : '0';
-  data.danmu_pool_enabled = document.getElementById('danmu_pool_enabled')?.checked ? '1' : '0';
   data.mic_mode_enabled = document.getElementById('mic_mode_enabled')?.checked ? '1' : '0';
   const key = (document.getElementById('api_key')?.value || '').trim();
   if (key && key !== MASKED_API_KEY) data.api_key = key;
@@ -750,33 +897,17 @@ function fillForm(cfg) {
   setIfEmpty('opacity', '100');
   setIfEmpty('dedup_threshold', '0.5');
   setIfEmpty('hotkey', 'Ctrl+Shift+B');
-  setIfEmpty('screenshot_interval', '3');
   setIfEmpty('image_max_width', '768');
   setIfEmpty('temperature', '0.7');
   setIfEmpty('max_tokens', '512');
   const imageQuality = document.getElementById('image_quality');
   if (imageQuality && !cfg.image_quality) imageQuality.value = '85';
-  const minOnScreen = document.getElementById('min_on_screen');
-  if (minOnScreen && cfg.min_on_screen === '') minOnScreen.value = '5';
-  const sceneProbe = document.getElementById('scene_probe_size');
-  if (sceneProbe && !cfg.scene_probe_size) sceneProbe.value = '256';
   const danmuMaxChars = document.getElementById('danmu_max_chars');
   if (danmuMaxChars && !cfg.danmu_max_chars) danmuMaxChars.value = '15';
-  const freshness = document.getElementById('freshness');
-  if (freshness && !cfg.freshness) freshness.value = 'medium';
   const evictionMode = document.getElementById('eviction_mode');
   if (evictionMode && !cfg.eviction_mode) evictionMode.value = 'natural';
-  const freqMode = document.getElementById('freq_mode');
-  if (freqMode && !cfg.freq_mode) freqMode.value = 'auto';
-  const captureMode = document.getElementById('capture_mode');
-  if (captureMode && !cfg.capture_mode) captureMode.value = 'continuous';
-  const dropStale = document.getElementById('drop_stale');
   const emptyAccel = document.getElementById('empty_accel');
-  if (dropStale) dropStale.checked = cfg.drop_stale !== '0';
   if (emptyAccel) emptyAccel.checked = cfg.empty_accel !== '0';
-  const danmuPool = document.getElementById('danmu_pool_enabled');
-  if (danmuPool) danmuPool.checked = cfg.danmu_pool_enabled === '1';
-  updateDanmuPoolControls();
   const memoryMode = document.getElementById('memory_mode');
   if (memoryMode) {
     const allowed = ['off', 'dedup_only', 'scene_card', 'strong'];
@@ -784,20 +915,12 @@ function fillForm(cfg) {
   }
   const memoryWindow = document.getElementById('memory_window');
   if (memoryWindow && !cfg.memory_window) memoryWindow.value = '10';
-  const memoryClear = document.getElementById('memory_clear_policy');
-  if (memoryClear && !cfg.memory_clear_policy) memoryClear.value = 'medium';
   micAudioLikelySupported = cfg.mic_audio_likely_supported !== false;
   const micMode = document.getElementById('mic_mode_enabled');
   if (micMode) micMode.checked = cfg.mic_mode_enabled === '1';
   updateMicModeHint();
   const micWindow = document.getElementById('mic_window_sec');
   if (micWindow && !cfg.mic_window_sec) micWindow.value = '5';
-  const replyScene = document.getElementById('reply_scene_count');
-  if (replyScene && !cfg.reply_scene_count) replyScene.value = '2';
-  const replyFiller = document.getElementById('reply_filler_count');
-  if (replyFiller && !cfg.reply_filler_count) replyFiller.value = '3';
-  const displayMode = document.getElementById('danmu_display_mode');
-  if (displayMode && !cfg.danmu_display_mode) displayMode.value = 'normal';
   const layoutMode = document.getElementById('layout_mode');
   if (layoutMode) {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
@@ -807,7 +930,7 @@ function fillForm(cfg) {
   if (normalInterval && !cfg.normal_recognition_interval_sec) normalInterval.value = '5';
   const normalCount = document.getElementById('normal_reply_count');
   if (normalCount && !cfg.normal_reply_count) normalCount.value = '5';
-  updateDisplayModeControls();
+  updateNormalBatchPreview();
   const modelId = cfg.active_model_id || cfg.default_model_id || cfg.model || '';
   const modelEl = document.getElementById('model');
   if (modelEl) modelEl.value = modelId;
@@ -818,6 +941,9 @@ function fillForm(cfg) {
 async function reloadConfigFromServer() {
   const cfg = await apiFetch('/api/config');
   fillForm(cfg);
+  syncProviderPresetFromEndpoint();
+  const modelId = cfg.active_model_id || cfg.default_model_id || cfg.model || '';
+  syncVisionModelPickerFromForm(modelId);
   await loadCustomModels();
   return cfg;
 }
@@ -842,7 +968,7 @@ async function loadProviders() {
   providersCache = await fetch(`${API.base}/api/providers`).then((r) => r.json());
   const sel = document.getElementById('providerPreset');
   if (!sel) return;
-  sel.innerHTML = '<option value="">手动填写</option>';
+  sel.innerHTML = '<option value="">自定义</option>';
   providersCache.forEach((p) => {
     const opt = document.createElement('option');
     opt.value = p.id;
@@ -861,15 +987,38 @@ async function loadProviders() {
   }
 }
 
+function pickDefaultCatalogModelId(providerId) {
+  const platform = resolveCatalogPlatform(providerId);
+  if (!platform?.models?.length) return '';
+  const cheapest = platform.models.find((m) => m.cheapest);
+  return (cheapest || platform.models[0]).id;
+}
+
+function syncProviderPresetFromEndpoint() {
+  const sel = document.getElementById('providerPreset');
+  if (!sel) return;
+  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const guessed = guessProviderIdFromEndpoint(endpoint);
+  if (!guessed) {
+    sel.value = '';
+    return;
+  }
+  const hasOption = Array.from(sel.options).some((opt) => opt.value === guessed);
+  sel.value = hasOption ? guessed : '';
+}
+
+// 切换服务商预设：填 endpoint/mode、清空 API Key 输入、重置为 catalog 默认视觉模型。
+// 仅影响表单；运行中配置以 PUT /api/config 为准，与 Qt Overlay 无关。
 function applyProviderPreset(providerId) {
   const p = providersCache.find((x) => x.id === providerId);
   if (!p) return;
   document.getElementById('api_endpoint').value = p.default_endpoint;
   document.getElementById('api_mode').value = p.mode === 'openai-compatible' ? 'openai' : p.mode;
-  const modelEl = document.getElementById('model');
-  const currentModel = modelEl?.value || '';
-  renderVisionModelPicker(providerId, currentModel);
-  showToast(`已填入 ${p.label} 的默认地址~`);
+  const apiKeyEl = document.getElementById('api_key');
+  if (apiKeyEl) apiKeyEl.value = '';
+  const defaultModelId = pickDefaultCatalogModelId(providerId);
+  renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true });
+  showToast(`已填入 ${p.label} 的默认地址，请填写对应 API 密钥~`);
 }
 
 async function loadModelCatalog() {
@@ -892,9 +1041,9 @@ function guessProviderIdFromEndpoint(endpoint) {
     ['ark.cn-beijing.volces.com', 'doubao'],
     ['dashscope.aliyuncs.com', 'dashscope'],
     ['open.bigmodel.cn', 'zhipu'],
-    ['api.deepseek.com', 'deepseek'],
     ['api.moonshot.cn', 'moonshot'],
     ['api.siliconflow.cn', 'siliconflow'],
+    ['api.xiaomimimo.com', 'mimo'],
   ];
   for (const [fragment, id] of ordered) {
     if (value.includes(fragment)) return id;
@@ -1075,26 +1224,37 @@ function setVisionModelPickerVisible(visible) {
   else picker.classList.add('hidden');
 }
 
-function renderVisionModelPicker(providerId, selectedModelId) {
+// providerSwitch=true 时强制选平台最便宜模型；否则保留已保存的 model（含「自定义」行）
+function renderVisionModelPicker(providerId, selectedModelId, options = {}) {
   const picker = document.getElementById('visionModelPicker');
   if (!picker) return;
 
+  const { providerSwitch = false } = options;
   const platform = resolveCatalogPlatform(providerId);
   if (!platform || !platform.models?.length) {
     picker.innerHTML = '';
     setVisionModelPickerVisible(false);
-    showVisionModelCustom(true, selectedModelId || '');
-    setVisionModelValue(selectedModelId || '');
+    const customInitial = providerSwitch ? '' : (selectedModelId || '');
+    showVisionModelCustom(true, customInitial);
+    setVisionModelValue(customInitial);
     return;
   }
 
   setVisionModelPickerVisible(true);
   picker.innerHTML = '';
   const knownIds = new Set(platform.models.map((m) => m.id));
-  let selected = selectedModelId && knownIds.has(selectedModelId)
-    ? selectedModelId
-    : platform.models[0].id;
-  const useCustom = selectedModelId && !knownIds.has(selectedModelId);
+  const defaultId = pickDefaultCatalogModelId(providerId);
+  let selected;
+  let useCustom;
+  if (providerSwitch) {
+    selected = defaultId || platform.models[0].id;
+    useCustom = false;
+  } else {
+    selected = selectedModelId && knownIds.has(selectedModelId)
+      ? selectedModelId
+      : (defaultId || platform.models[0].id);
+    useCustom = Boolean(selectedModelId && !knownIds.has(selectedModelId));
+  }
 
   platform.models.forEach((model) => {
     const row = document.createElement('label');
@@ -1134,7 +1294,7 @@ function renderVisionModelPicker(providerId, selectedModelId) {
   });
   const otherLabel = document.createElement('span');
   otherLabel.className = 'vision-model-id';
-  otherLabel.textContent = '其他（手动输入）';
+  otherLabel.textContent = '自定义模型';
   otherRow.append(otherRadio, otherLabel);
   picker.appendChild(otherRow);
 
@@ -1212,6 +1372,7 @@ async function loadPersonaeCheckboxes(containerId) {
   return data;
 }
 
+// 自定义模型 CRUD：掩码 apiKey 在服务端保留；设为默认会同步 global model（ConfigService 双写规则）
 async function loadCustomModels() {
   const data = await apiFetch('/api/custom-models');
   const list = document.getElementById('customModelsList');
@@ -1293,6 +1454,20 @@ function closeModelModal() {
   modal.classList.remove('flex');
 }
 
+function openRewardModal() {
+  const modal = document.getElementById('rewardModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeRewardModal() {
+  const modal = document.getElementById('rewardModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
 function collectModelForm() {
   return {
     name: document.getElementById('modelName').value,
@@ -1337,7 +1512,7 @@ async function loadPersonaTemplate() {
 /** 助手设置表单字段说明（悬停 Label 旁 ⓘ 显示） */
 const SETTINGS_FIELD_TIPS = {
   providerPreset:
-    '选一个常见 AI 平台，会自动填好接口地址和模式；选「手动填写」则需自己逐项设置。',
+    '选一个常见 AI 平台，会自动填好接口地址和模式；选「自定义」则需自己逐项设置。',
   api_endpoint:
     '视觉模型服务的网址。火山方舟豆包一般填到 /api/v3；多数 OpenAI 兼容服务填到 /v1。',
   api_mode:
@@ -1354,8 +1529,6 @@ const SETTINGS_FIELD_TIPS = {
     '关闭：不额外记忆。轻量：只避免重复弹幕。标准：记住画面要点并防重复。强记忆：注入更多上下文，换场景时保留更多内容。',
   memory_window:
     '记住最近几条已成功显示的 AI 弹幕（1–20 条），用来提醒模型别再说同样的话。',
-  memory_clear_policy:
-    '换场景（例如切关卡、换窗口）时如何清理记忆：严格几乎全忘；中等保留稳定信息；宽松多留摘要和少量旧弹幕。',
   mic_mode_enabled:
     '实验功能：说完一句话后额外生成几条接话弹幕，插队显示，不影响看屏识图节奏。需豆包接口且模型支持麦克风；默认关，录音仅在内存、不落盘。使用 Windows「设置 → 系统 → 声音 → 输入」里的默认麦克风；换耳机后建议先停弹幕再开或重启应用。',
   mic_window_sec:
@@ -1366,12 +1539,6 @@ const SETTINGS_FIELD_TIPS = {
     '录大约 3 秒后，把声音和占位图发给 AI，确认模型能收到你的麦克风输入。',
   api_key:
     '访问 AI 的密钥，保存在本机并加密。留空点「保存配置」不会覆盖已有密钥。',
-  reply_scene_count:
-    '每批弹幕里，必须紧扣当前屏幕内容的有几条（2–7）。保存后会同步到人格工坊的「输出契约」。',
-  reply_filler_count:
-    '每批弹幕里，气氛向、可泛用的有几条（2–7）。与「画面相关」条数相加就是每批总数。',
-  danmu_display_mode:
-    '普通模式（默认）：按固定间隔识图，一次出一整批弹幕。实时模式（实验）：约每秒识图，适合跟直播/游戏节奏；切换时会提示并自动进入全面模式。',
   normal_recognition_interval_sec:
     '普通模式下，每隔多少秒识图并生成一批弹幕（1–60 秒）。',
   normal_reply_count:
@@ -1388,34 +1555,18 @@ const SETTINGS_FIELD_TIPS = {
     '弹幕透明度 0–100%，100 为完全不透明。',
   dedup_threshold:
     '和最近弹幕有多像就算重复（0–1）。越高越容易判重复并丢掉，默认约 0.5。',
-  freshness:
-    '画面已经变了，或 AI 回复来得太晚时，丢弃旧回复的严格程度：宽松最宽松，严格最严格。',
   layout_mode:
     '弹幕显示区域占整块屏幕的比例（全屏、四分之三、一半、四分之一）。',
   hotkey:
     '全局快捷键，随时开始或停止生成弹幕。首次使用可能需在系统里允许本程序监听键盘。',
-  danmu_pool_enabled:
-    '开启后使用内置中文短句库补位（AI 较慢、网络卡住或同屏条数不够时）。关闭则全程不用该句库。',
-  min_on_screen:
-    '需先开启「内置中文短句库」。屏幕上至少保持几条可见弹幕；不够时从句库自动补。填 0 表示不自动补足。',
   eviction_mode:
     '自然：按正常速度滚出屏幕。加速：换场景或清屏时让旧弹幕更快消失。',
-  drop_stale:
-    '开启后，画面已经变了才回来的旧回复会被丢掉，避免上一关的弹幕还飘在屏幕上。',
   empty_accel:
     '某行轨道空了时，暂时加快滚动，让新弹幕更快占满空位。',
-  screenshot_interval:
-    '仅在「频率模式」选「手动」时有效：两次识图之间固定间隔多少秒。',
-  freq_mode:
-    '自动：根据弹幕多少和接口快慢调节识图频率。手动：固定使用上面的「截图间隔」。',
-  capture_mode:
-    '连续：按间隔一直截图。智能：结合画面变化和队列状态，择机再看屏幕。',
   image_max_width:
     '发给 AI 前把截图缩到多宽。越小越省流量和费用，越大越清晰。',
   image_quality:
     'JPEG 压缩质量 1–100，默认 85。越高图越清楚、文件越大。',
-  scene_probe_size:
-    '判断「是否换了场景」时用的缩略图边长（32–512 像素，默认 256）。稍大可减少光标、弹幕抖动造成的误判；过大则真换场景时反应变慢。',
   btnProbe:
     '用当前填写的地址、模式和密钥试连一次 AI，不开始弹幕，也不改其它设置。',
 };
@@ -1584,6 +1735,7 @@ function navigate(page) {
     loadCustomModels().catch(console.error);
   }
   if (page === 'persona') loadPersonaEditor().catch(console.error);
+  if (page === 'danmu-pool') loadDanmuPoolPage().catch((e) => showToast(e.message, true));
   if (page === 'logs') {
     renderLogView();
     updateLogPanelState();
@@ -1895,6 +2047,7 @@ function scheduleLogsReconnect() {
   updateRealtimeConnUI();
 }
 
+// /ws/status 只驱动控制台统计与运行态 UI，不控制 Overlay 弹幕渲染
 function connectStatusWebSocket() {
   clearStatusReconnect();
   detachWebSocket(REALTIME.statusWs);
@@ -2011,13 +2164,16 @@ async function init() {
     document.getElementById('screen_index').value = String(cfg.screen_index);
   }
   applyStatus(await fetch(`${API.base}/api/status`).then((r) => r.json()));
+  initDiagnosticsPanel();
+  startDiagnosticsPolling();
   startRealtimeTransport();
 
   initSettingsTabs();
   initSettingsUiMode();
   initSettingsFieldHints();
   initSidebarNavFloatingHints();
-  initReplyBatchControls();
+  initNormalBatchControls();
+  initDanmuPoolPage();
 
   document.querySelectorAll('.sidebar-nav-hint').forEach((btn) => {
     btn.addEventListener('click', (e) => e.stopPropagation());
@@ -2085,6 +2241,7 @@ async function init() {
   document.getElementById('mic_mode_enabled')?.addEventListener('change', updateMicModeHint);
   document.getElementById('api_mode')?.addEventListener('change', updateMicModeHint);
 
+  // POST /api/config → bridge.save_config → 主线程 ConfigService（勿期望 HTTP 线程直接改 engine）
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -2243,6 +2400,11 @@ async function init() {
 
   document.getElementById('btnAddCustomModel')?.addEventListener('click', () => openModelModal(-1));
   document.getElementById('btnModelCancel')?.addEventListener('click', closeModelModal);
+  document.getElementById('btnFeedbackReward')?.addEventListener('click', openRewardModal);
+  document.getElementById('btnRewardClose')?.addEventListener('click', closeRewardModal);
+  document.getElementById('rewardModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'rewardModal') closeRewardModal();
+  });
   document.getElementById('modelModalForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const index = parseInt(document.getElementById('modelEditIndex').value, 10);
@@ -2334,6 +2496,7 @@ document.addEventListener('visibilitychange', () => {
       REALTIME.statusAttempt = 0;
       REALTIME.logsAttempt = 0;
       startRealtimeTransport();
+      refreshDiagnostics();
       return bootstrapLogsFromServer(0);
     })
     .catch((e) => console.warn('[realtime] visibility refresh failed', e));

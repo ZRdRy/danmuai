@@ -2,18 +2,43 @@
 
 ## Unreleased
 
+（暂无）
+
+## 2026-05-27
+
+### Added
+
+- Web 控制台侧栏页 **公式化弹幕库**：内置/自定义公式化短句开关、最小同屏条数、自定义句批量追加与删除
+- API：`GET/PUT /api/danmu-pool/meta|settings`、`GET/POST/DELETE /api/danmu-pool/custom`；配置键 `danmu_pool_use_custom`、`custom_danmu_pool`
+- 人格工坊内置人格 **+7**：傲娇型、腹黑型、中二型、治愈型、毒舌型、元气型、社恐型（默认未加入激活列表）
+- Web **教程**、**问题反馈** 页（飞书教程外链、QQ 群二维码）
+- 前台窗口活动追踪：`app/window_info.py`、`app/memory/activity.py` / `activity_prompt.py`（推断写代码/游戏/浏览等，拼入记忆提示）
+- 运行态与调度模块 `app/application/`（`runtime_state`、`request_scheduler`、`generation_pipeline_state` 等）
+- `scripts/boundary_guard.py`、`scripts/run_acceptance_gates.py`；维护者文档 `final-architecture-baseline.md`、`main-pipeline-sequence.md`、`runtime-state-map.md`
+- 小米 **MiMo** 服务商预设与 `app/model_catalog.py` 目录项；视觉模型 Web 选择器优化
+- Windows 打包指南 [PACKAGING_WINDOWS.md](PACKAGING_WINDOWS.md)
+
 ### Removed
 
 - 遗留 Qt 主窗（`ui/`）及启动方式 `--qt-ui`、`--legacy-ui`、`DANMU_QT_UI`、`DANMU_WEB_CONSOLE=0`；请使用默认 Web 控制台
+- 助手设置中的「内置中文短句库」「最小同屏条数」（已迁至公式化弹幕库页）
+- **实时弹幕模式**（`danmu_display_mode=realtime`）：Web 表单、配置导出与节奏预触发链路已移除；仅保留普通模式（固定识图间隔 + `normal_reply_count`）
+- Web 配置项：`reply_scene_count`、`reply_filler_count`、`screenshot_interval`、`freq_mode`、`capture_mode`、`freshness`、`drop_stale`、`scene_probe_size`、`memory_clear_policy`
 
 ### Changed
 
-- 弹幕显示默认模式改为 **普通模式**（`danmu_display_mode=normal`）；新装/缺省键种子与 Web 表单默认一致；已保存为 `realtime` 的配置库不变
+- 公式化补足：`min_on_screen` 在 **内置库或自定义库** 任一开启时生效；自定义库开启时即使内置库关闭也可补足
+- `PUT /api/config` 不再包含 `danmu_pool_enabled` / `min_on_screen`（请用 `/api/danmu-pool/settings`）
+- 弹幕生成统一为普通模式间隔与批次条数；遗留 `realtime` 配置在启动/Web 保存时映射为普通模式行为
 - `DanmuApp` 始终启动 Web 控制台；废弃启动参数将 `sys.exit(2)` 并打印迁移说明
 - `docs/qt6_ui_redesign_plan.md` 移至 `docs/archive/`（只读历史）
 
 ### Documentation
 
+- **开源文档治理（第二轮）**：正式文档收敛为 README / `docs/ARCHITECTURE.md` / `WEB_CONSOLE.md` / `CONTRIBUTING_ARCHITECTURE.md` / `MAIN_PIPELINE.md` / `RUNTIME_STATE.md` / `BOUNDARY_GUARD.md`；删除根目录 Phase stub、已完成 pool/display 规划、IDE 注释战役材料；`MEMORY_SYSTEM_PLAN` 迁入 [archive/planning/](archive/planning/)
+- 文档治理：新增 [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md)、[MAIN_PIPELINE.md](MAIN_PIPELINE.md)、[RUNTIME_STATE.md](RUNTIME_STATE.md)、[BOUNDARY_GUARD.md](BOUNDARY_GUARD.md)；重写 [ARCHITECTURE.md](ARCHITECTURE.md) 与 [docs/README.md](README.md)
+- Phase 文档仅保留于 [archive/architecture-phases/](archive/architecture-phases/)（根目录 stub 已移除）
+- 同步 [main-pipeline-sequence.md](main-pipeline-sequence.md)、[runtime-state-map.md](runtime-state-map.md)（移除 realtime/rhythm 主链路描述）
 - 文档：移除对已删除 `prototype/scheme-e-*` 的当前态引用；统一默认 Web 控制台叙事
 - 新增 `prototype/README.md`；更新 `AGENTS.md`、`README*.md`、`docs/ROADMAP*.md`、`docs/RELEASE_CHECKLIST*.md`、`docs/ARCHITECTURE*.md`、`CONTRIBUTING*.md`
 - `docs/qt6_ui_redesign_plan.md`：标注 Phase 0 / `scheme-e` 为历史；Qt 令牌以 `ui/theme.py` 为准

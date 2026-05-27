@@ -73,6 +73,9 @@
       <button type="button" data-page="persona" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
         <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-magic"></use></svg> 人格工坊
       </button>
+      <button type="button" data-page="danmu-pool" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
+        <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-hash"></use></svg> 公式化弹幕库
+      </button>
       <div class="sidebar-item-row flex items-center gap-1 min-w-0">
         <button type="button" data-page="settings" class="sidebar-item flex-1 min-w-0 flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
           <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-sliders"></use></svg> 助手设置
@@ -94,6 +97,9 @@
       <button type="button" data-page="tutorial" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
         <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-graduation"></use></svg> 教程
       </button>
+      <button type="button" data-page="feedback" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
+        <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-message"></use></svg> 问题反馈
+      </button>
     </nav>
   </aside>
 
@@ -101,6 +107,7 @@
     <div id="toast" class="toast text-warmText text-sm font-semibold"></div>
 
     <!-- 温馨控制台 -->
+    <!-- section: 运行概览 + 诊断面板 -->
     <section id="page-overview" class="page-panel active">
       <header class="flex flex-wrap justify-between items-center gap-4 mb-8">
         <div>
@@ -206,6 +213,63 @@
       </div>
 
       <div class="card p-6 mt-6">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+          <div>
+            <h3 class="text-lg font-bold text-warmText">诊断面板</h3>
+            <p class="text-sm text-gray-400">只读展示调度、RTT、cooldown 与 runtime 摘要</p>
+          </div>
+          <button type="button" id="btnCopyDiagnosticsReport" class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-warmText hover:bg-gray-50">
+            复制诊断报告
+          </button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4 text-sm">
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">调度阻塞</p>
+            <p class="font-bold text-warmText" id="diagSchedulerBlocked">未知</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">阻塞原因</p>
+            <p class="font-bold text-warmText" id="diagBlockReason">-</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">距上次请求</p>
+            <p class="font-bold text-warmText" id="diagTriggerGap">0.0s</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">Pending Timing</p>
+            <p class="font-bold text-warmText" id="diagPendingTiming">0</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">平均 RTT</p>
+            <p class="font-bold text-warmText" id="diagAvgRtt">0.00s</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">智能冷却</p>
+            <p class="font-bold text-warmText" id="diagCooldown">0ms</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">高 RTT</p>
+            <p class="font-bold text-warmText" id="diagHighRtt">否</p>
+          </div>
+          <div class="rounded-2xl bg-cream px-4 py-3">
+            <p class="text-gray-400">RTT 样本数</p>
+            <p class="font-bold text-warmText" id="diagRttHistoryLen">0</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4 text-sm">
+          <div class="rounded-2xl bg-white border border-softPeach/60 px-4 py-3">
+            <p class="text-gray-400 mb-1">最近 RTT 样本</p>
+            <p class="font-semibold text-warmText break-all" id="diagRecentRttSamples">[]</p>
+          </div>
+          <div class="rounded-2xl bg-white border border-softPeach/60 px-4 py-3">
+            <p class="text-gray-400 mb-1">Runtime 摘要</p>
+            <p class="font-semibold text-warmText break-all" id="diagRuntimeStats">等待诊断数据...</p>
+          </div>
+        </div>
+        <pre id="diagnosticReportPreview" class="rounded-2xl bg-cream px-4 py-3 text-xs text-warmText whitespace-pre-wrap overflow-x-auto">等待诊断数据...</pre>
+      </div>
+
+      <div class="card p-6 mt-6">
         <h3 class="text-lg font-bold text-warmText mb-2">弹幕场次记录</h3>
         <p class="text-sm text-gray-400 mb-4">每次「生成弹幕」至「停止弹幕」为一轮；仅保留当前应用运行期间的记录</p>
         <div id="sessionRunLog" class="session-run-log" role="log" aria-live="polite">
@@ -214,7 +278,7 @@
       </div>
     </section>
 
-    <!-- 助手设置 -->
+    <!-- section: 助手设置（PUT /api/config → ConfigService） -->
     <section id="page-settings" class="page-panel">
       <header class="mb-8">
         <h2 class="text-2xl font-bold text-warmText">助手设置</h2>
@@ -244,7 +308,7 @@
             <div class="md:col-span-2">
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-tag"></use></svg>服务商预设</label>
               <select id="providerPreset" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                <option value="">手动填写</option>
+                <option value="">自定义</option>
               </select>
             </div>
             <div>
@@ -310,8 +374,8 @@
               </button>
               <span id="micTestStatus" class="text-xs text-gray-400">「测试麦克风」只检查有没有声音，不会联网；「测试发送」会录音并请求 AI。请先点「保存配置」再测。用蓝牙耳机时，请在 Windows「设置 → 系统 → 声音 → 输入」里把耳机设为默认麦克风。</span>
             </div>
-            <div class="settings-full-only">
-              <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-brain"></use></svg>记忆模式</label>
+            <div>
+              <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-brain"></use></svg>记忆模式（实验）</label>
               <select id="memory_mode" name="memory_mode" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
                 <option value="off">关闭</option>
                 <option value="dedup_only">轻量（只防重复）</option>
@@ -320,18 +384,9 @@
               </select>
               <p class="text-xs text-gray-400 mt-1">只在本次运行期间记住最近弹幕和画面要点，关闭程序后不会保留；若记忆与当前屏幕不一致，以当前识图结果为准。</p>
             </div>
-            <div class="settings-full-only">
+            <div>
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-ruler"></use></svg>记忆窗口（条）</label>
               <input type="number" id="memory_window" name="memory_window" min="1" max="20" step="1" value="10" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-            </div>
-            <div class="settings-full-only realtime-only-field">
-              <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-thermo"></use></svg>场景切换清理</label>
-              <select id="memory_clear_policy" name="memory_clear_policy" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                <option value="strict">严格（全部清空）</option>
-                <option value="medium">中等（保留稳定事实）</option>
-                <option value="loose">宽松（保留摘要与少量弹幕）</option>
-              </select>
-              <p id="memoryClearNormalHint" class="text-xs text-gray-500 mt-1 hidden" role="note">普通模式下不进行场景探测，此项已灰显；切回实时模式后生效。</p>
             </div>
           </div>
           <div id="customModelsSection" class="settings-full-only space-y-3">
@@ -359,18 +414,8 @@
           <h3 class="text-lg font-bold text-warmText flex items-center gap-2">
             <svg class="ui-icon text-warmPink" aria-hidden="true"><use href="#i-message"></use></svg> 弹幕与显示
           </h3>
-          <div class="settings-section space-y-3">
-            <label for="danmu_display_mode" class="settings-field-label">弹幕显示模式</label>
-            <div class="settings-field">
-              <select name="danmu_display_mode" id="danmu_display_mode" class="settings-field-control text-left">
-                <option value="normal">普通模式（默认）</option>
-                <option value="realtime">实时模式（实验）</option>
-              </select>
-            </div>
-            <p class="settings-section-hint">普通模式（默认）：按固定间隔识图，一次生成一整批弹幕。实时模式（实验）：约每秒看一次屏幕，节奏更灵敏；切换时会提示并自动进入全面模式。</p>
-          </div>
-          <div id="normalModeOptions" class="settings-section space-y-3 hidden">
-            <p class="settings-section-title">普通模式 · 每批弹幕</p>
+          <div id="normalModeOptions" class="settings-section space-y-3">
+            <p class="settings-section-title">每批弹幕</p>
             <div class="settings-params-grid cols-2">
               <div class="settings-field">
                 <label for="normal_recognition_interval_sec" class="settings-field-label">识别间隔（秒）</label>
@@ -383,21 +428,6 @@
             </div>
             <p id="normalBatchTotalHint" class="settings-section-hint">每次固定 5 条 · 保存后会同步到人格工坊的「输出契约」</p>
             <pre id="normalBatchContractPreview" class="settings-contract-preview"></pre>
-          </div>
-          <div id="realtimeModeOptions" class="settings-section space-y-3">
-            <p class="settings-section-title">实时模式 · 每批弹幕</p>
-            <div class="settings-params-grid cols-2">
-              <div class="settings-field">
-                <label for="reply_scene_count" class="settings-field-label">符合当前画面的弹幕数</label>
-                <input type="number" name="reply_scene_count" id="reply_scene_count" min="2" max="7" step="1" class="settings-field-control">
-              </div>
-              <div class="settings-field">
-                <label for="reply_filler_count" class="settings-field-label">泛用弹幕</label>
-                <input type="number" name="reply_filler_count" id="reply_filler_count" min="2" max="7" step="1" class="settings-field-control">
-              </div>
-            </div>
-            <p id="replyBatchTotalHint" class="settings-section-hint">合计 5 条 · 保存后会同步到人格工坊的「输出契约」</p>
-            <pre id="replyBatchContractPreview" class="settings-contract-preview"></pre>
           </div>
           <p class="settings-section-title mt-2">外观与行为</p>
           <div class="settings-params-grid cols-3">
@@ -425,14 +455,6 @@
               <label for="dedup_threshold" class="settings-field-label">去重阈值</label>
               <input type="number" name="dedup_threshold" id="dedup_threshold" min="0" max="1" step="0.05" class="settings-field-control">
             </div>
-            <div class="settings-field settings-full-only realtime-only-field">
-              <label for="freshness" class="settings-field-label">新鲜度</label>
-              <select name="freshness" id="freshness" class="settings-field-control text-left">
-                <option value="loose">宽松</option>
-                <option value="medium">中等</option>
-                <option value="strict">严格</option>
-              </select>
-            </div>
             <div class="settings-field">
               <label for="layout_mode" class="settings-field-label">布局</label>
               <select name="layout_mode" id="layout_mode" class="settings-field-control text-left">
@@ -446,10 +468,6 @@
               <label for="hotkey" class="settings-field-label">全局快捷键</label>
               <input type="text" name="hotkey" id="hotkey" class="settings-field-control" placeholder="Ctrl+Shift+B">
             </div>
-            <div id="minOnScreenWrap" class="settings-field pool-min-on-screen">
-              <label for="min_on_screen" class="settings-field-label">最小同屏条数</label>
-              <input type="number" name="min_on_screen" id="min_on_screen" min="0" max="50" value="5" class="settings-field-control">
-            </div>
             <div class="settings-field settings-full-only">
               <label for="eviction_mode" class="settings-field-label">退场模式</label>
               <select name="eviction_mode" id="eviction_mode" class="settings-field-control text-left">
@@ -458,14 +476,10 @@
               </select>
             </div>
           </div>
-          <p id="danmuRealtimeOnlyHint" class="settings-section-hint hidden mb-2" role="note">当前为普通模式：新鲜度与「丢掉过时的 AI 回复」只在实时模式下生效，已暂时灰显。</p>
           <p class="settings-section-title">开关选项</p>
           <div class="settings-toggle-row">
-            <label class="flex items-center gap-2"><input type="checkbox" id="danmu_pool_enabled" class="accent-warmPink"> 内置中文短句库</label>
-            <label class="realtime-only-field flex items-center gap-2"><input type="checkbox" id="drop_stale" class="accent-warmPink"> 丢掉过时的 AI 回复</label>
             <label class="flex items-center gap-2"><input type="checkbox" id="empty_accel" class="accent-warmPink"> 空轨道时加速补位</label>
           </div>
-          <p id="danmuPoolMinHint" class="settings-section-hint hidden">关闭后不会使用内置中文短句库（AI 较慢、网络卡住或同屏条数不够时，改用程序自带的少量兜底文案）。开启后可设置「最小同屏条数」，屏幕上弹幕太少时会自动从句库补几条。</p>
         </div>
 
         <!-- 节奏与图像 -->
@@ -473,29 +487,8 @@
           <h3 class="text-lg font-bold text-warmText flex items-center gap-2">
             <svg class="ui-icon text-warmPink" aria-hidden="true"><use href="#i-gauge"></use></svg> 节奏与截图策略
           </h3>
-          <p id="rhythmRealtimeOnlyHint" class="settings-section-hint hidden" role="note">
-            当前为普通模式：识图间隔在「弹幕显示」里设置。下面几项（截图间隔、频率模式、截图策略、场景探测精度）只在实时模式下可用，已暂时灰显。
-          </p>
           <p class="settings-section-title">识图节奏与压缩</p>
           <div class="settings-params-grid cols-3">
-            <div class="settings-field settings-full-only realtime-only-field">
-              <label for="screenshot_interval" class="settings-field-label">截图间隔 (秒)</label>
-              <input type="number" name="screenshot_interval" id="screenshot_interval" min="1" max="30" class="settings-field-control">
-            </div>
-            <div class="settings-field settings-full-only realtime-only-field">
-              <label for="freq_mode" class="settings-field-label">频率模式</label>
-              <select name="freq_mode" id="freq_mode" class="settings-field-control text-left">
-                <option value="auto">自动</option>
-                <option value="manual">手动</option>
-              </select>
-            </div>
-            <div class="settings-field settings-full-only realtime-only-field">
-              <label for="capture_mode" class="settings-field-label">截图策略</label>
-              <select name="capture_mode" id="capture_mode" class="settings-field-control text-left">
-                <option value="continuous">连续</option>
-                <option value="smart">智能</option>
-              </select>
-            </div>
             <div class="settings-field">
               <label for="image_max_width" class="settings-field-label">最大宽度 (px)</label>
               <input type="number" name="image_max_width" id="image_max_width" min="256" max="4096" step="128" class="settings-field-control">
@@ -503,10 +496,6 @@
             <div class="settings-field">
               <label for="image_quality" class="settings-field-label">JPEG 质量 (%)</label>
               <input type="number" name="image_quality" id="image_quality" min="1" max="100" value="85" class="settings-field-control">
-            </div>
-            <div class="settings-field settings-full-only realtime-only-field">
-              <label for="scene_probe_size" class="settings-field-label">场景探测精度 (px)</label>
-              <input type="number" name="scene_probe_size" id="scene_probe_size" min="32" max="512" step="32" value="256" class="settings-field-control">
             </div>
           </div>
           <div id="compressPreviewSection" class="settings-section space-y-3">
@@ -542,7 +531,67 @@
       </form>
     </section>
 
+    <!-- 公式化弹幕库 -->
+    <!-- section: 公式化弹幕库（专用 API，不经 PUT /api/config） -->
+    <section id="page-danmu-pool" class="page-panel">
+      <header class="mb-8">
+        <h2 class="text-2xl font-bold text-warmText">公式化弹幕库</h2>
+        <p class="text-gray-500 mt-1">管理内置与自定义公式化短句，用于同屏不足时自动补足</p>
+      </header>
+      <div class="card p-8 space-y-8 danmu-pool-page">
+        <div class="danmu-pool-section">
+          <p class="settings-section-title">弹幕库来源</p>
+          <div class="space-y-4">
+            <label class="flex items-center gap-2 font-semibold text-warmText">
+              <input type="checkbox" id="poolBuiltinEnabled" class="accent-warmPink">
+              内置公式化弹幕库
+            </label>
+            <p class="settings-section-hint">启用后，系统会从内置公式化弹幕库中抽取短句，用于弹幕不足时补足。<span id="poolBuiltinCountHint" class="ml-1"></span></p>
+            <label class="flex items-center gap-2 font-semibold text-warmText">
+              <input type="checkbox" id="poolCustomEnabled" class="accent-warmPink">
+              自定义公式化弹幕库
+            </label>
+            <p class="settings-section-hint">启用后，系统会从你保存的自定义弹幕句中抽取短句，用于弹幕不足时补足。</p>
+          </div>
+        </div>
+        <div class="danmu-pool-section">
+          <p class="settings-section-title">补足规则</p>
+          <div id="poolMinOnScreenWrap" class="settings-field pool-min-on-screen max-w-xs">
+            <label for="poolMinOnScreen" class="settings-field-label">最小同屏条数</label>
+            <input type="number" id="poolMinOnScreen" min="0" max="50" value="5" class="settings-field-control">
+          </div>
+          <p class="settings-section-hint">当屏幕上的弹幕少于该数量时，会从已启用的公式化弹幕库中抽取短句补足。</p>
+          <p id="poolBothOffHint" class="settings-section-hint hidden">如果两个弹幕库都关闭，则不会进行公式化弹幕补足。</p>
+          <button type="button" id="btnSavePoolSettings" class="btn-primary mt-4 px-6 py-2 text-white rounded-xl font-bold shadow-warm">保存设置</button>
+        </div>
+        <div class="danmu-pool-section">
+          <p class="settings-section-title">追加自定义句</p>
+          <p class="settings-section-hint mb-2">一行一条。建议短句，中文约 15 字以内，英文约 40 字符以内。</p>
+          <textarea id="poolCustomTextarea" rows="6" class="danmu-pool-textarea w-full px-4 py-3 bg-cream rounded-xl text-warmText border border-softPeach" placeholder="太真实了&#10;这也行？"></textarea>
+          <div class="flex flex-wrap gap-3 mt-3">
+            <button type="button" id="btnPoolCustomAppend" class="btn-primary px-6 py-2 text-white rounded-xl font-bold shadow-warm">保存 / 追加</button>
+            <button type="button" id="btnPoolCustomClearInput" class="px-6 py-2 bg-white border border-gray-200 rounded-xl font-semibold text-warmText hover:bg-gray-50">清空输入</button>
+          </div>
+        </div>
+        <div class="danmu-pool-section">
+          <div class="flex flex-wrap items-center gap-4 mb-3">
+            <p class="settings-section-title mb-0">已保存自定义句</p>
+            <span id="poolCustomCount" class="text-sm text-gray-500">共 0 条</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <label class="flex items-center gap-2 text-sm font-semibold text-warmText">
+              <input type="checkbox" id="poolCustomSelectAll" class="accent-warmPink">
+              全选
+            </label>
+            <button type="button" id="btnPoolCustomDelete" class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-warmText hover:bg-gray-50">删除选中</button>
+          </div>
+          <ul id="poolCustomList" class="danmu-pool-custom-list space-y-2"></ul>
+        </div>
+      </div>
+    </section>
+
     <!-- 人格工坊 -->
+    <!-- section: 人格工坊 -->
     <section id="page-persona" class="page-panel">
       <header class="mb-8">
         <h2 class="text-2xl font-bold text-warmText">人格工坊</h2>
@@ -591,6 +640,31 @@
           rel="noopener noreferrer"
           class="tutorial-link break-all"
         >https://rcnp42h3qtlx.feishu.cn/wiki/BKiMwLW1tipDY5kzrOYcsvBNnTg</a>
+      </div>
+    </section>
+
+    <!-- 问题反馈 -->
+    <section id="page-feedback" class="page-panel" aria-label="问题反馈">
+      <header class="mb-8 flex flex-wrap justify-between items-start gap-4">
+        <div>
+          <h2 class="text-2xl font-bold text-warmText">问题反馈</h2>
+          <p class="text-gray-500 mt-1">加入社群或在群内 @ 我，比私信更不容易触发平台限制</p>
+        </div>
+        <button type="button" id="btnFeedbackReward" class="feedback-reward-fab shrink-0">赞赏</button>
+      </header>
+      <div class="card feedback-page p-8">
+        <p class="feedback-notice text-warmText">
+          有任何问题可以在qq群/抖音群/小红书群内@我，因为最近很多人私信我，我一一回答后系统警告我，说我在做不好的事情，谢谢大家理解，邮箱：utar00701233@163.com
+        </p>
+        <div class="feedback-qr-wrap">
+          <img
+            src="/static/image/qrcode_1779738450536.jpg"
+            alt="DanmuAI QQ 群二维码，群号 677218917"
+            class="feedback-qr-img"
+            width="320"
+            height="320"
+          >
+        </div>
       </div>
     </section>
 
@@ -671,6 +745,21 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260526-tutorial-link"></script>
+  <!-- 赞赏码模态框 -->
+  <div id="rewardModal" class="fixed inset-0 bg-black/20 backdrop-blur-sm hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="rewardModalTitle">
+    <div class="bg-white rounded-3xl shadow-warm max-w-sm w-full p-8 text-center">
+      <h3 id="rewardModalTitle" class="text-lg font-bold text-warmText mb-4">赞赏</h3>
+      <img
+        src="/static/image/mm_reward_qrcode_1779738306814.png"
+        alt="微信赞赏码"
+        class="reward-qr-img mx-auto rounded-2xl"
+        width="280"
+        height="280"
+      >
+      <button type="button" id="btnRewardClose" class="mt-6 px-6 py-2 border border-gray-200 rounded-xl text-sm font-semibold text-warmText hover:bg-gray-50">关闭</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=20260527-feedback"></script>
 </body>
 </html>

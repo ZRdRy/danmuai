@@ -1,54 +1,79 @@
-# DanmuAI 文档索引
+# DanmuAI documentation
 
-本目录收录项目公开文档。入口：[README.md](../README.md)。
+Entry point: [README.md](../README.md) (install, quick start).
 
-## 入门
+## Public — start here
 
-| 文档 | 说明 |
-|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构、Web/Qt 能力矩阵、麦克风双轨、Legacy Qt UI |
-| [WEB_CONSOLE.md](WEB_CONSOLE.md) | Web API、页面地图、启动方式 |
-| [PRIVACY.md](PRIVACY.md) | 截图、麦克风、密钥与数据边界 |
+| Document | Audience | Description |
+|----------|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Everyone | What DanmuAI is, modules, threading, pipeline summary |
+| [WEB_CONSOLE.md](WEB_CONSOLE.md) | Users & contributors | Web API, pages, launch modes |
+| [MAIN_PIPELINE.md](MAIN_PIPELINE.md) | Contributors | Screenshot → AI → queue → overlay (normal mode) |
+| [RUNTIME_STATE.md](RUNTIME_STATE.md) | Contributors | Status, diagnostics, state ownership |
+| [PRIVACY.md](PRIVACY.md) | Users | Screenshot, mic, keys, data boundaries |
 
-## 规划
+## Contributing
 
-| 文档 | 说明 |
-|------|------|
-| [ROADMAP.md](ROADMAP.md) | 已完成与后续计划 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
-| [MEMORY_SYSTEM_PLAN.md](MEMORY_SYSTEM_PLAN.md) | 记忆系统设计与档位（部分已实现） |
-| [DANMU_DISPLAY_MODE_PLAN.md](DANMU_DISPLAY_MODE_PLAN.md) | 显示模式规划（普通模式等已实现） |
+| Document | Description |
+|----------|-------------|
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Dev setup, tests, PR hygiene |
+| [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md) | Architecture boundaries and checklist |
+| [BOUNDARY_GUARD.md](BOUNDARY_GUARD.md) | `scripts/boundary_guard.py` usage |
+| [AGENTS.md](../AGENTS.md) | IDE/agent conventions (dense) |
+| [DANMAKU_FORMULA.md](DANMAKU_FORMULA.md) | AI output JSON contract |
 
-## 贡献
+## Changelog & roadmap
 
-| 文档 | 说明 |
-|------|------|
-| [AGENTS.md](../AGENTS.md) | 贡献者与 Agent 开发指南 |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | 本地开发、测试与提交规范 |
-| [DANMAKU_FORMULA.md](DANMAKU_FORMULA.md) | AI 弹幕输出公式与提示词契约 |
+| Document | Description |
+|----------|-------------|
+| [ROADMAP.md](ROADMAP.md) | Planned and completed work |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+| [release/](release/) | GitHub Release 正文（按版本） |
 
-## 发布与合规
+## Release & compliance
 
-| 文档 | 说明 |
-|------|------|
-| [PACKAGING_WINDOWS.md](PACKAGING_WINDOWS.md) | Windows exe 打包流程、PyInstaller 配置与已知问题 |
-| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | 发布前检查清单 |
-| [OPEN_SOURCE_AUDIT.md](OPEN_SOURCE_AUDIT.md) | 许可证与第三方依赖审计 |
-| [SECURITY.md](../SECURITY.md) | 安全反馈流程 |
-| [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) | 社区行为准则 |
-| [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | 第三方组件许可证声明 |
-| [data/ATTRIBUTION.md](../data/ATTRIBUTION.md) | 弹幕语料 Apache-2.0 归因 |
+| Document | Description |
+|----------|-------------|
+| [release/2026-05-27.md](release/2026-05-27.md) | 当前版本发布说明 |
+| [PACKAGING_WINDOWS.md](PACKAGING_WINDOWS.md) | PyInstaller / exe |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Release steps |
+| [OPEN_SOURCE_AUDIT.md](OPEN_SOURCE_AUDIT.md) | Licenses & dependencies |
+| [SECURITY.md](../SECURITY.md) | Security reporting |
+| [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) | Community norms |
+| [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | Third-party licenses |
+| [data/ATTRIBUTION.md](../data/ATTRIBUTION.md) | Corpus attribution |
 
-## 工程参考
+## Engineering reference
 
-| 文档 | 说明 |
-|------|------|
-| [CAPTURE_AND_DANMAKU_REFERENCE.md](CAPTURE_AND_DANMAKU_REFERENCE.md) | python-mss / Danmaku.js 外部参考与集成决策 |
+| Document | Description |
+|----------|-------------|
+| [CAPTURE_AND_DANMAKU_REFERENCE.md](CAPTURE_AND_DANMAKU_REFERENCE.md) | External libs (mss, Danmaku.js) |
 
-## UI 原型
+## Maintainer registry (Boundary Guard)
 
-| 文档 | 说明 |
-|------|------|
-| [prototype/README.md](../prototype/README.md) | 原型目录说明 |
-| [prototype/Qwen_html_20260524_481u8vlmv.html](../prototype/Qwen_html_20260524_481u8vlmv.html) | Web 控制台视觉原型 |
-| [prototype/Qwen_markdown_20260525_4vyxmv819.md](../prototype/Qwen_markdown_20260525_4vyxmv819.md) | 设计令牌与组件说明 |
+These paths are **stable filenames**—do not rename without updating `scripts/boundary_guard.py` and tests.
+
+| Document | Purpose |
+|----------|---------|
+| [runtime-state-map.md](runtime-state-map.md) | Register new `DanmuApp` fields |
+| [main-pipeline-sequence.md](main-pipeline-sequence.md) | Pipeline sequence table (sync with [MAIN_PIPELINE.md](MAIN_PIPELINE.md)) |
+| [final-architecture-baseline.md](final-architecture-baseline.md) | Short architecture baseline (required to exist) |
+
+## Archive
+
+Read-only history; not for first-time onboarding. Current behavior: [ARCHITECTURE.md](ARCHITECTURE.md), [WEB_CONSOLE.md](WEB_CONSOLE.md).
+
+| Path | Contents |
+|------|----------|
+| [archive/README.md](archive/README.md) | Archive index |
+| [archive/architecture-phases/](archive/architecture-phases/) | Phase 1–5 boundary plans (summaries) |
+| [archive/planning/](archive/planning/) | Superseded feature plans (memory, display mode, …) |
+| [archive/qt6_ui_redesign_plan.md](archive/qt6_ui_redesign_plan.md) | Removed Qt main window |
+
+## UI prototype
+
+| Document | Description |
+|----------|-------------|
+| [prototype/README.md](../prototype/README.md) | Prototype folder |
+| [prototype/Qwen_html_20260524_481u8vlmv.html](../prototype/Qwen_html_20260524_481u8vlmv.html) | Web UI reference |
+| [prototype/Qwen_markdown_20260525_4vyxmv819.md](../prototype/Qwen_markdown_20260525_4vyxmv819.md) | Design tokens |

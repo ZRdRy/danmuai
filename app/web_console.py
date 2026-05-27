@@ -1,4 +1,16 @@
-"""Local web console for DanmuAI (warm Qwen prototype UI)."""
+"""DanmuAI Web 控制台：FastAPI + uvicorn 独立线程，静态页 web/static。
+
+线程安全（核心约束）：
+- HTTP/WebSocket 在 **uvicorn 线程**；DanmuApp / DanmuEngine / Overlay 在 **Qt 主线程**。
+- **禁止**在路由处理器里直接调用 danmu_app.start()、改 config 触达 engine、操作 QWidget。
+- 须经 **WebConsoleBridge** 的 pyqtSignal（如 save_config_requested、start_requested）：
+  Qt 将槽排队到主线程执行；save_config 用 emit 而非 QTimer.singleShot（后者在 uvicorn 线程常不触发）。
+
+鉴权：启动时生成随机 token；写操作 Header `Authorization: Bearer <token>`；WS 用 query ws_token。
+默认 127.0.0.1:18765，仅本机访问。
+
+调用：main.DanmuApp.__init__ → attach_web_console()。
+"""
 
 from __future__ import annotations
 
@@ -15,8 +27,12 @@ from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
+from app.application.config_service import (
+    MASKED_API_KEY,
+    WEB_CONFIG_KEYS,
+    apply_web_config_patch,
+)
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen, resource_path
-from app.scene_fingerprint import DEFAULT_SCENE_PROBE_SIZE, clamp_scene_probe_size
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -24,7 +40,6 @@ if TYPE_CHECKING:
 STATIC_DIR = resource_path("web", "static")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18765
-MASKED_API_KEY = "********"
 
 
 def _prepare_stdio_for_uvicorn() -> None:
@@ -54,7 +69,7 @@ def _enqueue_ws(
     queue: asyncio.Queue,
     item: Any,
 ) -> None:
-    """Thread-safe enqueue; drop oldest entry when the queue is full."""
+    """主线程 → asyncio 线程安全入队；队列满时丢最旧一条，保证 WS 推送不阻塞 UI。"""
 
     def _put() -> None:
         try:
@@ -70,75 +85,6 @@ def _enqueue_ws(
                 pass
 
     loop.call_soon_threadsafe(_put)
-
-
-# Keys exposed to the web settings form (subset of Qt settings panel).
-WEB_CONFIG_KEYS = (
-    "api_endpoint",
-    "api_mode",
-    "model",
-    "temperature",
-    "max_tokens",
-    "screenshot_interval",
-    "danmu_speed",
-    "danmu_lines",
-    "danmu_max_chars",
-    "dedup_threshold",
-    "screen_index",
-    "layout_mode",
-    "opacity",
-    "font_size",
-    "freq_mode",
-    "capture_mode",
-    "danmu_pool_enabled",
-    "min_on_screen",
-    "freshness",
-    "drop_stale",
-    "empty_accel",
-    "eviction_mode",
-    "image_max_width",
-    "image_quality",
-    "scene_probe_size",
-    "hotkey",
-    "memory_mode",
-    "memory_window",
-    "memory_clear_policy",
-    "mic_mode_enabled",
-    "mic_window_sec",
-    "reply_scene_count",
-    "reply_filler_count",
-    "danmu_display_mode",
-    "normal_recognition_interval_sec",
-    "normal_reply_count",
-)
-
-
-def _clamp_choice(
-    items: dict[str, str],
-    key: str,
-    allowed: tuple[str, ...],
-    default: str,
-) -> None:
-    if key not in items:
-        return
-    value = str(items[key]).strip().lower()
-    items[key] = value if value in allowed else default
-
-
-def _clamp_int_key(
-    items: dict[str, str],
-    key: str,
-    default: int,
-    min_value: int,
-    max_value: int,
-) -> None:
-    if key not in items:
-        return
-    try:
-        v = int(items[key])
-        items[key] = str(max(min_value, min(v, max_value)))
-    except (TypeError, ValueError):
-        items[key] = str(default)
 
 
 def enumerate_screens() -> list[dict[str, Any]]:
@@ -198,20 +144,6 @@ def _mask_api_key(config) -> str:
     return MASKED_API_KEY if config.get_api_key() else ""
 
 
-def _submitted_api_key(value: Any) -> str:
-    key = str(value or "").strip()
-    if not key or key == MASKED_API_KEY:
-        return ""
-    return key
-
-
-def _custom_model_identity(model: dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(model.get("modelId") or model.get("model") or "").strip(),
-        str(model.get("name") or "").strip(),
-    )
-
-
 def export_config(config) -> dict[str, Any]:
     from app.config_defaults import config_value_with_default
     from app.model_providers import model_likely_supports_mic_audio, resolve_active_model_id
@@ -227,17 +159,9 @@ def export_config(config) -> dict[str, Any]:
     data["custom_models"] = [
         _mask_model(m) for m in config.get_custom_models() if isinstance(m, dict)
     ]
-    from app.personae import (
-        is_normal_display_mode,
-        normal_reply_count_from_config,
-        reply_counts_from_config,
-    )
+    from app.personae import normal_reply_count_from_config
 
-    if is_normal_display_mode(config):
-        data["reply_batch_total"] = normal_reply_count_from_config(config)
-    else:
-        scene, filler = reply_counts_from_config(config)
-        data["reply_batch_total"] = scene + filler
+    data["reply_batch_total"] = normal_reply_count_from_config(config)
     return data
 
 
@@ -254,148 +178,17 @@ def extract_config_payload(body: Any) -> dict[str, Any]:
 
 
 def apply_config_patch(danmu_app: "DanmuApp", payload: dict[str, Any]) -> None:
-    config = danmu_app.config
-    items: dict[str, str] = {}
-    for key in WEB_CONFIG_KEYS:
-        if key in payload and payload[key] is not None:
-            items[key] = str(payload[key])
-
-    if items:
-        # Region crop removed from Web UI; always full-screen on the selected display.
-        items["region_x"] = "0"
-        items["region_y"] = "0"
-        items["region_w"] = "0"
-        items["region_h"] = "0"
-        if "scene_probe_size" in items:
-            try:
-                items["scene_probe_size"] = str(
-                    clamp_scene_probe_size(int(items["scene_probe_size"]))
-                )
-            except (TypeError, ValueError):
-                items["scene_probe_size"] = str(DEFAULT_SCENE_PROBE_SIZE)
-        if "mic_window_sec" in items:
-            from app.mic_buffer import clamp_mic_window_sec
-
-            try:
-                items["mic_window_sec"] = str(clamp_mic_window_sec(int(items["mic_window_sec"])))
-            except (TypeError, ValueError):
-                items["mic_window_sec"] = "5"
-        if "danmu_max_chars" in items:
-            from app.danmu_engine import DANMU_MAX_CHARS_MAX, DANMU_MAX_CHARS_MIN
-
-            try:
-                v = int(items["danmu_max_chars"])
-                items["danmu_max_chars"] = str(max(DANMU_MAX_CHARS_MIN, min(v, DANMU_MAX_CHARS_MAX)))
-            except (TypeError, ValueError):
-                items["danmu_max_chars"] = "15"
-        if "danmu_lines" in items:
-            from app.danmu_engine import DEFAULT_DANMU_LINES, clamp_danmu_lines
-
-            try:
-                items["danmu_lines"] = str(clamp_danmu_lines(int(items["danmu_lines"])))
-            except (TypeError, ValueError):
-                items["danmu_lines"] = str(DEFAULT_DANMU_LINES)
-        if "layout_mode" in items:
-            from app.danmu_engine import normalize_layout_mode
-
-            items["layout_mode"] = normalize_layout_mode(items["layout_mode"])
-        if "reply_scene_count" in items or "reply_filler_count" in items:
-            from app.personae import (
-                DEFAULT_REPLY_FILLER_COUNT,
-                DEFAULT_REPLY_SCENE_COUNT,
-                REPLY_COUNT_MAX,
-                REPLY_COUNT_MIN,
-            )
-
-            def _clamp_reply_key(key: str, default: int) -> None:
-                if key not in items:
-                    return
-                try:
-                    v = int(items[key])
-                    items[key] = str(max(REPLY_COUNT_MIN, min(v, REPLY_COUNT_MAX)))
-                except (TypeError, ValueError):
-                    items[key] = str(default)
-
-            _clamp_reply_key("reply_scene_count", DEFAULT_REPLY_SCENE_COUNT)
-            _clamp_reply_key("reply_filler_count", DEFAULT_REPLY_FILLER_COUNT)
-        if (
-            "danmu_display_mode" in items
-            or "normal_recognition_interval_sec" in items
-            or "normal_reply_count" in items
-        ):
-            from app.personae import DEFAULT_NORMAL_REPLY_COUNT
-
-            _clamp_choice(items, "danmu_display_mode", ("realtime", "normal"), "normal")
-            _clamp_int_key(items, "normal_recognition_interval_sec", 5, 1, 60)
-            _clamp_int_key(
-                items,
-                "normal_reply_count",
-                DEFAULT_NORMAL_REPLY_COUNT,
-                1,
-                20,
-            )
-        if (
-            "memory_mode" in items
-            or "memory_clear_policy" in items
-            or "memory_window" in items
-        ):
-            _clamp_choice(
-                items,
-                "memory_mode",
-                ("off", "dedup_only", "scene_card", "strong"),
-                "off",
-            )
-            _clamp_choice(items, "memory_clear_policy", ("strict", "medium", "loose"), "medium")
-            _clamp_int_key(items, "memory_window", 10, 1, 20)
-        config.set_batch(items)
-        model_id = (items.get("model") or "").strip()
-        if model_id:
-            config.set_default_model_id(model_id)
-
-    api_key = _submitted_api_key(payload.get("api_key", ""))
-    if api_key:
-        config.set_api_key(api_key)
-
-    if "default_model_id" in payload:
-        model_id = str(payload.get("default_model_id", "")).strip()
-        if model_id:
-            config.set_default_model_id(model_id)
-            config.set("model", model_id)
-
-    if "custom_models" in payload and isinstance(payload["custom_models"], list):
-        from app.web_api.custom_models import MASKED_KEY
-
-        existing = [m for m in config.get_custom_models() if isinstance(m, dict)]
-        existing_by_identity = {
-            _custom_model_identity(m): m
-            for m in existing
-            if any(_custom_model_identity(m))
-        }
-        merged: list[dict] = []
-        for i, inc in enumerate(payload["custom_models"]):
-            if not isinstance(inc, dict):
-                continue
-            row = dict(inc)
-            key = (row.get("apiKey") or row.get("api_key") or "").strip()
-            prev = existing_by_identity.get(_custom_model_identity(row))
-            if prev is None and i < len(existing):
-                prev = existing[i]
-            if key == MASKED_KEY and prev:
-                row["apiKey"] = prev.get("apiKey", "")
-            elif key == MASKED_KEY:
-                row["apiKey"] = ""
-            merged.append(row)
-        config.set_custom_models(merged)
-
-    active = payload.get("active_personae")
-    if isinstance(active, list) and active:
-        danmu_app.personae.set_active([str(name) for name in active])
-
-    danmu_app.config_changed.emit()
+    """主线程执行：委托 ConfigService 统一处理 Web 配置 patch。"""
+    apply_web_config_patch(danmu_app, payload)
 
 
 class WebConsoleBridge(QObject):
-    """Thread-safe bridge: HTTP worker threads → Qt main thread."""
+    """HTTP/WS 工作线程与 Qt 主线程之间的唯一写入口。
+
+    模式：uvicorn 路由里只 bridge.xxx_requested.emit(...)；槽在主线程调 DanmuApp。
+    publish_status / _broadcast_* 从主线程经 call_soon_threadsafe 喂 asyncio 队列推 WS。
+    日志环 _log_ring 供 /api/logs 与 /ws/logs 回放；状态 500ms 定时器在 attach 时挂到 danmu_app。
+    """
 
     log_received = pyqtSignal(str, str)
     status_updated = pyqtSignal(object)
@@ -475,63 +268,9 @@ class WebConsoleBridge(QObject):
         )
 
     def refresh_status(self) -> WebStatusSnapshot:
-        app = self.danmu_app
-        running = app.engine.running
-        queue_count = app.reply_buffer.size() if hasattr(app.reply_buffer, "size") else 0
-        display_count = app._visible_display_count() if hasattr(app, "_visible_display_count") else 0
-        input_tokens = int(getattr(app, "_total_input_tokens", 0) or 0)
-        output_tokens = int(getattr(app, "_total_output_tokens", 0) or 0)
-        total_tokens = input_tokens + output_tokens
-        runtime = time.monotonic() - app._start_time if app._start_time > 0 else 0.0
-
-        snapshot = app._build_live_status_snapshot() if running else None
-        error_message = getattr(app, "_web_error_message", "") or ""
-        is_error = bool(getattr(app, "_web_error_is_error", False))
-
-        from app.danmu_engine import dedup_profile_enabled
-        from app.personae import persona_display_name
-
-        dedup_profile = None
-        if dedup_profile_enabled():
-            dedup_profile = app.engine.get_dedup_profile_snapshot()
-
-        lifetime = {}
-        lifetime_stats = getattr(app, "lifetime_stats", None)
-        if lifetime_stats is not None:
-            lifetime = lifetime_stats.snapshot(session_runtime_sec=runtime)
-
-        session_runs: list[dict] = []
-        session_log = getattr(app, "session_run_log", None)
-        if session_log is not None:
-            session_runs = session_log.list_dicts_newest_first()
-
-        self.status = WebStatusSnapshot(
-            running=running,
-            danmu_count=app.danmu_count,
-            queue_count=queue_count,
-            display_count=display_count,
-            total_tokens=total_tokens,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            runtime_sec=runtime,
-            error_message=error_message or "",
-            is_error=is_error,
-            live_analyzing=bool(snapshot.analyzing) if snapshot else False,
-            live_local_fallback=bool(snapshot.local_fallback) if snapshot else False,
-            live_delay_sec=float(snapshot.delay_sec) if snapshot else 0.0,
-            live_stale_drops=int(snapshot.stale_drops) if snapshot else 0,
-            live_message=snapshot.primary_message() if snapshot else "",
-            persona_names=[persona_display_name(n) for n in app.personae.get_active()],
-            screen_index=app.config.get_int("screen_index", 0),
-            has_api_key=bool(app.config.get_api_key()),
-            dedup_profile=dedup_profile,
-            lifetime_danmu_count=int(lifetime.get("lifetime_danmu_count", 0)),
-            lifetime_runtime_sec=float(lifetime.get("lifetime_runtime_sec", 0.0)),
-            lifetime_total_tokens=int(lifetime.get("lifetime_total_tokens", 0)),
-            lifetime_input_tokens=int(lifetime.get("lifetime_input_tokens", 0)),
-            lifetime_output_tokens=int(lifetime.get("lifetime_output_tokens", 0)),
-            session_runs=session_runs,
-        )
+        # 唯一状态出口：禁止在此或路由内直接读取 danmu_app._xxx 再拼装 dict
+        snapshot = self.danmu_app.build_status_snapshot()
+        self.status = WebStatusSnapshot(**snapshot)
         return self.status
 
     def publish_status(self) -> None:
@@ -583,11 +322,13 @@ class WebConsoleBridge(QObject):
     @pyqtSlot(object)
     def _on_save_config(self, payload: object) -> None:
         if isinstance(payload, dict):
-            apply_config_patch(self.danmu_app, payload)
+            self.danmu_app.apply_web_config_payload(payload)
         self.publish_status()
 
 
 class WebConsoleServer:
+    """在独立线程运行 uvicorn；frozen 包用非 daemon 线程避免 Qt 初始化期间被回收。"""
+
     def __init__(self, bridge: WebConsoleBridge, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self.bridge = bridge
         self.host = host
@@ -605,12 +346,13 @@ class WebConsoleServer:
         return f"http://{self.host}:{self.port}"
 
     def start(self) -> None:
+        """启动 DanmuWebConsole 线程；就绪以 _on_uvicorn_started 置位（非 lifespan 开头）。"""
         if self._thread and self._thread.is_alive():
             return
         self._ready.clear()
         self._bind_failed.clear()
         self.startup_ok = False
-        # Frozen exe: non-daemon thread so uvicorn is not torn down during Qt/pywebview init.
+        # PyInstaller：非 daemon，避免 pywebview/Qt 尚未 enter 事件循环时守护线程被回收
         self._thread = threading.Thread(
             target=self._run,
             name="DanmuWebConsole",
@@ -641,6 +383,9 @@ class WebConsoleServer:
         self.startup_ok = True
 
     def stop(self) -> None:
+        danmu_app = self.bridge.danmu_app
+        danmu_app.stop_web_status_timer()
+        danmu_app.detach_web_status_timer()
         if self._loop and self._server:
             server = self._server
 
@@ -911,6 +656,8 @@ class WebConsoleServer:
         )
 
         class _DanmuWebUvicornServer(uvicorn.Server):
+            """在 super().startup 绑定端口成功后再 _on_uvicorn_started，避免端口未监听就打开浏览器。"""
+
             def __init__(self, cfg, owner: WebConsoleServer):
                 super().__init__(cfg)
                 self._owner = owner
@@ -956,6 +703,7 @@ class WebConsoleServer:
 
 
 def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebConsoleServer:
+    """构造 bridge + 启动 WebConsoleServer；主线程挂 500ms 状态刷新定时器。"""
     bridge = WebConsoleBridge(danmu_app)
     danmu_app.web_bridge = bridge
     server = WebConsoleServer(bridge, port=port)
@@ -981,17 +729,17 @@ def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebCo
             msg += f" 诊断日志: {frozen_log_path()}"
         danmu_app.logger.error(msg)
         append_frozen_log(msg)
-        if hasattr(danmu_app, "_set_error_status_safe"):
-            danmu_app._set_error_status_safe(msg, is_error=True)
+        danmu_app.set_web_error_status(msg, is_error=True)
 
     def _tick_status():
         if getattr(danmu_app, "web_bridge", None):
             danmu_app.web_bridge.publish_status()
 
-    danmu_app._web_status_timer = QTimer(danmu_app)
-    danmu_app._web_status_timer.setInterval(500)
-    danmu_app._web_status_timer.timeout.connect(_tick_status)
-    danmu_app._web_status_timer.start()
+    web_status_timer = QTimer(danmu_app)
+    web_status_timer.setInterval(500)
+    web_status_timer.timeout.connect(_tick_status)
+    danmu_app.attach_web_status_timer(web_status_timer)
+    web_status_timer.start()
 
     def _cache_screens():
         bridge.cached_screens = enumerate_screens()

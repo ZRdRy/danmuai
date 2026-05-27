@@ -1,3 +1,13 @@
+"""Qt 透明置顶弹幕叠加层：60fps 脏区重绘 + Win32 鼠标穿透。
+
+架构：
+- DanmuOverlay 全屏透明 QWidget，DanmuEngine.update 驱动位置；本模块只负责绘制。
+- 有动画/淡入淡出/加速时 16ms PreciseTimer；无内容时停表省电（needs_render_tick）。
+- Win32：在 show 后对原生 HWND 叠加 WS_EX_LAYERED | WS_EX_TRANSPARENT，点击落到下层窗口。
+- 淡入（右侧 FADE_IN_PX）/ 淡出（左侧 FADE_OUT_PX）分段 alpha；弹幕文本预渲染为 QPixmap 描边+填充。
+
+调用方：DanmuApp.start() → show_for_screen + start_render_loop；engine.add_text → prepare_item_pixmap。
+"""
 import ctypes
 import logging
 import os
@@ -53,11 +63,17 @@ def overlay_profile_enabled() -> bool:
 
 
 class DanmuOverlay(QWidget):
+    """透明置顶弹幕渲染适配层：测量宽度、预渲染 pixmap、60fps 脏区绘制。
+
+    不调度 AI、不消费回复队列、不写 ConfigStore；_target_interval_ms 在无动画或不可见时返回 0 以停表省电。
+    """
+
     def __init__(self, config: ConfigStore, engine: DanmuEngine):
         super().__init__()
         self.config = config
         self.engine = engine
 
+        # Frameless+TopMost+Tool：无边框置顶且不占任务栏；BypassWindowManagerHint 减少 WM 抢焦点
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -93,6 +109,12 @@ class DanmuOverlay(QWidget):
         self.font_metrics = QFontMetrics(self.font)
 
     def _apply_win32_click_through(self):
+        """Win32 原生层点击穿透：在 Qt 已设 WA_TransparentForMouseEvents 后再 OR 扩展样式位。
+
+        WS_EX_LAYERED：分层窗口，与 WA_TranslucentBackground 配合 alpha 合成。
+        WS_EX_TRANSPARENT：命中测试穿透，鼠标事件交给下层游戏/桌面；缺一则可能挡操作。
+        须在 show() 后调用（winId() 有效）。仅 win32 执行。
+        """
         if sys.platform != "win32":
             return
         hwnd = int(self.winId())
@@ -101,6 +123,7 @@ class DanmuOverlay(QWidget):
                        ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT)
 
     def _has_animatable_content(self) -> bool:
+        """是否仍需 60fps：引擎内加速剩余、淡入淡出区或屏上可见条任一成立。"""
         return self.engine.needs_render_tick()
 
     def start_render_loop(self) -> None:
@@ -294,6 +317,11 @@ class DanmuOverlay(QWidget):
         )
 
     def _tick(self):
+        """单帧：算 dt → 运动前/后脏区并集 → engine.update → 仅 update(dirty rect)。
+
+        脏区在位移 margin 内 union，避免长弹幕拖影；屏外条目仍由 engine 更新但不 paint。
+        无 animatable 内容时 stop_render_loop，避免空转 QTimer。
+        """
         if not self.isVisible():
             return
         if not self._has_animatable_content():
@@ -344,6 +372,7 @@ class DanmuOverlay(QWidget):
         item.width = float(self.font_metrics.horizontalAdvance(item.content))
 
     def prepare_item_pixmap(self, item: DanmuItem) -> None:
+        """预渲染弹幕为带描边的 QPixmap，paintEvent 只 drawPixmap + 透明度，减轻每帧文本布局。"""
         if item.width <= 0:
             self.measure_item_width(item)
         if item._pixmap is None:
@@ -384,6 +413,7 @@ class DanmuOverlay(QWidget):
         return pm
 
     def _item_opacity(self, item) -> float:
+        """右侧 FADE_IN_PX 渐入、左侧 FADE_OUT_PX 渐出；取 min 并分桶缓存避免每帧重算。"""
         screen_width = self._screen_width or float(self.width())
         if screen_width <= 0:
             return 1.0
@@ -442,6 +472,11 @@ class DanmuOverlay(QWidget):
         return max(1, int(round(self.engine.screen_height * ratio)))
 
     def show_for_screen(self, screen_index: int = 0, *, reload_tracks: bool | None = None):
+        """对齐指定显示器 geometry，同步 engine 屏宽高；几何或 layout 变时 reload_tracks。
+
+        reload_tracks=None 时仅在 geo_key 变化时重载轨道，避免配置刷新时清空可见弹幕。
+        show 后必须 _apply_win32_click_through，否则 Windows 上可能拦截点击。
+        """
         screens = QApplication.screens()
         if screen_index < len(screens):
             geo = screens[screen_index].geometry()

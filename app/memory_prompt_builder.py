@@ -1,4 +1,9 @@
-"""Build three-section memory prompt blocks with character budgets."""
+"""记忆提示词组装器：将 SceneContextMemory + BulletDedupMemory 拼成结构化文本块，注入 AI 用户提示词。
+
+独立模块原因：prompt 组装涉及字符预算分配、section 排序、mode 分支，放在 main.py 会加剧上帝类膨胀。
+
+调用链：SceneMemoryStore.format_prompt_for_generation() → build_memory_prompt_block() → append_memory_to_user_pt() → DanmuApp._build_user_pt()
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,9 @@ from app.memory.bullet_dedup import BulletDedupMemory
 from app.memory.scene_context import SceneContextMemory
 from app.memory.types import MEMORY_MODE_DEDUP_ONLY, MEMORY_MODE_STRONG
 
-BUDGET_DEDUP_ONLY = 220
-BUDGET_SCENE_CARD = 450
-BUDGET_STRONG = 700
+BUDGET_DEDUP_ONLY = 220  # 仅去重段，字符预算最小
+BUDGET_SCENE_CARD = 450  # 默认：场景状态 + 去重 + 约束
+BUDGET_STRONG = 700  # 更大预算，容纳 carryover 摘要和更多 stable facts
 
 _CONFLICT_LINE = "必须以当前截图为最高优先级；以上记忆仅作辅助，冲突时忽略记忆。"
 
@@ -18,6 +23,7 @@ def _join_list(items: list[str], sep: str = "；") -> str:
 
 
 def build_scene_state_section(ctx: SceneContextMemory) -> str:
+    """场景状态段：输出场景类型/摘要/stable/volatile/threads/focus/tone；context 为空或无 tone_hint 时返回空块。"""
     if ctx.is_empty() and not ctx.tone_hint:
         return ""
     lines = ["【当前场景状态】"]
@@ -41,6 +47,7 @@ def build_scene_state_section(ctx: SceneContextMemory) -> str:
 
 
 def build_dedup_section(dedup: BulletDedupMemory) -> str:
+    """去重提示段：输出最近上屏弹幕/已用角度/避免角度；无记录时返回空块。"""
     if dedup.is_empty():
         return ""
     lines = ["【最近弹幕去重】"]
@@ -57,6 +64,7 @@ def build_dedup_section(dedup: BulletDedupMemory) -> str:
 
 
 def build_constraints_section() -> str:
+    """约束声明段：输出冲突优先级声明和生成约束。"""
     return "\n".join(
         [
             "【生成约束】",
@@ -76,6 +84,7 @@ def _budget_for_mode(memory_mode: str) -> int:
 
 
 def _trim_to_budget(parts: list[str], budget: int) -> str:
+    """按字符预算裁剪：约束段不可裁剪（安全声明），body 段超长时截断并加「...」。"""
     block = "\n\n".join(p for p in parts if p)
     if len(block) <= budget:
         return block
@@ -96,22 +105,26 @@ def build_memory_prompt_block(
     memory_mode: str,
 ) -> str:
     mode = (memory_mode or "off").strip().lower()
+    # off 模式：不注入任何记忆提示词
     if mode == "off":
         return ""
 
     constraints = build_constraints_section()
     dedup_sec = build_dedup_section(dedup)
 
+    # dedup_only：仅拼去重段 + 约束，字符预算最小
     if mode == MEMORY_MODE_DEDUP_ONLY:
         parts = [p for p in (dedup_sec, constraints) if p]
         return _trim_to_budget(parts, _budget_for_mode(mode))
 
+    # scene_card / strong：拼场景状态 + 去重 + 约束，strong 预算更大
     scene_sec = build_scene_state_section(ctx)
     parts = [p for p in (scene_sec, dedup_sec, constraints) if p]
     return _trim_to_budget(parts, _budget_for_mode(mode))
 
 
 def append_memory_to_user_pt(user_pt: str, block: str) -> str:
+    """将记忆块追加到用户提示词末尾；由 DanmuApp._build_user_pt 调用。"""
     if not block:
         return user_pt
     return f"{user_pt.rstrip()}\n\n{block}"

@@ -212,6 +212,13 @@ def test_dedup_profile_records_fallback_path(engine, dedup_profile_on, monkeypat
     assert snap["similarity_fallback_calls"] >= 1
 
 
+def test_danmu_count_on_uninitialized_danmu_app():
+    """DanmuApp.__new__ without QObject.__init__ must not raise via stats facade."""
+    app = DanmuApp.__new__(DanmuApp)
+    app.danmu_count = 3
+    assert app.danmu_count == 3
+
+
 def test_maybe_log_dedup_profile_throttles(monkeypatch):
     from main import DanmuApp
 
@@ -322,7 +329,6 @@ def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
         "tray": tray,
         "ai_worker": type("W", (), {"reset_stopping": lambda *a, **k: None})(),
         "screenshot_timer": timer,
-        "_rhythm_check_timer": timer,
         "_live_status_timer": timer,
         "_lifetime_flush_timer": timer,
         "_pool_topup_timer": timer,
@@ -331,6 +337,8 @@ def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
         "lifetime_stats": type("L", (), {"flush_pending": _noop})(),
         "session_run_log": type("R", (), {"begin": _noop})(),
         "_scene_memory": type("M", (), {"reset": _noop})(),
+        "_activity_state": type("A", (), {"reset": _noop})(),
+        "_last_activity_collect_at": 0.0,
         "_pending_request_meta": {},
         "state_changed": type("S", (), {"emit": lambda *a: None})(),
         "_queue_capacity": lambda: 8,
@@ -368,7 +376,6 @@ def test_consume_reply_queue_dedup_reject_does_not_increment_danmu_count(
     object.__setattr__(app, "_total_output_tokens", 0)
     object.__setattr__(app, "_visible_display_count", lambda: 0)
     object.__setattr__(app, "_estimated_reply_gap_ms", lambda: 100)
-    object.__setattr__(app, "_trigger_api_call_if_ready", lambda: None)
     object.__setattr__(app, "_record_scene_memory_display", lambda *a, **k: None)
     object.__setattr__(app, "_latest_displayed_round", 0)
     object.__setattr__(app, "_latest_displayed_screenshot_id", 0)
@@ -405,7 +412,6 @@ def test_consume_reply_queue_skip_dedup_only_for_fallback(workspace_tmp, monkeyp
     object.__setattr__(app, "_update_stats", lambda *a, **k: None)
     object.__setattr__(app, "_visible_display_count", lambda: 0)
     object.__setattr__(app, "_estimated_reply_gap_ms", lambda: 100)
-    object.__setattr__(app, "_trigger_api_call_if_ready", lambda: None)
     object.__setattr__(app, "_record_scene_memory_display", lambda *a, **k: None)
     object.__setattr__(app, "_current_batch", None)
 

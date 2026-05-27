@@ -1,3 +1,16 @@
+"""SQLite 配置存储：内存缓存 + WAL 并发读 + Fernet 加密 API Key。
+
+设计要点：
+- **%APPDATA%/DanmuAI/config.db** 持久化；**%APPDATA%/DanmuAI/.key** 为 Fernet 对称密钥。
+- **密钥丢失或 .key 被删/损坏后重新生成**：旧 api_key_encrypted 无法解密，等同不可恢复（须重新填写 Key）。
+- **向后兼容**：无 cryptography 时退化为 base64 存 api_key_encoded（仅编码非加密）；有 Fernet 后写入 encrypted 并删除 encoded。
+- **WAL + busy_timeout**：允许多读者与单写者共存，写路径用 _write_lock 串行化避免 cache/DB 不一致。
+- **set_batch**：显式事务，commit 成功后才更新 _cache，失败 rollback。
+
+调用方：DanmuApp、ConfigService.apply_web_payload、各模块读配置。
+
+存储边界：新业务模块禁止继续共享 ConfigStore 的 SQLite 连接；历史/模板等应经既有门面访问，见 docs/phase1-boundary-rules.md。
+"""
 import json
 import logging
 import os
@@ -42,19 +55,22 @@ def _restrict_key_file_permissions(path: Path):
 
 
 class ConfigStore:
+    """应用配置与 API Key 的 SQLite 门面；读走内存 _cache，写持 _write_lock。"""
+
     def __init__(self, db_path: Path = CONFIG_FILE):
         self.is_first_run = not db_path.exists()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self._key_file = db_path.parent / ".key"
         self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        # Enable WAL mode for better concurrent read/write support
+        # WAL：读不阻塞写、写不阻塞读；Web/主线程并发读配置时减少 database is locked
         self.conn.execute("PRAGMA journal_mode=WAL")
-        # Set busy timeout to wait instead of immediate database locked
+        # 写冲突时等待最多 5s 而非立即失败（与 _write_lock 双保险）
         self.conn.execute("PRAGMA busy_timeout=5000")
         self._init_db()
         self._cache: dict[str, str] = {}
         self._load_cache()
+        # 所有 REPLACE/commit 串行化，保证 _cache 与 DB 同事务一致
         self._write_lock = threading.Lock()
         if self.is_first_run or not self.get("danmu_speed"):
             from app.config_defaults import seed_config_defaults
@@ -69,6 +85,7 @@ class ConfigStore:
         return ""
 
     def _init_fernet(self):
+        """加载或生成 %APPDATA%/DanmuAI/.key；校验失败则换新 key（旧密文永久不可读）。"""
         if not _HAS_CRYPTO:
             logger.warning(tr("config.crypto_missing"))
             return None
@@ -121,10 +138,9 @@ class ConfigStore:
                 raise
 
     def set_batch(self, items: dict[str, str]):
-        """Batch update with transaction protection.
+        """批量写入：单事务内多条 REPLACE，失败 rollback 且不改 _cache。
 
-        Either all items are written successfully, or none are (rollback on failure).
-        Cache is only updated after successful database commit.
+        Web PUT /api/config 一次提交多键，避免半写入导致 UI 与运行时状态不一致。
         """
         with self._write_lock:
             try:
@@ -158,6 +174,7 @@ class ConfigStore:
     # --- API Key (Fernet encrypted) ---
 
     def get_api_key(self) -> str:
+        """读取明文 API Key：优先 Fernet 解密 api_key_encrypted，否则回退 base64 的 api_key_encoded。"""
         encrypted = self.get("api_key_encrypted", "")
         if encrypted and _HAS_CRYPTO and self._fernet:
             try:
@@ -177,6 +194,10 @@ class ConfigStore:
             return ""
 
     def set_api_key(self, key: str):
+        """写入 API Key：有 Fernet 则加密存 api_key_encrypted 并清除旧 base64 行。
+
+        无 cryptography 时仅 base64（不安全），日志会警告；生产环境应安装 cryptography。
+        """
         if _HAS_CRYPTO and self._fernet:
             encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
             with self._write_lock:
@@ -218,6 +239,15 @@ class ConfigStore:
 
     def set_custom_models(self, models: list):
         self.set_json("custom_models", models)
+
+    def get_custom_danmu_pool(self) -> list[str]:
+        raw = self.get_json("custom_danmu_pool", [])
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def set_custom_danmu_pool(self, items: list[str]) -> None:
+        self.set_json("custom_danmu_pool", items)
 
     def get_default_model_id(self) -> str:
         model_id = self.get("default_model_id", "")

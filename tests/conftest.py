@@ -3,6 +3,7 @@
 # ruff: noqa: E402
 
 import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -16,9 +17,34 @@ os.environ["TMP"] = str(_RUN_TMP)
 os.environ["TEMP"] = str(_RUN_TMP)
 os.environ["TMPDIR"] = str(_RUN_TMP)
 
+_FEEDBACK_IMAGE_NAMES = (
+    "qrcode_1779738450536.jpg",
+    "mm_reward_qrcode_1779738306814.png",
+)
+
+
+def _ensure_feedback_static_images() -> None:
+    """Mirror image/ QR assets into web/static/image for static UI and packaging."""
+    dst_dir = _ROOT / "web" / "static" / "image"
+    src_dir = _ROOT / "image"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for name in _FEEDBACK_IMAGE_NAMES:
+        src = src_dir / name
+        dst = dst_dir / name
+        if not src.is_file():
+            continue
+        if not dst.is_file() or src.stat().st_mtime_ns > dst.stat().st_mtime_ns:
+            shutil.copy2(src, dst)
+
+
+_ensure_feedback_static_images()
+
 import pytest
+from app.application.stats_state import StatsState
+from app.application.web_runtime_state import WebRuntimeState
 from app.reply_queue import AIReplyFIFOBuffer
 from app.scene_memory import SceneMemoryStore
+from app.memory.activity import RecentActivityState
 
 from tests.fakes import (  # noqa: E402 — tests package (tests/__init__.py)
     FakeConfig,
@@ -74,14 +100,13 @@ def bind_minimal_danmu_app(app, **overrides):
         "_queue_batch_size": 5,
         "_reply_scene_count": 2,
         "_reply_filler_count": 3,
-        "danmu_count": 0,
+        "stats_state": StatsState(),
         "screenshot_round": 0,
         "_latest_displayed_round": 0,
         "_rtt_history": [],
         "_request_started_at_by_id": {},
         "config": FakeConfig(),
-        "_web_error_message": "",
-        "_web_error_is_error": False,
+        "web_runtime_state": WebRuntimeState(),
         "_consecutive_failures": 0,
         "_failure_backoff_paused": False,
         "_last_error_message": "",
@@ -105,16 +130,14 @@ def bind_minimal_danmu_app(app, **overrides):
         "_local_fallback_active": False,
         "_local_fallback_for_batch": 0,
         "_publish_live_status": lambda: None,
-        "_trigger_api_call_if_ready": lambda: None,
         "web_bridge": None,
         "_is_generating": False,
         "_batch_id": 0,
         "_current_batch": None,
         "_last_api_trigger_at": 0.0,
-        "_total_input_tokens": 0,
-        "_total_output_tokens": 0,
-        "_start_time": 0.0,
         "_scene_memory": SceneMemoryStore(),
+        "_activity_state": RecentActivityState(),
+        "_last_activity_collect_at": 0.0,
         "mic_in_flight": 0,
         "MAX_MIC_IN_FLIGHT": 1,
         "_mic_request_seq": 0,

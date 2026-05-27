@@ -1,3 +1,18 @@
+"""AI 回复解析：多格式容错、标准化批次与本地弹幕池补齐。
+
+支持三种输入格式（按检测顺序）：
+  1. JSON 数组 — 直接作为弹幕列表
+  2. JSON 对象 — comments/replies/items/data 键，或 scene_memory 信封（含 memory 更新）
+  3. 纯文本 — 按换行拆分
+
+畸形 JSON 容错：流式截断导致 ``][`` 拼接时，只解析第一个完整数组段。
+
+normalize_reply_batch 将 AI 条数补齐到 scene_count + filler_count：
+  先取 AI 原文去重，不足时用本地池（danmu_pool_zh.json）或内置 i18n 占位句轮换填充。
+  上屏截断在 danmu_engine.normalize_danmu_display_text（中文默认 15 字 / 英文 40 字符 + ``...``）。
+
+调用方：DanmuApp._on_ai_reply() → parse_ai_reply_with_memory → normalize_reply_batch
+"""
 from __future__ import annotations
 
 import json
@@ -44,6 +59,7 @@ def _generic_fillers(config=None) -> list[str]:
 
 
 def _try_parse_json_array(raw: str):
+    """解析 JSON 数组；遇 ``][`` 拼接（流式截断）时只取第一段 ``[...]``。"""
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -65,6 +81,11 @@ def parse_ai_reply_with_memory(
     text: str,
     scene_generation: int = 0,
 ) -> tuple[list[str], VisualMemoryUpdate | None]:
+    """解析 AI 原始文本为弹幕列表，并提取可选的 scene_memory 视觉记忆更新。
+
+    返回 (normalized_comments, memory_update)；无记忆块时 memory_update 为 None。
+    scene_generation 用于回填信封内未带代际的记忆条目。
+    """
     from app.memory.visual_update import (
         extract_comments_from_envelope,
         parse_scene_memory_envelope,
@@ -78,6 +99,7 @@ def parse_ai_reply_with_memory(
     parsed = None
     memory_update: VisualMemoryUpdate | None = None
 
+    # 格式分支：数组 → 对象（多键或信封）→ 否则按行文本
     if raw.startswith("[") or raw.startswith("{"):
         if raw.startswith("["):
             parsed = _try_parse_json_array(raw)
@@ -122,6 +144,7 @@ def parse_ai_reply_with_memory(
 
 
 def parse_ai_reply_payload(text: str) -> list[str]:
+    """仅解析弹幕列表，忽略 scene_memory（测试与无记忆路径用）。"""
     items, _ = parse_ai_reply_with_memory(text)
     return items
 
@@ -155,9 +178,21 @@ def normalize_reply_batch(
     allow_shortfall: bool = False,
     config=None,
 ) -> list[str]:
+    """将 AI 回复标准化为固定条数：前 scene_count 条视为场景相关，其余为填充条。
+
+    allow_shortfall=False（默认）：池用尽前尽量凑满 scene_count + filler_count。
+    allow_shortfall=True：池无新句时提前结束，用于本地 fallback 等可接受短批次的场景。
+
+    scene_count / filler_count 由 DanmuApp._sync_reply_batch_config 从 normal_reply_count 派生；
+    与 parse_ai_reply_with_memory 返回的 memory_update 无关（记忆更新在 _on_ai_reply 单独处理）。
+    """
     scene_count = max(1, int(scene_count))
-    filler_count = max(1, int(filler_count))
-    desired_count = scene_count + filler_count
+    filler_count = int(filler_count)
+    if filler_count <= 0:
+        desired_count = scene_count
+    else:
+        filler_count = max(1, filler_count)
+        desired_count = scene_count + filler_count
 
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -184,11 +219,12 @@ def normalize_reply_batch(
                 break
         return result
 
-    while len(result) < min(scene_count, desired_count):
-        pool_index = min(len(result), len(scene_fillers) - 1)
-        result.append(scene_fillers[pool_index])
+    if filler_count > 0:
+        while len(result) < min(scene_count, desired_count):
+            pool_index = min(len(result), len(scene_fillers) - 1)
+            result.append(scene_fillers[pool_index])
     while len(result) < desired_count:
-        filler_index = len(result) - scene_count
+        filler_index = max(0, len(result) - scene_count) if filler_count > 0 else len(result)
         pool_index = min(filler_index, len(generic_fillers) - 1)
         result.append(generic_fillers[pool_index])
     return result[:desired_count]

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.ai_client import THINKING_DISABLED
 from app.model_providers import is_doubao_mode, normalize_endpoint, normalize_mode
 from app.translations import tr
 
@@ -78,7 +79,7 @@ def _probe_doubao(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
         ],
         "stream": False,
         "max_output_tokens": 1,
-        "thinking": {"type": "disabled"},
+        "thinking": dict(THINKING_DISABLED),
     }
     with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         try:
@@ -108,6 +109,7 @@ def _probe_openai(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
         "stream": False,
+        "thinking": dict(THINKING_DISABLED),
     }
     with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         resp = client.post(url, headers=headers, json=data)
