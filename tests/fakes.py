@@ -8,15 +8,28 @@ class FakeLogger:
         self.debug_messages = []
         self.info_messages = []
         self.error_messages = []
+        self.warning_messages = []
 
-    def debug(self, message):
-        self.debug_messages.append(message)
+    @staticmethod
+    def _format(message, args):
+        if not args:
+            return message
+        try:
+            return message % args
+        except Exception:
+            return f"{message} {args!r}"
 
-    def info(self, message):
-        self.info_messages.append(message)
+    def debug(self, message, *args):
+        self.debug_messages.append(self._format(message, args))
 
-    def error(self, message):
-        self.error_messages.append(message)
+    def info(self, message, *args):
+        self.info_messages.append(self._format(message, args))
+
+    def error(self, message, *args):
+        self.error_messages.append(self._format(message, args))
+
+    def warning(self, message, *args):
+        self.warning_messages.append(self._format(message, args))
 
 
 class FakeConfig:
@@ -34,7 +47,30 @@ class FakeConfig:
         return float(self.values.get(key, default))
 
     def set_batch(self, items):
-        pass
+        self.values.update(items)
+
+    def get_region(self):
+        return (
+            self.get_int("region_x", 0),
+            self.get_int("region_y", 0),
+            self.get_int("region_w", 0),
+            self.get_int("region_h", 0),
+        )
+
+    def set_region(self, x, y, w, h):
+        self.values["region_x"] = str(x)
+        self.values["region_y"] = str(y)
+        self.values["region_w"] = str(w)
+        self.values["region_h"] = str(h)
+
+    def get_default_model_id(self):
+        return str(self.values.get("default_model_id", self.values.get("model", "")))
+
+    def set_default_model_id(self, model_id):
+        self.values["default_model_id"] = str(model_id or "")
+
+    def get_api_key(self):
+        return str(self.values.get("_api_key", ""))
 
 
 class FakeLifetimeStats:

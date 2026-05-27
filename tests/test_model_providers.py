@@ -9,6 +9,7 @@ from app.model_providers import (
     normalize_endpoint,
     normalize_mode,
     resolve_active_model_id,
+    resolve_api_transport,
     validate_model_config,
 )
 
@@ -85,6 +86,17 @@ def test_guess_provider_from_endpoint():
     assert guess_provider_from_endpoint("https://unknown.example/v1", "doubao") == "custom_doubao"
     assert guess_provider_from_endpoint("") == DEFAULT_PROVIDER_ID
     assert guess_provider_from_endpoint("https://api.xiaomimimo.com/v1") == "mimo"
+
+
+def test_resolve_api_transport_ark_endpoint_uses_doubao_even_when_mode_openai():
+    endpoint = "https://ark.cn-beijing.volces.com/api/v3"
+    assert resolve_api_transport(endpoint, "openai") == "doubao"
+    assert resolve_api_transport(endpoint, "openai-compatible") == "doubao"
+
+
+def test_resolve_api_transport_siliconflow_uses_openai_even_when_mode_doubao():
+    endpoint = "https://api.siliconflow.cn/v1"
+    assert resolve_api_transport(endpoint, "doubao") == "openai"
 
 
 class _Cfg:

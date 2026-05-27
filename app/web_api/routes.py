@@ -129,7 +129,12 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         return {"ok": True}
 
     @app.post("/api/personae/{name}/rollback")
-    def post_persona_rollback(name: str, body: PersonaRollbackPayload):
+    def post_persona_rollback(
+        name: str,
+        body: PersonaRollbackPayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
         return _run_main(persona_api.rollback_preview, _danmu(), unquote(name), body.version)
 
     @app.post("/api/personae")
@@ -299,3 +304,26 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         body = MicTestPayload(duration_sec=body.duration_sec, send_to_ai=True)
         return _mic_test_response(body)
+
+    @app.get("/api/capture-region")
+    def get_capture_region():
+        return _danmu().get_capture_region_status()
+
+    @app.post("/api/capture-region/select")
+    def post_capture_region_select(
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        current = _danmu().get_capture_region_status()
+        if current.get("selection_state") == "selecting":
+            return {"ok": True, "selection_state": "selecting"}
+        bridge.region_select_requested.emit()
+        return {"ok": True, "selection_state": "selecting"}
+
+    @app.post("/api/capture-region/reset")
+    def post_capture_region_reset(
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        bridge.region_reset_requested.emit()
+        return {"ok": True}

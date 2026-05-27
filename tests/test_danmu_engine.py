@@ -208,8 +208,8 @@ def test_ai_reply_queue_uses_request_context_and_fifos_results():
     app._on_ai_reply('["A1", "A2"]', "persona-1", 10, 10, now, 0)
     app._on_ai_reply('["B1"]', "persona-2", 11, 11, now, 0)
 
-    # 每批 2 条；每次 _on_ai_reply consume 队首 1 条 → 先上屏 A1，再上屏 A2，B1 仍在队尾
-    assert app.reply_buffer.size() == 2
+    # 每批 2 条；每次 _on_ai_reply 消费队首 1 条 → A1、A2 上屏后 B1 留在队尾
+    assert app.reply_buffer.size() == 1
     assert app.engine.calls == [
         ("A1", "persona-1"),
         ("A2", "persona-1"),

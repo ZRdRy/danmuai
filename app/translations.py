@@ -270,6 +270,9 @@ TRANSLATIONS = {
         "config.insecure_read": "⚠️ API Key 使用不安全的 base64 编码存储（非加密）。请运行 'pip install cryptography' 以启用安全加密存储。",
         "config.api_key_write_failed": "⚠️ API Key 写入失败，已回滚: {error}",
         "config.insecure_store": "⚠️ API Key 以不安全的 base64 格式存储（非加密）。请运行 'pip install cryptography' 以启用安全加密存储。",
+        "config.error_model_id_required": "请填写视觉模型 ID",
+        "config.error_model_id_reserved_for_custom": "该模型 ID 已在「自定义模型」中使用。请在自定义模型列表中点击「设为默认」，不要通过助手设置重复保存。",
+        "config.error_provider_model_mismatch": "平台与模型不匹配：当前 API 地址对应「{provider}」，模型「{model_id}」不在该平台目录中。请重新选择视觉模型或修改 API 地址。",
 
         "ai.error_api_key_missing": "API Key 未配置",
         "ai.error_empty_response": "AI 返回为空",
@@ -280,6 +283,7 @@ TRANSLATIONS = {
         "ai.error_model_not_found": "模型不存在，请检查模型设置",
         "ai.error_gateway_timeout": "AI 服务网关超时，请稍后重试",
         "ai.error_http_hidden": "HTTP {status_code}: (详情已隐藏)",
+        "ai.error_http_with_message": "HTTP {status_code}: {message}",
         "ai.error_request_failed": "AI 请求失败: {error}",
 
         "runnable.compress_failed": "截图压缩失败，AI 请求未发送",
@@ -287,14 +291,6 @@ TRANSLATIONS = {
         "history.csv_persona": "人格",
         "history.csv_content": "内容",
         "history.csv_round": "轮次",
-        "reply.scene_filler_1": "这画面有东西",
-        "reply.scene_filler_2": "这个细节看到了",
-        "reply.generic_filler_1": "弹幕先跟上",
-        "reply.generic_filler_2": "这波节奏稳了",
-        "reply.generic_filler_3": "继续看下一手",
-        "reply.local_fallback_1": "先跟上这波节奏",
-        "reply.local_fallback_2": "画面还在加载理解中",
-        "reply.local_fallback_3": "等模型回来看看",
     },
     "en": {
         "settings.title": "Settings",
@@ -565,6 +561,9 @@ TRANSLATIONS = {
         "config.insecure_read": "⚠️ The API key is stored as insecure base64 instead of encryption. Run 'pip install cryptography' to enable secure encrypted storage.",
         "config.api_key_write_failed": "⚠️ Failed to write API key and rolled back: {error}",
         "config.insecure_store": "⚠️ The API key is being stored as insecure base64 instead of encryption. Run 'pip install cryptography' to enable secure encrypted storage.",
+        "config.error_model_id_required": "Please enter a vision model ID",
+        "config.error_model_id_reserved_for_custom": "This model ID is already used in Custom Models. Set it as default from that list instead of saving it again in Assistant Settings.",
+        "config.error_provider_model_mismatch": "Provider and model do not match: the API endpoint is for \"{provider}\", but \"{model_id}\" is not in that platform catalog. Pick a model from the list or change the endpoint.",
 
         "ai.error_api_key_missing": "API key not configured",
         "ai.error_empty_response": "AI returned an empty response",
@@ -575,6 +574,7 @@ TRANSLATIONS = {
         "ai.error_model_not_found": "Model not found. Check the model settings.",
         "ai.error_gateway_timeout": "The AI service gateway timed out. Please try again later.",
         "ai.error_http_hidden": "HTTP {status_code}: (details hidden)",
+        "ai.error_http_with_message": "HTTP {status_code}: {message}",
         "ai.error_request_failed": "AI request failed: {error}",
 
         "runnable.compress_failed": "Screenshot compression failed. The AI request was not sent.",
@@ -582,14 +582,6 @@ TRANSLATIONS = {
         "history.csv_persona": "Persona",
         "history.csv_content": "Content",
         "history.csv_round": "Round",
-        "reply.scene_filler_1": "There is something on this screen",
-        "reply.scene_filler_2": "That detail stands out",
-        "reply.generic_filler_1": "Danmu, keep up",
-        "reply.generic_filler_2": "This pace feels steady",
-        "reply.generic_filler_3": "Let us see the next move",
-        "reply.local_fallback_1": "Keeping up with the pace",
-        "reply.local_fallback_2": "Still reading the frame",
-        "reply.local_fallback_3": "Waiting for the model",
     },
 }
 

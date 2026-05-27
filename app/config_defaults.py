@@ -29,7 +29,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "layout_mode": "fullscreen",
     "opacity": "100",
     "font_size": "24",
-    "danmu_pool_enabled": "0",
+    "danmu_pool_enabled": "1",
     "danmu_pool_use_custom": "0",
     "min_on_screen": "5",
     "empty_accel": "1",

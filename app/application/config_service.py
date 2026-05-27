@@ -111,6 +111,10 @@ class ConfigService:
 
     def apply_web_payload(self, payload: dict[str, Any]) -> None:
         """仅接受 WEB_CONFIG_KEYS 子集 + api_key / custom_models / active_personae；经 ConfigStore 写缓存，不直连 SQLite 连接对象。"""
+        from app.model_selection import validate_web_config_patch
+
+        validate_web_config_patch(self._config, payload)
+
         items: dict[str, str] = {}
         for key in WEB_CONFIG_KEYS:
             if key in payload and payload[key] is not None:
@@ -147,10 +151,13 @@ class ConfigService:
         self._app.config_changed.emit()
 
     def _normalize_items(self, items: dict[str, str]) -> None:
-        items["region_x"] = "0"
-        items["region_y"] = "0"
-        items["region_w"] = "0"
-        items["region_h"] = "0"
+        if "api_endpoint" in items or "api_mode" in items:
+            from app.model_providers import resolve_api_transport
+
+            endpoint = items.get("api_endpoint", self._config.get("api_endpoint", ""))
+            api_mode = items.get("api_mode", self._config.get("api_mode", "doubao"))
+            transport = resolve_api_transport(endpoint, api_mode)
+            items["api_mode"] = "doubao" if transport == "doubao" else "openai"
 
         if "mic_window_sec" in items:
             from app.mic_buffer import clamp_mic_window_sec
@@ -181,6 +188,8 @@ class ConfigService:
             from app.danmu_engine import normalize_layout_mode
 
             items["layout_mode"] = normalize_layout_mode(items["layout_mode"])
+
+        _clamp_int_key(items, "opacity", 100, 0, 100)
 
         if "normal_recognition_interval_sec" in items or "normal_reply_count" in items:
             from app.personae import DEFAULT_NORMAL_REPLY_COUNT

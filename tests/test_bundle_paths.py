@@ -37,8 +37,19 @@ def test_feedback_page_in_index_html():
     html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-page="feedback"' in html
     assert 'id="page-feedback"' in html
+    assert 'id="feedbackForm"' in html
+    assert 'id="feedbackContent"' in html
     assert "/static/image/qrcode_1779738450536.jpg" in html
     assert 'id="rewardModal"' in html
+
+
+def test_announcements_page_in_index_html():
+    html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'data-page="announcements"' in html
+    assert 'id="page-announcements"' in html
+    assert 'id="announcementsList"' in html
+    assert 'id="announcementsNavBadge"' in html
+    assert "/static/supabase-client.js" in html
 
 
 def test_memory_settings_visible_in_simplified_mode():

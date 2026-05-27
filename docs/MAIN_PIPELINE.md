@@ -20,9 +20,10 @@ DanmuApp.start()
 screenshot_timer.timeout
   → _on_screenshot_timer()
   → _on_normal_capture_tick()
-       → if visual in-flight: return
+       → if visual in-flight: return (debug skip; warning if elapsed ≥ VISUAL_INFLIGHT_WARN_SEC)
        → _capture_screenshot()
             → ScreenCapturer.grab()
+            → if None / isNull / zero size: return (no screenshot_id++; reason=invalid_pixmap)
             → update _latest_screenshot / _latest_screenshot_id / time
             → _collect_activity_observation()
        → if no pixmap: return
@@ -50,23 +51,26 @@ HistoryWriter.flush()                              [background batch SQLite]
 | Step | Entry | Notes |
 |------|--------|------|
 | Start | `DanmuApp.start()` | Resets session fields, starts screenshot/reply/pool timers, shows overlay |
-| Capture tick | `_on_normal_capture_tick()` | Skips if `ai_in_flight` / generating; capture then trigger |
-| Capture | `_capture_screenshot()` | No scene probe hook in current normal path |
-| Trigger | `_trigger_api_call()` | Registers meta, starts `AiRunnable` with latest screenshot |
+| Capture tick | `_on_normal_capture_tick()` | Skips if `ai_in_flight` / generating; logs `inflight_watchdog` after 45s (no auto-reset) |
+| Capture | `_capture_screenshot()` | Valid frame only; invalid pixmap logged, id not incremented |
+| Trigger | `_trigger_api_call()` | Registers meta + `RequestTimingService.mark_started`; starts `AiRunnable` |
 | Reply | `_on_ai_reply()` | Tokens, parse, memory update, enqueue |
 | Dequeue | `_consume_reply_queue()` | Dedup engine, history, adaptive `reply_timer` |
 | Render | `DanmuOverlay.start_render_loop()` | 16 ms timer when items animate |
 
 ## Identifiers
 
-- **`screenshot_id`**: incremented in `_capture_screenshot()`; stamped on requests and `QueuedReply`.
+- **`screenshot_id`**: incremented only after a **valid** capture in `_capture_screenshot()`; stamped on requests and `QueuedReply`.
 - **`scene_generation`**: reset on `start()`/`stop()`; passed through AI/reply for memory; not advanced by a live scene-change loop today.
 - **`request_round`**: `screenshot_round` for visual; negative seq for mic.
+- **`request_timing_id`**: `{request_round}:{screenshot_id}:{scene_generation}` (`_reply_request_id`); used for `_pending_request_meta` keys and `RequestTimingService` RTT samples.
 
 ## Scheduling services
 
 - **`RequestScheduler`**: `min_api_interval`, in-flight gate, `last_api_trigger_at`.
-- **`RequestTimingService`**: per-request start times, RTT deque, avg RTT for logging/cooldown hints.
+- **`RequestTimingService`**: `mark_started` / `consume_timing` on composite `request_timing_id` (mic and visual on the same `screenshot_id` do not collide); RTT deque and avg for logging/cooldown hints.
+
+`VISUAL_INFLIGHT_WARN_SEC` (45s) is a **module constant** in `main.py`, not a `DanmuApp` runtime field.
 
 Do not bypass these when adding throttle or timing features.
 

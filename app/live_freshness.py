@@ -8,13 +8,12 @@
   减轻无效 API 连打。
 - **模型缓慢检测**：当前 in-flight 请求 ≥ 4s，或历史 RTT P90 ≥ 6s 时判定为慢，
   触发本地兜底等降级策略。
-- **本地兜底批次**：模型响应慢时队列/画面可能空窗，用弹幕池或内置短句生成轻量弹幕填充。
+- **本地兜底批次**：模型响应慢时队列/画面可能空窗，从公式化弹幕库抽样生成轻量弹幕填充。
 
 本文件提供常量、状态快照与纯函数；不持有 Qt/线程状态。
 """
 from __future__ import annotations
 
-import random
 import time
 from dataclasses import dataclass
 
@@ -73,37 +72,17 @@ def build_local_fallback_batch(
 
     模型响应慢或节奏空窗时，若不上屏会造成画面长时间无弹幕；本地兜底用池内短句
     快速填充视觉空白，且标记为 replaceable fallback，后续 AI 回复可顶掉。
-    策略：优先从 danmu_pool（配置启用时）抽样；池不可用则混用 _legacy_scene_fillers、
-    _legacy_generic_fillers 与翻译键硬编码句，打乱后凑满 scene_count + filler_count。
+    策略：从已启用的公式化弹幕库抽样；两库皆关或池为空则返回空批次。
     """
     from app.danmu_pool import load_danmu_pool_for_config, sample_danmu_for_config
-    from app.reply_parser import _legacy_generic_fillers, _legacy_scene_fillers
 
     pool = load_danmu_pool_for_config(config)
-    if pool:
-        total = scene_count + filler_count
-        picked = sample_danmu_for_config(config, min(total, len(pool)))
-        if len(picked) >= total:
-            seed = picked[:total]
-        else:
-            seed = picked[:]
-            while len(seed) < total:
-                seed.append(picked[len(seed) % len(picked)])
-    else:
-        scene = _legacy_scene_fillers()
-        generic = _legacy_generic_fillers() + [
-            tr("reply.local_fallback_1"),
-            tr("reply.local_fallback_2"),
-            tr("reply.local_fallback_3"),
-        ]
-        random.shuffle(generic)
-        seed = []
-        for i in range(scene_count):
-            seed.append(scene[i % len(scene)])
-        for i in range(filler_count):
-            seed.append(generic[i % len(generic)])
+    if not pool:
+        return []
+    total = scene_count + filler_count
+    picked = sample_danmu_for_config(config, min(total, len(pool)))
     return normalize_reply_batch(
-        seed,
+        picked,
         scene_count=scene_count,
         filler_count=filler_count,
         allow_shortfall=True,

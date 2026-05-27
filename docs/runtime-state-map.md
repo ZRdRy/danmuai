@@ -28,7 +28,7 @@
 | 场景状态 | `_last_scene_hash`、`_active_scene_probe_size`、`_scene_generation`、`_scene_rhythm_pause_until`、`_scene_api_gate_active`、`_scene_memory`、`_activity_state`、`_last_activity_collect_at` | 管理场景探测、代际推进、场景 gate、活动观察和记忆清理。 |
 | 队列状态 | `reply_buffer`、`danmu_queue`、`reply_timer`、`_current_batch`、`_batch_id`、`_queue_*`、`_reply_*`、`_latest_*_screenshot_id`、`_local_fallback_*` | 管理回复入队、批次节奏、可见库存和本地兜底。 |
 | 麦克风状态 | `_mic_request_seq`、`_mic_batch_id`、`_mic_utterance_detector`、`_mic_poll_timer`、`_mic_poll_ms`、`_mic_service` | 管理语音端点检测、轮询窗口和麦克风插入请求。 |
-| UI 状态 | `web_server`、`web_bridge`、`webview_shell`、`web_runtime_state`、`_live_status_timer` | 管理控制台桥接、Web 展示态对象与 live status 定时器。 |
+| UI 状态 | `web_server`、`web_bridge`、`webview_shell`、`web_runtime_state`、`_live_status_timer`、`_region_selector`、`_region_selection_state`、`_region_selection_screen_index` | 管理控制台桥接、Web 展示态对象、live status 定时器与识图区域框选 UI。 |
 | 服务对象 | `stats_state`、`_request_scheduler`、`_request_timing_service` | `StatsState`、调度与 timing 服务（非 `RuntimeState` 投影字段）。 |
 | 统计状态 | `danmu_count`、`_total_input_tokens`、`_total_output_tokens`、`_start_time`、`_rtt_history`、`session_run_log`、`lifetime_stats`、`_lifetime_flush_timer` | 管理会话统计、累计统计和延迟样本。 |
 
@@ -40,7 +40,7 @@
 | `_screenshot_scheduled` | `main.py:173` | 标记是否已通过 `QTimer.singleShot` 挂起下一次补充截图。 | `main.py::_schedule_next_screenshot()`、`main.py::_do_scheduled_screenshot()`、`main.py::_on_ai_error()`、`main.py::stop()` | `main.py::_schedule_next_screenshot()` | 是 | 纯布尔运行态。 |
 | `_latest_screenshot` | `main.py:175` | 缓存最新一帧 `QPixmap`，供视觉请求或麦克风插入复用。 | `main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_capture_frame_hash()`、`main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()` | 部分 | 元数据可迁移，但 `QPixmap` 对象本身不宜放入纯状态对象。 |
 | `_latest_screenshot_time` | `main.py:176` | 记录最新截图的 `monotonic` 时间。 | `main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_current_danmu_delay_sec()`、`main.py::_trigger_api_call()`、`main.py::_maybe_refill_after_scene_change()` | 是 | 纯时间戳。 |
-| `_latest_screenshot_id` | `main.py:212` | 当前缓存帧的单调递增编号。 | `main.py::_capture_screenshot()`、`main.py::_on_scene_generation_advanced()` | `main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()`、`main.py::_is_reply_stale()` | 是 | 是视觉链路的主键之一。 |
+| `_latest_screenshot_id` | `main.py:212` | 当前缓存帧的单调递增编号（仅**有效** pixmap 接受后递增；无效帧 `reason=invalid_pixmap` 不递增）。 | `main.py::_capture_screenshot()`、`main.py::_on_scene_generation_advanced()` | `main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()`、`main.py::_is_reply_stale()` | 是 | 是视觉链路的主键之一。 |
 | `_inflight_screenshot_id` | `main.py:236` | 当前在途视觉请求绑定的截图编号。 | `main.py::_trigger_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::start()`、`main.py::stop()` | `main.py::_maybe_emit_local_fallback()` | 是 | 纯请求元数据。 |
 | `_inflight_started_at` | `main.py:237` | 当前在途视觉请求开始时间。 | `main.py::_trigger_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::start()`、`main.py::stop()` | `main.py::_current_danmu_delay_sec()`、`main.py::_maybe_emit_local_fallback()` | 是 | 可用于未来统一延迟状态。 |
 | `_stale_drop_count` | `main.py:238` | 记录因过期而丢弃的回复总次数。 | `main.py::_record_stale_drop()`、`main.py::start()` | `main.py::_build_live_status_snapshot()` | 是 | 统计性质状态。 |
@@ -57,7 +57,7 @@
 | `mic_in_flight` | `main.py:162` | 在途麦克风插入请求计数。 | `main.py::_trigger_mic_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::stop()` | `main.py::_has_mic_request_in_flight()` | 是 | 与视觉请求并行。 |
 | `MAX_MIC_IN_FLIGHT` | `main.py:163` | 麦克风请求并发上限。 | `main.py::__init__()` | 当前未直接读取 | 是 | 目前更接近配置常量。 |
 | `_is_generating` | `main.py:177` | 视觉生成中的显式布尔标记。 | `main.py::_trigger_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::start()`、`main.py::stop()` | `main.py::_has_visual_request_in_flight()` | 是 | 与 `ai_in_flight` 共同表达在途态。 |
-| `_request_started_at_by_id` | `RequestTimingService`（经 façade） | 按 `screenshot_id` 记录请求起始时间，用于 RTT 统计。 | `RequestTimingService.mark_started()` / `clear_started()` | `RequestTimingService.consume_timing()` | 否 | 真实所有权在 `RequestTimingService`；`DanmuApp` 仅兼容 façade。 |
+| `_request_started_at_by_id` | `RequestTimingService`（经 façade） | 按复合键 `{request_round}:{screenshot_id}:{scene_generation}` 记录请求起始时间，用于 RTT 统计（视觉/麦克风不共用键）。 | `RequestTimingService.mark_started()` / `clear_started()` | `RequestTimingService.consume_timing()` | 否 | 真实所有权在 `RequestTimingService`；`DanmuApp` 仅兼容 façade。 |
 | `_pending_request_meta` | `main.py:166` | 以 `request_round:screenshot_id:scene_generation` 为键记录请求来源，如 `visual`、`mic`。 | `main.py::_register_request_meta()`、`main.py::_pop_request_meta()`、`main.py::start()`、`main.py::stop()` | `main.py::_on_ai_reply()`、`main.py::_on_ai_error()` | 是 | 纯元数据。 |
 | `_inflight_scene_generation` | `main.py:209` | 在途视觉请求对应的场景代际。 | `main.py::_trigger_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::start()`、`main.py::stop()` | 当前主要通过日志/调试间接使用 | 是 | 与 `screenshot_id` 类似。 |
 | `_last_api_trigger_at` | `RequestScheduler`（经 façade） | 最近一次视觉 API 触发时间。 | `RequestScheduler.record_trigger_time()` | `RequestScheduler.block_reason()` | 否 | 真实所有权在 `RequestScheduler`；`DanmuApp` 仅兼容 façade。 |
@@ -355,3 +355,5 @@
   - `_rtt_avg()`
   - `_smart_cooldown_ms()`
 - 它们的真实状态所有权已经冻结到 `RequestScheduler` / `RequestTimingService`，不再回流到 `DanmuApp`。
+
+**脚注：** `VISUAL_INFLIGHT_WARN_SEC`（45s in-flight 告警阈值）为 [`main.py`](../main.py) **模块常量**，不是 `DanmuApp` 运行态字段；勿登记进本表或 `__init__` 以免 boundary_guard 失败。

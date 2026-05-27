@@ -1,5 +1,9 @@
+import logging
+
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_screen_index(config=None) -> int:
@@ -29,7 +33,8 @@ def resolve_capture_rect(config, screen_geometry) -> tuple[int, int, int, int]:
             rel_y = config.get_int("region_y", 0)
             width = config.get_int("region_w", 0)
             height = config.get_int("region_h", 0)
-    except Exception:
+    except Exception as exc:
+        logger.info("识图区域回退全屏: reason=region_read_error error=%s", exc)
         return full
 
     try:
@@ -38,9 +43,25 @@ def resolve_capture_rect(config, screen_geometry) -> tuple[int, int, int, int]:
         width = int(width)
         height = int(height)
     except (TypeError, ValueError):
+        logger.info(
+            "识图区域回退全屏: reason=invalid_region_type region_x=%r region_y=%r "
+            "region_w=%r region_h=%r",
+            rel_x,
+            rel_y,
+            width,
+            height,
+        )
         return full
 
     if width <= 0 or height <= 0:
+        logger.info(
+            "识图区域回退全屏: reason=non_positive_size region_x=%s region_y=%s "
+            "region_w=%s region_h=%s",
+            rel_x,
+            rel_y,
+            width,
+            height,
+        )
         return full
 
     left = max(0, rel_x)
@@ -48,6 +69,16 @@ def resolve_capture_rect(config, screen_geometry) -> tuple[int, int, int, int]:
     right = min(screen_geometry.width(), rel_x + width)
     bottom = min(screen_geometry.height(), rel_y + height)
     if right <= left or bottom <= top:
+        logger.info(
+            "识图区域回退全屏: reason=empty_intersection region_x=%s region_y=%s "
+            "region_w=%s region_h=%s screen_w=%s screen_h=%s",
+            rel_x,
+            rel_y,
+            width,
+            height,
+            screen_geometry.width(),
+            screen_geometry.height(),
+        )
         return full
 
     return (

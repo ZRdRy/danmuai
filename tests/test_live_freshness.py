@@ -31,6 +31,7 @@ def test_capture_advances_screenshot_id_even_when_in_flight():
     app.ai_in_flight = 1
     app._is_generating = True
     pixmap = Mock(width=Mock(return_value=100), height=Mock(return_value=100))
+    pixmap.isNull = Mock(return_value=False)
     app.capturer = Mock(grab=Mock(return_value=pixmap))
     app._capture_screenshot()
     assert app._latest_screenshot_id == 6

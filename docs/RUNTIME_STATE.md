@@ -47,7 +47,7 @@ These **are** owned by application services:
 | Field / concern | Owner |
 |-----------------|--------|
 | `last_api_trigger_at` | `RequestScheduler` |
-| `request_started_at_by_id`, `rtt_history` | `RequestTimingService` |
+| `request_started_at_by_id` (`dict[str, float]`, composite `{round}:{screenshot_id}:{scene_generation}`), `rtt_history` | `RequestTimingService` |
 | `danmu_count`, token totals, `_start_time` | `StatsState` |
 | Web error + display cache | `WebRuntimeState` |
 
@@ -65,9 +65,20 @@ These **are** owned by application services:
 - **`RuntimeState`**: snapshot for tests/tools; must use `GenerationPipelineState.from_app()` for generation-related fields—not scattered `getattr(app, "_latest_*")`.
 - **`GenerationPipelineState`**: must not write back to `app`, import Qt, or call pipeline functions (`_trigger_api_call`, `_consume_reply_queue`, …).
 
+## Observability and logging
+
+- Pipeline issues: application log (`DanmuApp.logger`) with structured `reason=` fields — see [main-pipeline-sequence.md](main-pipeline-sequence.md#observability-structured-log-reason) and [AGENTS.md](../AGENTS.md).
+- Optional debug env: `DANMU_SCENE_DEBUG`, `DANMU_API_SCHEDULE_DEBUG`, `DANMU_DEDUP_PROFILE`, `DANMU_IMAGE_METRICS` (see [WEB_CONSOLE.md](WEB_CONSOLE.md)).
+- Web `PUT /api/config`: HTTP returns `ok` after `save_config_requested.emit()`; actual SQLite write runs on the main thread in `WebConsoleBridge._on_save_config`. Failures log on the main thread and surface via `set_web_error_status` (toast may show success briefly before the slot runs).
+
+## Known limitations
+
+- `GET /api/status` and `GET /api/diagnostics` build snapshots on the HTTP (uvicorn) thread via public façades. Full main-thread marshaling for reads is deferred; do not read `danmu_app._*` from routes.
+
 ## Config and storage
 
 - Web config changes: `apply_web_config_payload()` → `ConfigService` / `apply_web_config_patch()`.
+- `ConfigStore.set()` updates in-memory cache only after a successful commit (same semantics as `set_batch`).
 - Do not spread `config.conn` beyond the whitelist in [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md).
 
 ## Maintainer registry

@@ -25,6 +25,15 @@ class SanitizedLogger(QObject):
             handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
             self.logger.addHandler(handler)
 
+    @staticmethod
+    def _format_msg(msg: str, args: tuple) -> str:
+        if not args:
+            return msg
+        try:
+            return msg % args
+        except Exception:
+            return f"{msg} {args!r}"
+
     def _sanitize(self, msg: str) -> str:
         msg = API_KEY_PATTERN.sub("sk-****", msg)
         msg = BASE64_IMAGE_PATTERN.sub(f"data:image/***;base64,({tr('common.hidden')})", msg)
@@ -34,22 +43,19 @@ class SanitizedLogger(QObject):
         msg = GENERIC_API_KEY_PATTERN.sub("(api_key: ****)", msg)
         return msg
 
-    def debug(self, msg: str):
-        safe = self._sanitize(msg)
-        self.logger.debug(safe)
-        self.log_emitted.emit("DEBUG", safe)
+    def _emit(self, level: str, msg: str, *args) -> None:
+        safe = self._sanitize(self._format_msg(msg, args))
+        getattr(self.logger, level.lower())(safe)
+        self.log_emitted.emit(level.upper(), safe)
 
-    def info(self, msg: str):
-        safe = self._sanitize(msg)
-        self.logger.info(safe)
-        self.log_emitted.emit("INFO", safe)
+    def debug(self, msg: str, *args):
+        self._emit("debug", msg, *args)
 
-    def warning(self, msg: str):
-        safe = self._sanitize(msg)
-        self.logger.warning(safe)
-        self.log_emitted.emit("WARNING", safe)
+    def info(self, msg: str, *args):
+        self._emit("info", msg, *args)
 
-    def error(self, msg: str):
-        safe = self._sanitize(msg)
-        self.logger.error(safe)
-        self.log_emitted.emit("ERROR", safe)
+    def warning(self, msg: str, *args):
+        self._emit("warning", msg, *args)
+
+    def error(self, msg: str, *args):
+        self._emit("error", msg, *args)

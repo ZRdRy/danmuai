@@ -19,11 +19,11 @@ def pool_app(tmp_path):
 
 def test_get_meta_defaults(pool_app):
     meta = pool_api.get_meta(pool_app)
-    assert meta["builtin_enabled"] is False
+    assert meta["builtin_enabled"] is True
     assert meta["custom_enabled"] is False
     assert meta["min_on_screen"] == 5
     assert meta["custom_count"] == 0
-    assert meta["effective_pool_enabled"] is False
+    assert meta["effective_pool_enabled"] is True
     assert meta["builtin_count"] >= 0
 
 

@@ -75,6 +75,13 @@ function showToast(msg, isError = false) {
   setTimeout(() => el.classList.remove('show'), 3200);
 }
 
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  const message = reason instanceof Error ? reason.message : String(reason ?? 'unknown');
+  console.warn('[app] unhandled promise rejection:', reason);
+  showToast(`操作失败: ${message}`, true);
+});
+
 function formatApiError(detail, fallback = '请求失败') {
   if (!detail) return fallback;
   if (typeof detail === 'string') return detail;
@@ -362,6 +369,19 @@ function applyStatus(st) {
   if (lifetimeOutputEl) {
     lifetimeOutputEl.textContent = formatTokenCount(st.lifetime_output_tokens ?? 0);
   }
+  if (st.capture_region_mode !== undefined || st.region_selection_state !== undefined) {
+    applyCaptureRegionFromPayload({
+      mode: st.capture_region_mode,
+      region: {
+        x: st.region_x ?? 0,
+        y: st.region_y ?? 0,
+        w: st.region_w ?? 0,
+        h: st.region_h ?? 0,
+      },
+      selection_state: st.region_selection_state || 'idle',
+    });
+  }
+
   const lifetimeNoteEl = document.getElementById('statLifetimeTokenNote');
   if (lifetimeNoteEl) {
     const lifetimeTotal = Number(st.lifetime_total_tokens) || 0;
@@ -381,6 +401,14 @@ function applyStatus(st) {
     (st.persona_names && st.persona_names.length) ? st.persona_names.join(' · ') : '—';
   document.getElementById('liveStatusLine').textContent = st.live_message || '';
   renderSessionRuns(st.session_runs);
+  if (st.provider_model_mismatch && st.active_model_id) {
+    const mismatchNote = document.getElementById('modelActiveSourceBanner');
+    if (mismatchNote && mismatchNote.classList.contains('hidden')) {
+      mismatchNote.textContent =
+        `当前 API 地址与模型「${st.active_model_id}」不匹配，请在助手设置中重新选择视觉模型并保存。`;
+      mismatchNote.classList.remove('hidden');
+    }
+  }
 
   const banner = document.getElementById('errorBanner');
   if (st.error_message) {
@@ -935,7 +963,28 @@ function fillForm(cfg) {
   const modelEl = document.getElementById('model');
   if (modelEl) modelEl.value = modelId;
   syncVisionModelPickerFromForm(modelId);
+  updateModelActiveSourceBanner(cfg);
   document.getElementById('api_key').value = cfg.has_api_key ? MASKED_API_KEY : '';
+}
+
+function updateModelActiveSourceBanner(cfg) {
+  const banner = document.getElementById('modelActiveSourceBanner');
+  if (!banner) return;
+  const usesCustom = cfg?.uses_custom_credentials === true;
+  if (!usesCustom) {
+    banner.classList.add('hidden');
+    banner.textContent = '';
+    return;
+  }
+  const name = cfg.model_display_name || cfg.active_model_id || '';
+  const id = cfg.active_model_id || '';
+  banner.textContent =
+    `当前默认模型来自自定义模型「${name}」（${id}）。助手设置中的 API 地址与密钥不用于生成弹幕，请在自定义模型列表中维护。`;
+  banner.classList.remove('hidden');
+  if (cfg.provider_model_mismatch) {
+    banner.textContent +=
+      ' 另外：当前 API 地址与已选模型目录不一致，保存配置时可能被拒绝，请重新选择视觉模型。';
+  }
 }
 
 async function reloadConfigFromServer() {
@@ -944,8 +993,144 @@ async function reloadConfigFromServer() {
   syncProviderPresetFromEndpoint();
   const modelId = cfg.active_model_id || cfg.default_model_id || cfg.model || '';
   syncVisionModelPickerFromForm(modelId);
+  updateModelActiveSourceBanner(cfg);
   await loadCustomModels();
+  applyCaptureRegionFromPayload({
+    mode: cfg.capture_region_mode || (cfg.region_w > 0 && cfg.region_h > 0 ? 'custom' : 'full'),
+    region: {
+      x: cfg.region_x ?? 0,
+      y: cfg.region_y ?? 0,
+      w: cfg.region_w ?? 0,
+      h: cfg.region_h ?? 0,
+    },
+    selection_state: 'idle',
+  });
   return cfg;
+}
+
+let captureRegionPollTimer = null;
+
+function applyCaptureRegionFromPayload(data) {
+  const modeEl = document.getElementById('captureRegionModeLabel');
+  const coordsEl = document.getElementById('captureRegionCoords');
+  const resetBtn = document.getElementById('btnCaptureRegionReset');
+  const selectBtn = document.getElementById('btnCaptureRegionSelect');
+  if (!modeEl || !data) return;
+
+  const mode = data.mode || 'full';
+  const region = data.region || {};
+  const state = data.selection_state || 'idle';
+  const selecting = state === 'selecting';
+
+  if (selectBtn) {
+    selectBtn.disabled = selecting;
+    selectBtn.textContent = selecting ? '正在框选…' : '鼠标框选识图范围';
+  }
+
+  if (selecting) {
+    modeEl.textContent = '正在框选…请在识图显示器上拖动鼠标（Esc 取消）';
+    coordsEl?.classList.add('hidden');
+    return;
+  }
+
+  if (mode === 'custom' && region.w > 0 && region.h > 0) {
+    modeEl.textContent = '自定义区域识图';
+    if (coordsEl) {
+      coordsEl.textContent = `区域：x=${region.x}, y=${region.y}, 宽=${region.w}, 高=${region.h}`;
+      coordsEl.classList.remove('hidden');
+    }
+    resetBtn?.classList.remove('hidden');
+    return;
+  }
+
+  modeEl.textContent = '全屏识图';
+  coordsEl?.classList.add('hidden');
+  resetBtn?.classList.add('hidden');
+}
+
+async function fetchCaptureRegionStatus() {
+  return apiFetch('/api/capture-region');
+}
+
+function stopCaptureRegionPoll() {
+  if (captureRegionPollTimer) {
+    clearTimeout(captureRegionPollTimer);
+    captureRegionPollTimer = null;
+  }
+}
+
+async function pollCaptureRegionUntilDone() {
+  stopCaptureRegionPoll();
+  const maxMs = 120000;
+  const intervalMs = 500;
+  const start = Date.now();
+
+  return new Promise((resolve) => {
+    const tick = async () => {
+      try {
+        const data = await fetchCaptureRegionStatus();
+        applyCaptureRegionFromPayload(data);
+        const state = data.selection_state || 'idle';
+        if (state !== 'selecting') {
+          stopCaptureRegionPoll();
+          resolve(data);
+          return;
+        }
+        if (Date.now() - start >= maxMs) {
+          stopCaptureRegionPoll();
+          showToast('框选等待超时，请重试', true);
+          resolve(data);
+          return;
+        }
+        captureRegionPollTimer = setTimeout(tick, intervalMs);
+      } catch (e) {
+        stopCaptureRegionPoll();
+        showToast(e.message || '获取识图区域状态失败', true);
+        resolve(null);
+      }
+    };
+    tick();
+  });
+}
+
+function initCaptureRegionControls() {
+  document.getElementById('btnCaptureRegionSelect')?.addEventListener('click', async () => {
+    try {
+      const res = await apiFetch('/api/capture-region/select', { method: 'POST' });
+      applyCaptureRegionFromPayload({
+        mode: 'full',
+        region: { x: 0, y: 0, w: 0, h: 0 },
+        selection_state: res.selection_state || 'selecting',
+      });
+      showToast('请在识图显示器上拖动鼠标框选区域~');
+      const done = await pollCaptureRegionUntilDone();
+      if (!done) return;
+      if (done.selection_state === 'saved') {
+        showToast('识图区域已保存~');
+      } else if (done.selection_state === 'cancelled') {
+        showToast('已取消框选');
+      } else if (done.selection_state === 'invalid') {
+        showToast('区域无效或过小，请重新框选', true);
+      }
+    } catch (e) {
+      showToast(e.message || '无法启动框选', true);
+    }
+  });
+
+  document.getElementById('btnCaptureRegionReset')?.addEventListener('click', async () => {
+    try {
+      await apiFetch('/api/capture-region/reset', { method: 'POST' });
+      const data = await fetchCaptureRegionStatus();
+      applyCaptureRegionFromPayload(data);
+      showToast('已恢复全屏识图~');
+    } catch (e) {
+      showToast(e.message || '恢复全屏失败', true);
+    }
+  });
+
+  fetchCaptureRegionStatus()
+    .then(applyCaptureRegionFromPayload)
+    .catch(() => {});
 }
 
 async function loadScreens() {
@@ -998,13 +1183,26 @@ function syncProviderPresetFromEndpoint() {
   const sel = document.getElementById('providerPreset');
   if (!sel) return;
   const endpoint = document.getElementById('api_endpoint')?.value || '';
-  const guessed = guessProviderIdFromEndpoint(endpoint);
+  const apiMode = document.getElementById('api_mode')?.value || '';
+  const guessed = guessProviderIdFromEndpoint(endpoint, apiMode);
   if (!guessed) {
     sel.value = '';
     return;
   }
   const hasOption = Array.from(sel.options).some((opt) => opt.value === guessed);
   sel.value = hasOption ? guessed : '';
+}
+
+/** Catalog platform for vision picker: endpoint + api_mode only (not providerPreset). */
+function resolveProviderIdForPicker() {
+  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const apiMode = document.getElementById('api_mode')?.value || '';
+  return guessProviderIdFromEndpoint(endpoint, apiMode);
+}
+
+function syncProviderPresetAfterEndpointEdit() {
+  syncProviderPresetFromEndpoint();
+  syncVisionModelPickerFromForm(document.getElementById('model')?.value || '');
 }
 
 // 切换服务商预设：填 endpoint/mode、清空 API Key 输入、重置为 catalog 默认视觉模型。
@@ -1035,7 +1233,7 @@ function resolveCatalogPlatform(providerId) {
   return catalogCache.platforms.find((p) => p.provider_id === providerId) || null;
 }
 
-function guessProviderIdFromEndpoint(endpoint) {
+function guessProviderIdFromEndpoint(endpoint, apiMode) {
   const value = (endpoint || '').toLowerCase();
   const ordered = [
     ['ark.cn-beijing.volces.com', 'doubao'],
@@ -1048,7 +1246,7 @@ function guessProviderIdFromEndpoint(endpoint) {
   for (const [fragment, id] of ordered) {
     if (value.includes(fragment)) return id;
   }
-  const mode = document.getElementById('api_mode')?.value || '';
+  const mode = apiMode ?? document.getElementById('api_mode')?.value ?? '';
   if (mode === 'doubao') return 'doubao';
   return '';
 }
@@ -1271,11 +1469,17 @@ function renderVisionModelPicker(providerId, selectedModelId, options = {}) {
       }
     });
 
+    const textWrap = document.createElement('span');
+    textWrap.className = 'vision-model-id flex flex-col min-w-0';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'font-semibold text-warmText truncate';
+    nameSpan.textContent = model.name || model.id;
     const idSpan = document.createElement('span');
-    idSpan.className = 'vision-model-id';
+    idSpan.className = 'text-xs text-gray-400 truncate';
     idSpan.textContent = model.id;
+    textWrap.append(nameSpan, idSpan);
 
-    row.append(radio, idSpan);
+    row.append(radio, textWrap);
     appendVisionModelRowMeta(row, model);
     picker.appendChild(row);
   });
@@ -1306,11 +1510,7 @@ function renderVisionModelPicker(providerId, selectedModelId, options = {}) {
 }
 
 function syncVisionModelPickerFromForm(selectedModelId) {
-  const preset = document.getElementById('providerPreset')?.value;
-  const providerId = preset || guessProviderIdFromEndpoint(
-    document.getElementById('api_endpoint')?.value || '',
-  );
-  renderVisionModelPicker(providerId, selectedModelId || '');
+  renderVisionModelPicker(resolveProviderIdForPicker(), selectedModelId || '');
 }
 
 async function personaFetch(path) {
@@ -1425,6 +1625,8 @@ async function loadCustomModels() {
           modelEl.value = res.default_model_id;
           syncVisionModelPickerFromForm(res.default_model_id);
         }
+        const cfg = await reloadConfigFromServer();
+        updateModelActiveSourceBanner(cfg);
         showToast(`已设为默认模型：${res.default_model_id || m.modelId}`);
         loadCustomModels();
       };
@@ -1723,6 +1925,237 @@ function initSettingsTabs() {
   });
 }
 
+const ANNOUNCEMENTS_LAST_SEEN_KEY = 'danmu_announcements_last_seen_at';
+const ANNOUNCEMENTS_BADGE_POLL_MS = 5 * 60 * 1000;
+let announcementsBadgePollTimer = null;
+
+function getAnnouncementsLastSeenAt() {
+  try {
+    return localStorage.getItem(ANNOUNCEMENTS_LAST_SEEN_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setAnnouncementsLastSeenAt(iso) {
+  try {
+    if (iso) localStorage.setItem(ANNOUNCEMENTS_LAST_SEEN_KEY, iso);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasUnreadAnnouncements(rows) {
+  if (!rows?.length) return false;
+  const lastSeen = getAnnouncementsLastSeenAt();
+  if (!lastSeen) return true;
+  const seenMs = Date.parse(lastSeen);
+  if (Number.isNaN(seenMs)) return rows.length > 0;
+  return rows.some((row) => {
+    const t = Date.parse(row.created_at || '');
+    return !Number.isNaN(t) && t > seenMs;
+  });
+}
+
+function markAnnouncementsRead(rows) {
+  if (!rows?.length) {
+    setAnnouncementsLastSeenAt(new Date().toISOString());
+    return;
+  }
+  let maxMs = 0;
+  let maxIso = '';
+  for (const row of rows) {
+    const t = Date.parse(row.created_at || '');
+    if (!Number.isNaN(t) && t >= maxMs) {
+      maxMs = t;
+      maxIso = row.created_at;
+    }
+  }
+  setAnnouncementsLastSeenAt(maxIso || new Date().toISOString());
+}
+
+function updateAnnouncementsNavBadge(show) {
+  const badge = document.getElementById('announcementsNavBadge');
+  if (!badge) return;
+  badge.classList.toggle('hidden', !show);
+  badge.setAttribute('aria-hidden', show ? 'false' : 'true');
+}
+
+async function refreshAnnouncementsUnreadBadge() {
+  if (!window.DanmuSupabase?.isConfigured?.()) {
+    updateAnnouncementsNavBadge(false);
+    return;
+  }
+  try {
+    const rows = await window.DanmuSupabase.listAnnouncements();
+    const list = Array.isArray(rows) ? rows : [];
+    const onAnnouncementsPage = document.getElementById('page-announcements')?.classList.contains('active');
+    if (onAnnouncementsPage) {
+      markAnnouncementsRead(list);
+      updateAnnouncementsNavBadge(false);
+      return;
+    }
+    updateAnnouncementsNavBadge(hasUnreadAnnouncements(list));
+  } catch {
+    /* keep current badge state */
+  }
+}
+
+function startAnnouncementsBadgePolling() {
+  if (announcementsBadgePollTimer) return;
+  announcementsBadgePollTimer = setInterval(() => {
+    refreshAnnouncementsUnreadBadge().catch(console.error);
+  }, ANNOUNCEMENTS_BADGE_POLL_MS);
+}
+
+function formatAnnouncementDate(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return String(iso);
+  }
+}
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderAnnouncementsList(items) {
+  const list = document.getElementById('announcementsList');
+  if (!list) return;
+  if (!window.DanmuSupabase?.isConfigured?.()) {
+    list.innerHTML =
+      '<p class="announcements-error">未配置云端公告服务。请将 supabase-config.example.js 复制为 supabase-config.js 并填入项目地址与密钥。</p>';
+    return;
+  }
+  if (!items?.length) {
+    list.innerHTML = '<p class="announcements-empty">暂无公告</p>';
+    return;
+  }
+  list.innerHTML = items
+    .map((row) => {
+      const level = ['info', 'warning', 'critical'].includes(row.level) ? row.level : 'info';
+      const pinned = row.pinned
+        ? '<span class="announcement-pinned-badge">置顶</span>'
+        : '';
+      const meta = formatAnnouncementDate(row.created_at);
+      return `<article class="announcement-card announcement-level-${level}">
+        <header class="announcement-card-header">
+          <h3 class="announcement-card-title">${escapeHtml(row.title)}</h3>
+          ${pinned}
+          <time class="announcement-card-meta" datetime="${escapeHtml(row.created_at || '')}">${escapeHtml(meta)}</time>
+        </header>
+        <div class="announcement-card-body">${escapeHtml(row.body)}</div>
+      </article>`;
+    })
+    .join('');
+}
+
+async function loadAnnouncementsPage() {
+  const list = document.getElementById('announcementsList');
+  if (!list) return;
+  if (!window.DanmuSupabase?.isConfigured?.()) {
+    renderAnnouncementsList([]);
+    return;
+  }
+  list.innerHTML = '<p class="text-gray-500 text-sm">正在加载公告…</p>';
+  try {
+    const rows = await window.DanmuSupabase.listAnnouncements();
+    const list = Array.isArray(rows) ? rows : [];
+    renderAnnouncementsList(list);
+    markAnnouncementsRead(list);
+    updateAnnouncementsNavBadge(false);
+  } catch (err) {
+    list.innerHTML = `<p class="announcements-error">${escapeHtml(err.message || '加载失败')} <button type="button" class="underline font-semibold" id="btnAnnouncementsRetry">重试</button></p>`;
+    document.getElementById('btnAnnouncementsRetry')?.addEventListener('click', () => {
+      loadAnnouncementsPage().catch(console.error);
+    });
+  }
+}
+
+function updateFeedbackQuotaHint(quota) {
+  const el = document.getElementById('feedbackQuotaHint');
+  if (!el) return;
+  if (!quota) {
+    el.textContent = '暂时无法查询提交额度';
+    return;
+  }
+  const remaining = Number(quota.remaining ?? 0);
+  const limit = Number(quota.limit ?? 2);
+  const hint = quota.resets_hint || `每 3 小时最多提交 ${limit} 条`;
+  if (remaining <= 0) {
+    el.textContent = hint;
+    el.classList.add('text-red-600');
+  } else {
+    el.textContent = `本机还可提交 ${remaining} / ${limit} 条（${hint}）`;
+    el.classList.remove('text-red-600');
+  }
+  const submitBtn = document.getElementById('btnFeedbackSubmit');
+  if (submitBtn) submitBtn.disabled = remaining <= 0;
+}
+
+async function refreshFeedbackQuota() {
+  const el = document.getElementById('feedbackQuotaHint');
+  if (!el) return;
+  if (!window.DanmuSupabase?.isConfigured?.()) {
+    el.textContent = '未配置云端反馈服务，无法在线提交（仍可通过下方社群联系）';
+    const submitBtn = document.getElementById('btnFeedbackSubmit');
+    if (submitBtn) submitBtn.disabled = true;
+    return;
+  }
+  el.textContent = '正在查询提交额度…';
+  el.classList.remove('text-red-600');
+  try {
+    const quota = await window.DanmuSupabase.getFeedbackQuota();
+    updateFeedbackQuotaHint(quota);
+  } catch (err) {
+    el.textContent = err.message || '无法查询提交额度';
+  }
+}
+
+let feedbackPageInitialized = false;
+
+function initFeedbackPage() {
+  refreshFeedbackQuota().catch(console.error);
+  if (feedbackPageInitialized) return;
+  feedbackPageInitialized = true;
+  document.getElementById('feedbackForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!window.DanmuSupabase?.isConfigured?.()) {
+      showToast('未配置云端反馈服务', true);
+      return;
+    }
+    const content = document.getElementById('feedbackContent')?.value ?? '';
+    const contact = document.getElementById('feedbackContact')?.value ?? '';
+    const btn = document.getElementById('btnFeedbackSubmit');
+    if (btn) btn.disabled = true;
+    try {
+      await window.DanmuSupabase.submitFeedback({ content, contact });
+      showToast('反馈已提交，感谢你的帮助~');
+      const ta = document.getElementById('feedbackContent');
+      const inp = document.getElementById('feedbackContact');
+      if (ta) ta.value = '';
+      if (inp) inp.value = '';
+      await refreshFeedbackQuota();
+    } catch (err) {
+      showToast(err.message || '提交失败', true);
+    } finally {
+      await refreshFeedbackQuota();
+    }
+  });
+}
+
 function navigate(page) {
   document.querySelectorAll('.page-panel').forEach((p) => p.classList.remove('active'));
   document.querySelectorAll('#nav .sidebar-item').forEach((n) => n.classList.remove('active'));
@@ -1736,6 +2169,8 @@ function navigate(page) {
   }
   if (page === 'persona') loadPersonaEditor().catch(console.error);
   if (page === 'danmu-pool') loadDanmuPoolPage().catch((e) => showToast(e.message, true));
+  if (page === 'announcements') loadAnnouncementsPage().catch((e) => showToast(e.message, true));
+  if (page === 'feedback') initFeedbackPage();
   if (page === 'logs') {
     renderLogView();
     updateLogPanelState();
@@ -1913,7 +2348,10 @@ function startStatusPolling() {
       .then(() => {
         if (REALTIME.statusOpen) stopStatusPolling();
       })
-      .catch((e) => console.warn('[realtime] status poll failed', e));
+      .catch((e) => {
+        console.warn('[realtime] status poll failed', e);
+        showToast('状态轮询失败，界面可能不是最新', true);
+      });
   };
   tick();
   REALTIME.pollingTimer = setInterval(tick, REALTIME.pollIntervalMs);
@@ -2165,7 +2603,6 @@ async function init() {
   }
   applyStatus(await fetch(`${API.base}/api/status`).then((r) => r.json()));
   initDiagnosticsPanel();
-  startDiagnosticsPolling();
   startRealtimeTransport();
 
   initSettingsTabs();
@@ -2174,6 +2611,7 @@ async function init() {
   initSidebarNavFloatingHints();
   initNormalBatchControls();
   initDanmuPoolPage();
+  initCaptureRegionControls();
 
   document.querySelectorAll('.sidebar-nav-hint').forEach((btn) => {
     btn.addEventListener('click', (e) => e.stopPropagation());
@@ -2187,13 +2625,13 @@ async function init() {
 
   document.getElementById('providerPreset')?.addEventListener('change', (e) => {
     if (e.target.value) applyProviderPreset(e.target.value);
-    else syncVisionModelPickerFromForm(document.getElementById('model')?.value || '');
+    else syncProviderPresetAfterEndpointEdit();
   });
 
-  document.getElementById('api_endpoint')?.addEventListener('change', () => {
-    if (!document.getElementById('providerPreset')?.value) {
-      syncVisionModelPickerFromForm(document.getElementById('model')?.value || '');
-    }
+  document.getElementById('api_endpoint')?.addEventListener('change', syncProviderPresetAfterEndpointEdit);
+  document.getElementById('api_mode')?.addEventListener('change', () => {
+    syncProviderPresetAfterEndpointEdit();
+    updateMicModeHint();
   });
 
   document.querySelectorAll('.log-level-cb').forEach((cb) => {
@@ -2223,6 +2661,9 @@ async function init() {
 
   updateLogPanelState();
 
+  refreshAnnouncementsUnreadBadge().catch(console.error);
+  startAnnouncementsBadgePolling();
+
   document.getElementById('btnToggle').addEventListener('click', async () => {
     try {
       const st = await fetch(`${API.base}/api/status`).then((r) => r.json());
@@ -2239,7 +2680,6 @@ async function init() {
   });
 
   document.getElementById('mic_mode_enabled')?.addEventListener('change', updateMicModeHint);
-  document.getElementById('api_mode')?.addEventListener('change', updateMicModeHint);
 
   // POST /api/config → bridge.save_config → 主线程 ConfigService（勿期望 HTTP 线程直接改 engine）
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
@@ -2248,7 +2688,10 @@ async function init() {
       await apiFetch('/api/config', { method: 'POST', body: JSON.stringify({ data: collectFormData() }) });
       const cfg = await reloadConfigFromServer();
       const active = cfg.active_model_id || cfg.model || '';
-      showToast(active ? `配置已保存，当前生效模型：${active}` : '配置已保存~');
+      const label = cfg.model_display_name && cfg.model_display_name !== active
+        ? `${cfg.model_display_name}（${active}）`
+        : active;
+      showToast(label ? `配置已保存，当前生效模型：${label}` : '配置已保存~');
       if (document.getElementById('personaSelect')?.value) {
         loadPersonaTemplate().catch(console.error);
       }
@@ -2400,7 +2843,12 @@ async function init() {
 
   document.getElementById('btnAddCustomModel')?.addEventListener('click', () => openModelModal(-1));
   document.getElementById('btnModelCancel')?.addEventListener('click', closeModelModal);
-  document.getElementById('btnFeedbackReward')?.addEventListener('click', openRewardModal);
+  document.getElementById('btnAnnouncementsRefresh')?.addEventListener('click', () => {
+    loadAnnouncementsPage().catch((e) => showToast(e.message, true));
+  });
+  document.querySelectorAll('.js-reward-fab').forEach((btn) => {
+    btn.addEventListener('click', openRewardModal);
+  });
   document.getElementById('btnRewardClose')?.addEventListener('click', closeRewardModal);
   document.getElementById('rewardModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'rewardModal') closeRewardModal();
@@ -2496,7 +2944,6 @@ document.addEventListener('visibilitychange', () => {
       REALTIME.statusAttempt = 0;
       REALTIME.logsAttempt = 0;
       startRealtimeTransport();
-      refreshDiagnostics();
       return bootstrapLogsFromServer(0);
     })
     .catch((e) => console.warn('[realtime] visibility refresh failed', e));

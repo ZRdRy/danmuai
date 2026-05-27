@@ -131,6 +131,9 @@ def compress_screenshot(pixmap: QPixmap, max_width: int = IMAGE_MAX_WIDTH, quali
     return f"data:image/jpeg;base64,{b64}"
 
 
+VISUAL_INFLIGHT_WARN_SEC = 45.0
+
+
 class BatchTracker:
     """节奏模式下「当前批次」的节拍锚点。
 
@@ -171,11 +174,11 @@ class DanmuApp(QObject):
         self.web_bridge = None
         self.webview_shell = None
         self.web_runtime_state = WebRuntimeState()
+        self._region_selector = None
+        self._region_selection_state = "idle"
+        self._region_selection_screen_index: int | None = None
         # --- 核心子系统（配置、截图、弹幕引擎、叠加层、托盘、全局热键）---
         self.config = ConfigStore()
-        _rx, _ry, _rw, _rh = self.config.get_region()
-        if _rw > 0 or _rh > 0:
-            self.config.set_region(0, 0, 0, 0)
         Translator.set_language(
             Translator.resolve_language(self.config.get("language", ""))
         )
@@ -302,7 +305,7 @@ class DanmuApp(QObject):
         # 统计数据（会话内 + 持久化累计）
         from app.session_run_log import SessionRunLog
 
-        self.session_run_log = SessionRunLog()
+        self.session_run_log = SessionRunLog(self.config)
         self.lifetime_stats = LifetimeStats(self.config)
         self._lifetime_flush_timer = QTimer(self)
         self._lifetime_flush_timer.setInterval(2000)
@@ -373,11 +376,11 @@ class DanmuApp(QObject):
             return service
 
     @property
-    def _request_started_at_by_id(self) -> dict[int, float]:
+    def _request_started_at_by_id(self) -> dict[str, float]:
         return self._get_request_timing_service().request_started_at_by_id
 
     @_request_started_at_by_id.setter
-    def _request_started_at_by_id(self, value: dict[int, float]) -> None:
+    def _request_started_at_by_id(self, value: dict[str, float]) -> None:
         self._get_request_timing_service().request_started_at_by_id = value
 
     @property
@@ -662,7 +665,18 @@ class DanmuApp(QObject):
         scene_generation: int,
     ) -> dict:
         key = self._reply_request_id(request_round, screenshot_id, scene_generation)
-        return self._pending_request_meta.pop(key, {"source": "visual"})
+        meta = self._pending_request_meta.pop(key, None)
+        if meta is None:
+            self.logger.warning(
+                "request_meta_missing: request_id=%s screenshot_id=%s request_round=%s "
+                "scene_generation=%s reason=pop_before_reply",
+                key,
+                screenshot_id,
+                request_round,
+                scene_generation,
+            )
+            return {}
+        return meta
 
     def _release_inflight_for_source(self, source: str) -> None:
         if source == "mic":
@@ -709,6 +723,11 @@ class DanmuApp(QObject):
         user_pt = build_mic_insert_user_pt(user_pt, self.config)
 
         self.mic_in_flight += 1
+        mic_request_id = self._reply_request_id(request_round, screenshot_id, scene_generation)
+        self._get_request_timing_service().mark_started(
+            request_id=mic_request_id,
+            now=time.monotonic(),
+        )
         self._register_request_meta(request_round, screenshot_id, scene_generation, "mic")
         self.logger.info(
             f"mic insert api triggered seq={self._mic_request_seq} "
@@ -789,6 +808,132 @@ class DanmuApp(QObject):
     def set_active_personae(self, active: list[str]) -> None:
         self.personae.set_active(active)
         self.config_changed.emit()
+
+    def get_capture_region_status(self) -> dict[str, object]:
+        from app.web_api.capture_region import read_capture_region_status
+
+        state = self._region_selection_state
+        if state not in ("selecting", "saved", "cancelled", "invalid"):
+            state = "idle"
+        return read_capture_region_status(self.config, selection_state=state)
+
+    def request_capture_region_selection(self) -> None:
+        from app.region_selector import RegionSelectorOverlay, screen_for_index
+        from app.snipper import resolve_screen_index
+        from app.web_api.capture_region import SELECTION_SELECTING
+
+        if self._region_selection_state == SELECTION_SELECTING and self._region_selector is not None:
+            self.logger.debug("capture region selection already in progress")
+            return
+
+        self._close_region_selector()
+        screen_index = resolve_screen_index(self.config)
+        self._region_selection_screen_index = screen_index
+        screen = screen_for_index(screen_index)
+        if screen is None:
+            self._region_selection_state = "invalid"
+            self.logger.warning("capture region selection: no screen available")
+            self._publish_capture_region_status()
+            return
+
+        self._region_selection_state = SELECTION_SELECTING
+        overlay = RegionSelectorOverlay(screen)
+        overlay.selection_finished.connect(self._on_region_selection_finished)
+        overlay.selection_cancelled.connect(self._on_region_selection_cancelled)
+        overlay.destroyed.connect(self._on_region_selector_destroyed)
+        self._region_selector = overlay
+        overlay.showFullScreen()
+        self._publish_capture_region_status()
+
+    def reset_capture_region(self) -> None:
+        from app.web_api.capture_region import clear_capture_region
+
+        self._close_region_selector()
+        self._region_selection_state = "idle"
+        self._region_selection_screen_index = None
+        clear_capture_region(self.config)
+        self.config_changed.emit()
+        self._publish_capture_region_status()
+
+    def _close_region_selector(self) -> None:
+        overlay = self._region_selector
+        self._region_selector = None
+        if overlay is None:
+            return
+        try:
+            overlay.selection_finished.disconnect(self._on_region_selection_finished)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            overlay.selection_cancelled.disconnect(self._on_region_selection_cancelled)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            overlay.destroyed.disconnect(self._on_region_selector_destroyed)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            overlay.close()
+        except RuntimeError:
+            pass
+
+    def _on_region_selector_destroyed(self, *_args) -> None:
+        if self._region_selector is not None:
+            self._region_selector = None
+
+    def _on_region_selection_finished(self, rect) -> None:
+        from app.region_selector import screen_for_index
+        from app.web_api.capture_region import (
+            SELECTION_INVALID,
+            SELECTION_SAVED,
+            apply_capture_region,
+        )
+
+        self._region_selector = None
+        screen_index = self._region_selection_screen_index
+        if screen_index is None:
+            screen_index = self.config.get_int("screen_index", 0)
+        screen = screen_for_index(screen_index)
+        if screen is None:
+            self._region_selection_state = SELECTION_INVALID
+            self._publish_capture_region_status()
+            return
+
+        geo = screen.geometry()
+        applied = apply_capture_region(
+            self.config,
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            screen_width=geo.width(),
+            screen_height=geo.height(),
+        )
+        if applied is None:
+            self._region_selection_state = SELECTION_INVALID
+            self.logger.info("capture region selection rejected: invalid or too small")
+        else:
+            self._region_selection_state = SELECTION_SAVED
+            self.logger.info(
+                "capture region saved "
+                f"x={applied[0]} y={applied[1]} w={applied[2]} h={applied[3]} "
+                f"screen_index={screen_index}"
+            )
+            self.config_changed.emit()
+        self._publish_capture_region_status()
+
+    def _on_region_selection_cancelled(self) -> None:
+        from app.web_api.capture_region import SELECTION_CANCELLED
+
+        self._region_selector = None
+        self._region_selection_state = SELECTION_CANCELLED
+        self.logger.debug("capture region selection cancelled")
+        self._publish_capture_region_status()
+
+    def _publish_capture_region_status(self) -> None:
+        bridge = getattr(self, "web_bridge", None)
+        if bridge:
+            bridge.publish_status()
 
     def resolve_request_credentials(self):
         return self.ai_worker._resolve_request_credentials()
@@ -945,15 +1090,31 @@ class DanmuApp(QObject):
         if self.engine.running:
             self._screenshot_loop()
 
-    def _consume_request_timing(self, screenshot_id: int):
+    def _consume_request_timing(
+        self,
+        request_round: int,
+        screenshot_id: int,
+        scene_generation: int,
+    ) -> None:
+        request_id = self._reply_request_id(request_round, screenshot_id, scene_generation)
         timing_service = self._get_request_timing_service()
         rtt = timing_service.consume_timing(
-            request_id=screenshot_id,
+            request_id=request_id,
             now=time.monotonic(),
         )
         if rtt is None:
+            self.logger.warning(
+                "RTT 样本缺失: request_id=%s screenshot_id=%s request_round=%s "
+                "scene_generation=%s reason=timing_not_started",
+                request_id,
+                screenshot_id,
+                request_round,
+                scene_generation,
+            )
             return
-        self.logger.debug(f"[DEBUG] RTT={rtt:.1f}s, avg={self._rtt_avg():.1f}s, screenshot_id={screenshot_id}")
+        self.logger.debug(
+            f"[DEBUG] RTT={rtt:.1f}s, avg={self._rtt_avg():.1f}s, request_id={request_id}"
+        )
 
     def _is_reply_stale(
         self,
@@ -1158,6 +1319,25 @@ class DanmuApp(QObject):
         if pixmap is None:
             self.logger.warning(tr("app.capture_failed"))
             return
+        if pixmap.isNull() or pixmap.width() <= 0 or pixmap.height() <= 0:
+            screen_index = self.config.get_int("screen_index", 0)
+            region_x = self.config.get_int("region_x", 0)
+            region_y = self.config.get_int("region_y", 0)
+            region_w = self.config.get_int("region_w", 0)
+            region_h = self.config.get_int("region_h", 0)
+            self.logger.warning(
+                "截图无效: is_null=%s width=%s height=%s screen_index=%s "
+                "region_x=%s region_y=%s region_w=%s region_h=%s reason=invalid_pixmap",
+                pixmap.isNull(),
+                pixmap.width(),
+                pixmap.height(),
+                screen_index,
+                region_x,
+                region_y,
+                region_w,
+                region_h,
+            )
+            return
         self._latest_screenshot = pixmap
         self._latest_screenshot_time = time.monotonic()
         self._latest_screenshot_id += 1
@@ -1177,6 +1357,24 @@ class DanmuApp(QObject):
     def _on_normal_capture_tick(self):
         # 普通模式主链路：无视觉 in-flight 才截图；成功则同 tick 内触发 API（不等待 reply_timer）
         if self._has_visual_request_in_flight():
+            elapsed_ms = 0
+            if self._inflight_started_at > 0:
+                elapsed_ms = int((time.monotonic() - self._inflight_started_at) * 1000)
+            warn_ms = int(VISUAL_INFLIGHT_WARN_SEC * 1000)
+            if elapsed_ms >= warn_ms:
+                self.logger.warning(
+                    "视觉请求 in-flight 超时: screenshot_id=%s elapsed_ms=%s ai_in_flight=%s "
+                    "reason=inflight_watchdog",
+                    self._inflight_screenshot_id,
+                    elapsed_ms,
+                    self.ai_in_flight,
+                )
+            else:
+                self.logger.debug(
+                    "跳过截图 tick: reason=in_flight screenshot_id=%s elapsed_ms=%s",
+                    self._inflight_screenshot_id,
+                    elapsed_ms,
+                )
             return
         self._capture_screenshot()
         if self._latest_screenshot is None:
@@ -1223,6 +1421,7 @@ class DanmuApp(QObject):
         persona = self.personae.pick_random()
         system_pt, user_pt = self.personae.get_prompt(persona)
 
+        request_id = self._reply_request_id(request_round, screenshot_id, self._scene_generation)
         self.logger.info(
             tr("app.api_triggered").format(
                 batch_id=batch_id,
@@ -1230,6 +1429,7 @@ class DanmuApp(QObject):
                 scene_generation=self._scene_generation,
                 persona=persona_display_name(persona),
             )
+            + f" request_round={request_round} request_id={request_id}"
         )
 
         now = datetime.now().strftime("%H:%M:%S")
@@ -1239,7 +1439,7 @@ class DanmuApp(QObject):
 
         self._current_persona = persona
         self._get_request_timing_service().mark_started(
-            request_id=screenshot_id,
+            request_id=request_id,
             now=time.monotonic(),
         )
         self._register_request_meta(request_round, screenshot_id, self._scene_generation, "visual")
@@ -1423,7 +1623,7 @@ class DanmuApp(QObject):
         """AiWorker.finished 主线程入口：释放在途 → 解析入队 → 驱动 _consume_reply_queue。"""
         self.logger.debug(f"[DEBUG] _on_ai_reply called, text length={len(text)}")
         meta = self._pop_request_meta(request_round, screenshot_id, scene_generation)
-        source = meta.get("source", "visual")
+        source = meta.get("source") or "visual"
         is_mic = source == "mic"
 
         self._release_inflight_for_source(source)
@@ -1457,7 +1657,7 @@ class DanmuApp(QObject):
                 if self.engine.running and not self.screenshot_timer.isActive():
                     self.screenshot_timer.start()
 
-        self._consume_request_timing(screenshot_id)
+        self._consume_request_timing(request_round, screenshot_id, scene_generation)
 
         is_stale, stale_reason = self._is_reply_stale(screenshot_id, captured_at, scene_generation, source="ai")
         if is_stale:
@@ -1476,6 +1676,17 @@ class DanmuApp(QObject):
             config=self.config,
         )
         if not normalized_items:
+            request_id = self._reply_request_id(request_round, screenshot_id, scene_generation)
+            self.logger.warning(
+                "AI 回复解析为空: request_id=%s screenshot_id=%s request_round=%s "
+                "scene_generation=%s text_len=%s raw_count=%s reason=empty_parse",
+                request_id,
+                screenshot_id,
+                request_round,
+                scene_generation,
+                len(text or ""),
+                len(raw_items),
+            )
             return
 
         if self._memory_enabled():
@@ -1684,7 +1895,7 @@ class DanmuApp(QObject):
         不在此解析弹幕或入队。
         """
         meta = self._pop_request_meta(request_round, screenshot_id, scene_generation)
-        source = meta.get("source", "visual")
+        source = meta.get("source") or "visual"
         is_mic = source == "mic"
 
         self._release_inflight_for_source(source)
@@ -1695,10 +1906,11 @@ class DanmuApp(QObject):
                 f"mic insert api error: {msg} "
                 f"[persona={persona_id}, round={request_round}, screenshot_id={screenshot_id}]"
             )
+            self._consume_request_timing(request_round, screenshot_id, scene_generation)
             return
 
         self._local_fallback_active = False
-        self._consume_request_timing(screenshot_id)
+        self._consume_request_timing(request_round, screenshot_id, scene_generation)
         self.logger.error(f"{msg} [persona={persona_id}, round={request_round}, screenshot_id={screenshot_id}, scene_generation={scene_generation}]")
 
         self._consecutive_failures += 1

@@ -19,7 +19,7 @@ _POOL_VERSION = 1
 
 
 def danmu_pool_enabled_from_config(config) -> bool:
-    """True when built-in formula pool is enabled (default off if unset)."""
+    """True when built-in formula pool is enabled (default on per CONFIG_DEFAULTS)."""
     raw = config.get("danmu_pool_enabled", "")
     if raw in ("", None):
         return False

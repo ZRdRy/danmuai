@@ -11,7 +11,7 @@ Short reference for maintainers and Boundary Guard. For onboarding, read [ARCHIT
 | `StatusSnapshotBuilder` | `/api/status` |
 | `DiagnosticSnapshotBuilder` | `/api/diagnostics` (read-only) |
 | `RequestScheduler` | Schedule gates; owns `last_api_trigger_at` |
-| `RequestTimingService` | RTT / `request_started_at_by_id` / `rtt_history` |
+| `RequestTimingService` | RTT / `request_started_at_by_id` / `rtt_history`；键为复合 `{request_round}:{screenshot_id}:{scene_generation}` |
 | `StatsState` | Counters and session runtime |
 | `WebRuntimeState` | Web error + display cache |
 | `GenerationPipelineState` | Read-only generation field projection |

@@ -2,7 +2,27 @@
 
 ## Unreleased
 
-（暂无）
+### Fixed
+
+- RTT 计时键改为 `{request_round}:{screenshot_id}:{scene_generation}`，避免麦克风与视觉请求同帧互相覆盖
+- `ConfigStore.set()` 写入失败时不再污染内存缓存（与 `set_batch` 一致）
+
+### Changed
+
+- 截图：拒绝 null / `isNull()` / 零尺寸 pixmap，不递增 `screenshot_id`
+- 主链路可观测性：无效截图、空 AI 解析、缺失 request meta / RTT、视觉 in-flight 超时（45s）等 structured warning 日志
+- Web：`POST /api/personae/{name}/rollback` 需 Bearer；配置保存失败写入 Web 错误状态
+
+### Added
+
+- Web 侧栏 **公告** 页：从 Supabase 拉取已发布公告列表（置顶优先）
+- **问题反馈** 在线表单：提交至 Supabase；本机每 3 小时最多 2 条（数据库 RLS + `client_id` 限流）
+- `web/static/supabase-client.js`、`supabase-config.example.js`；迁移脚本 `supabase/migrations/001_announcements_feedback.sql`
+
+### Documentation
+
+- [WEB_CONSOLE.md](WEB_CONSOLE.md)：公告/反馈与 Supabase 配置说明
+- 同步主链路/运行态文档： [MAIN_PIPELINE.md](MAIN_PIPELINE.md)、[main-pipeline-sequence.md](main-pipeline-sequence.md)、[RUNTIME_STATE.md](RUNTIME_STATE.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[AGENTS.md](../AGENTS.md)、[OPEN_SOURCE_AUDIT.md](OPEN_SOURCE_AUDIT.md)
 
 ## 2026-05-27
 
@@ -27,6 +47,8 @@
 
 ### Changed
 
+- Web 运行概览：**诊断面板**默认隐藏（不再轮询 `/api/diagnostics`；接口仍可供维护者调试）
+- **弹幕场次记录**写入本机 `config.db`，重启后保留最近 100 条
 - 公式化补足：`min_on_screen` 在 **内置库或自定义库** 任一开启时生效；自定义库开启时即使内置库关闭也可补足
 - `PUT /api/config` 不再包含 `danmu_pool_enabled` / `min_on_screen`（请用 `/api/danmu-pool/settings`）
 - 弹幕生成统一为普通模式间隔与批次条数；遗留 `realtime` 配置在启动/Web 保存时映射为普通模式行为

@@ -35,13 +35,26 @@ python main.py --web-browser    # 系统浏览器
 
 | 侧栏 | 能力 |
 |------|------|
-| 运行概览 | 启停、状态、会话统计与持久累计（生成总弹幕、运行总时长、消耗总 Token） |
+| 运行概览 | 启停、状态、会话统计与持久累计（生成总弹幕、运行总时长、消耗总 Token）；**弹幕场次记录**（每轮启停，本机 `config.db` 最近 100 条）；诊断面板默认隐藏，`GET /api/diagnostics` 仍可供调试 |
 | 助手设置 | 全局配置、节奏/截图、图像压缩预览、自定义模型 |
 | 公式化弹幕库 | 内置/自定义公式化短句开关、最小同屏补足、自定义句增删 |
 | 人格工坊 | 提示词编辑、版本回滚预览、新建/删除自定义人格 |
 | 弹幕日记 | 多级别过滤、复制可见、自动滚动 |
 | 教程 | 飞书文档外链 |
-| 问题反馈 | 社群说明、QQ 群二维码、赞赏码弹窗 |
+| 公告 | Supabase 已发布公告列表（置顶优先；需 `web/static/supabase-config.js`） |
+| 问题反馈 | 在线反馈表单（Supabase）、社群说明、QQ 群二维码、赞赏码弹窗 |
+
+### Supabase（公告与反馈）
+
+前端直连 Supabase PostgREST（不经本地 FastAPI）。首次开发请将 [`web/static/supabase-config.example.js`](../web/static/supabase-config.example.js) 复制为 `supabase-config.js` 并填入项目的 **URL** 与 **anon**（或 publishable）密钥；`supabase-config.js` 建议不提交公开仓库。
+
+| 能力 | 说明 |
+|------|------|
+| 公告 | `announcements` 表，`published=true` 且在 `starts_at`/`ends_at` 窗口内可对 anon 只读 |
+| 反馈 | `feedback` 表，anon 仅 INSERT；每 `client_id`（`localStorage`）3 小时内最多 2 条 |
+| 管理 | Supabase Dashboard → Table Editor 发布公告、查看反馈 |
+
+数据库迁移见 [`supabase/migrations/001_announcements_feedback.sql`](../supabase/migrations/001_announcements_feedback.sql)。
 
 ## API 摘要
 
@@ -50,14 +63,14 @@ python main.py --web-browser    # 系统浏览器
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
 | GET | `/api/session` | 否 | 返回 `token`、`base_url` |
-| GET | `/api/status` | 否 | 运行态与统计（含 `lifetime_danmu_count`、`lifetime_runtime_sec`、`lifetime_total_tokens`）；`DANMU_DEDUP_PROFILE=1` 时额外含 `dedup_profile` |
-| GET/PUT | `/api/config` | PUT 需 Bearer | `WEB_CONFIG_KEYS` 子集；GET 返回掩码后的 `api_key` 与 `custom_models[].apiKey` |
+| GET | `/api/status` | 否 | 运行态与统计（含 `lifetime_danmu_count`、`lifetime_runtime_sec`、`lifetime_total_tokens`）；另含只读模型投影：`active_model_id`、`inferred_provider_id`、`model_display_name`、`uses_custom_credentials`、`model_source`（`catalog`/`custom`/`freeform`/`unknown`）、`provider_model_mismatch`；`DANMU_DEDUP_PROFILE=1` 时额外含 `dedup_profile` |
+| GET/PUT | `/api/config` | PUT 需 Bearer | `WEB_CONFIG_KEYS` 子集；GET 返回掩码后的 `api_key`、`custom_models[].apiKey` 及与 status 同构的模型投影字段；PUT 会校验 endpoint 与 catalog model 是否匹配（见下方 **配置保存**） |
 | GET | `/api/screens` | 否 | 显示器列表 |
 | GET | `/api/providers` | 否 | 服务商预设 |
 | GET | `/api/model-catalog` | 否 | 视觉模型平台目录（模型 ID、价格、最便宜/麦克风标记） |
 | GET | `/api/meta` | 否 | UI 模式、快捷键等 |
 
-**视觉模型（助手设置 · API 页）**：选择带目录的服务商（火山方舟、阿里云百炼/DashScope、硅基流动/SiliconFlow 等）后，列表仅展示模型 ID；「本平台最便宜」「支持麦克风」等标识显示在 info 图标左侧，悬停 info 可查看名称与价格详情。切换服务商预设时会重置为该平台默认视觉模型（目录中最便宜项）并清空 API 密钥输入框；无目录或自选 ID 时使用「自定义模型」。扩展新平台时只需在 `app/model_catalog.py` 追加数据。
+**视觉模型（助手设置 · API 页）**：选择带目录的服务商（火山方舟、阿里云百炼/DashScope、硅基流动/SiliconFlow、小米 MiMo 等）后，列表主文案为模型展示名，副文案为 model ID；悬停 info 可查看名称、ID 与价格。视觉模型目录由当前 **API 地址** 推断平台（非仅服务商下拉框）；手动改地址后会同步下拉框并刷新列表。切换服务商预设时会重置为该平台默认视觉模型（目录中最便宜项）并清空 API 密钥输入框；保存时若 endpoint 与 model 目录不匹配将拒绝保存。无目录平台或自选 ID 时使用「自定义模型」行。默认模型若来自「自定义模型 → 设为默认」，页面会提示全局 API 地址/密钥不用于生成弹幕。
 | GET | `/api/personae` | 否 | 人格列表与激活状态 |
 | POST | `/api/start` `/api/stop` `/api/toggle` | Bearer | 生成/停止弹幕 |
 | POST | `/api/probe` | Bearer | 全局 API 连接测试 |
@@ -70,7 +83,7 @@ python main.py --web-browser    # 系统浏览器
 | GET | `/api/personae/{name}/template` | 否 | 契约、system/user、builtin 标志 |
 | GET | `/api/personae/{name}/versions` | 否 | 历史版本列表 |
 | PUT | `/api/personae/{name}/template` | Bearer | 保存；内置人格仅更新 user 提示 |
-| POST | `/api/personae/{name}/rollback` | 否 | body `{version}`，加载到编辑器预览 |
+| POST | `/api/personae/{name}/rollback` | 是 | body `{version}`，加载到编辑器预览 |
 | POST | `/api/personae/{name}/restore` | Bearer | 内置人格恢复默认 |
 | POST | `/api/personae` | Bearer | body `{name}`，创建自定义人格 |
 | DELETE | `/api/personae/{name}` | Bearer | 删除非内置人格 |
@@ -105,6 +118,23 @@ python main.py --web-browser    # 系统浏览器
 - **同屏补足**：`min_on_screen` 默认 **5**；设为 **0** 关闭补足。任一库开启且 `min_on_screen > 0` 时，当屏上弹幕不足则从合并池随机补位（`main._maybe_pool_topup`）。
 - **自定义句**：侧栏页批量追加/多选删除；不在 Web 中编辑内置 JSON 全文。
 - **与助手设置分离**：`danmu_pool_*` / `min_on_screen` 仅通过 `/api/danmu-pool/*` 读写，勿写入 `PUT /api/config`。
+
+### 识图区域（鼠标框选）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/capture-region` | 否 | `mode`（`full`/`custom`）、`region`（`x/y/w/h` 相对识图显示器左上角）、`selection_state`（`idle`/`selecting`/`saved`/`cancelled`/`invalid`） |
+| POST | `/api/capture-region/select` | Bearer | 触发主线程 Qt 全屏框选层；立即返回 `{ok, selection_state: selecting}`，不阻塞 |
+| POST | `/api/capture-region/reset` | Bearer | 恢复全屏（`region_*` 置 0）并关闭进行中的框选 |
+
+`region_*` 持久化在 SQLite，**不**经 `PUT /api/config`。`/api/status` 与 WS 亦投影 `capture_region_mode`、`region_*`、`region_selection_state`。框选坐标由 [`app/snipper.py`](../app/snipper.py) 在截图时裁剪；非法 `region_*` 会回退全屏并打 info 日志（`reason=region_*`）。
+
+### 配置保存（`PUT /api/config`）
+
+1. HTTP 线程校验 payload（`validate_web_config_patch`）。
+2. `WebConsoleBridge.save_config_requested.emit(data)` → 主线程 `_on_save_config` → `apply_web_config_payload`。
+3. HTTP 立即返回 `{"ok": true}`；**不**等待主线程写入完成。成功时主线程 `logger.info`；失败时 `logger.error` + `set_web_error_status`（运行概览错误区）。UI toast 以 HTTP 200 为准时，存在极短异步窗口。
+4. 状态降级轮询失败时前端 toast；未捕获的 Promise  rejection 也会 toast（[`web/static/app.js`](../web/static/app.js)）。
 
 ### 图像压缩预览
 

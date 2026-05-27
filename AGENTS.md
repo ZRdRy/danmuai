@@ -51,6 +51,7 @@ python main.py
 | `app/image_compress.py` | PIL + JPEG + Base64，max_width 768 quality 85，无临时文件 |
 | `app/danmu_pool.py` | 本地弹幕库 `data/danmu_pool_zh.json`（1000 条，见 `scripts/extract_danmu_pool.py`） |
 | `app/lifetime_stats.py` | 持久累计统计（弹幕/运行时长/Token），`stop()` 时并入 |
+| `app/session_run_log.py` | 场次记录（启停一轮）；`config.db` 表 `session_runs`，最近 100 条 |
 
 ## 运行与测试
 
@@ -85,13 +86,13 @@ CI：`.github/workflows/ci.yml` — Python 3.12 `windows-latest`
 
 - **加密锁死**：丢失 `%APPDATA%/DanmuAI/.key` → 已加密 Key 不可恢复
 - **弹幕截断**：15 中文字 / 40 英文字 + `...`
-- **公式化弹幕库**：Web 页「公式化弹幕库」管理；`danmu_pool_enabled`（内置）或 `danmu_pool_use_custom`（自定义）任一开启时 `min_on_screen` 补足生效（默认 5，**0** 关闭）；自定义句经 `/api/danmu-pool/custom`，不进 `PUT /api/config`
+- **公式化弹幕库**：Web 页「公式化弹幕库」管理；`danmu_pool_enabled`（内置，新装默认开）或 `danmu_pool_use_custom`（自定义）任一开启时 `min_on_screen` 补足生效（默认 5，**0** 关闭）；AI 条数不足与本地轻量兜底均从合并池去重补齐（已移除硬编码兜底句）；自定义句经 `/api/danmu-pool/custom`，不进 `PUT /api/config`
 - **去重**：`deque(30)` + `recent_exact_set` + Levenshtein `dedup_threshold=0.5`
 - **失败退避**：连续 5 次暂停；401/403/402 立即暂停
 - **输出 token 下限**：`resolve_danmu_max_output_tokens` 下限 **512**（运行时固定关闭 thinking，忽略 `use_thinking` 开启）
 - **思考模式**：豆包/OpenAI 请求均发 `thinking: {"type":"disabled"}`；勿把 `reasoning_content` 当弹幕；MiMo 未关闭时易「AI 返回为空」
 - **小米 MiMo**：预设 `https://api.xiaomimimo.com/v1`（OpenAI 兼容）；目录模型 `mimo-v2.5`（截图推荐）、`mimo-v2-omni`；**开麦仅豆包** `input_audio`，MiMo 走 OpenAI 路径不发音频
-- **全屏截图**：`ScreenCapturer.grab()` 按 `screen_index` 截全屏；`region_*` 未参与裁剪
+- **识图区域**：默认 `screen_index` 全屏；`region_w/h > 0` 时 [`app/snipper.py`](app/snipper.py) 按屏内相对坐标裁剪。Web 经 `POST/GET /api/capture-region/*` 鼠标框选，**勿**把 `region_*` 写入 `PUT /api/config`
 - **Web 写配置**：`PUT /api/config` → bridge 信号 → 主线程 `apply_config_patch`；**勿在 HTTP 线程直接改 Qt 对象**
 - **GET 自定义模型**：返回掩码 `apiKey`
 - **Overlay 窗口标志**：`FramelessWindowHint | WindowStaysOnTopHint | Tool | BypassWindowManagerHint` + Win32 `WS_EX_LAYERED | WS_EX_TRANSPARENT`
@@ -107,6 +108,20 @@ CI：`.github/workflows/ci.yml` — Python 3.12 `windows-latest`
 | `DANMU_SCENE_DEBUG=1` | 场景探测与丢弃日志 |
 | `DANMU_DEDUP_PROFILE=1` | 去重统计 `/api/status.dedup_profile` |
 | `DANMU_WEB_LAUNCH=browser` | 等同 `--web-browser` |
+
+## 排障日志（`reason=`）
+
+主链路 structured warning / info，见应用日志（配合 `DANMU_SCENE_DEBUG` / `DANMU_API_SCHEDULE_DEBUG`）：
+
+| `reason` / 场景 | 含义 |
+|-----------------|------|
+| `invalid_pixmap` | 截图无效（null / `isNull()` / 零尺寸），本 tick 不递增 `screenshot_id`、不触发 API |
+| `empty_parse` | AI 有响应但解析后无弹幕 |
+| `request_meta_missing` | 回复到达时无 `_pending_request_meta` |
+| `timing_not_started` | `consume_timing` 时无对应 `mark_started` |
+| `inflight_watchdog` | 视觉 `ai_in_flight` 超过 `VISUAL_INFLIGHT_WARN_SEC`（45s，**`main.py` 模块常量**，非 `DanmuApp` 字段）；仅告警，不自动复位 |
+
+RTT / `_pending_request_meta` 键：`{request_round}:{screenshot_id}:{scene_generation}`。
 
 ## 改动决策树
 

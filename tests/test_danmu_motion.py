@@ -53,6 +53,7 @@ def test_pick_track_prefers_least_congested_track(config_store, monkeypatch):
 
 def test_min_on_screen_default_0_when_pool_disabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_pool_enabled", "0")
     store.set("danmu_pool_use_custom", "0")
     engine = DanmuEngine(store)
     assert engine.min_on_screen() == 0

@@ -3,13 +3,18 @@ import threading
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from app.ai_client import (
     DANMU_MIN_OUTPUT_TOKENS,
     DANMU_MIN_OUTPUT_TOKENS_THINKING,
     AiWorker,
+    format_openai_http_error,
+    openai_compatible_request_extensions,
     parse_stream_usage,
     resolve_danmu_max_output_tokens,
 )
+from app.translations import tr
 
 
 class FakeConfig:
@@ -58,7 +63,14 @@ def test_parse_stream_usage_dashscope_fields():
 
 
 def test_request_openai_enables_stream_usage_option():
-    worker = AiWorker(FakeConfig(data={"api_mode": "openai-compatible"}))
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "openai-compatible",
+                "api_endpoint": "https://api.siliconflow.cn/v1",
+            }
+        )
+    )
     captured: dict = {}
 
     def capture(_http_client, _url, _headers, data):
@@ -70,7 +82,62 @@ def test_request_openai_enables_stream_usage_option():
             worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
 
     assert captured["data"]["stream_options"] == {"include_usage": True}
+    assert "thinking" not in captured["data"]
+    worker.close()
+
+
+def test_request_openai_includes_thinking_for_mimo():
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "openai-compatible",
+                "api_endpoint": "https://api.xiaomimimo.com/v1",
+            }
+        )
+    )
+    captured: dict = {}
+
+    def capture(_http_client, _url, _headers, data):
+        captured["data"] = data
+        return ("ok", 1, 1)
+
+    with patch.object(worker, "_stream_openai", side_effect=capture):
+        with patch.object(worker, "_emit_safe"):
+            worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
+
     assert captured["data"]["thinking"] == {"type": "disabled"}
+    worker.close()
+
+
+def test_openai_compatible_request_extensions_siliconflow_omits_thinking():
+    assert openai_compatible_request_extensions("https://api.siliconflow.cn/v1") == {}
+
+
+def test_format_openai_http_error_maps_siliconflow_model_missing_code():
+    request = httpx.Request("POST", "https://api.siliconflow.cn/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        request=request,
+        json={"code": 20012, "message": "Model does not exist. Please check it carefully."},
+    )
+    exc = httpx.HTTPStatusError("bad", request=request, response=response)
+    assert format_openai_http_error(exc) == tr("ai.error_model_not_found")
+
+
+def test_request_routes_ark_endpoint_to_doubao_when_api_mode_openai():
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "openai",
+                "api_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+            }
+        )
+    )
+    with patch.object(worker, "_request_doubao") as mock_doubao:
+        with patch.object(worker, "_request_openai") as mock_openai:
+            worker._request("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
+    mock_doubao.assert_called_once()
+    mock_openai.assert_not_called()
     worker.close()
 
 

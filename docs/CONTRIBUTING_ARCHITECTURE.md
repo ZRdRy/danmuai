@@ -36,6 +36,7 @@ If you touch scheduling or RTT: [archive/architecture-phases/phase4-freeze.md](a
 - `build_status_snapshot()`, `build_diagnostic_snapshot()`
 - `apply_web_config_payload()`, `set_active_personae()`, `resolve_request_credentials()`
 - `run_mic_test()`, `set_web_error_status()`, `start()`, `stop()`, `toggle()`
+- `request_capture_region_selection()`, `reset_capture_region()`, `get_capture_region_status()`
 
 If a façade is missing, add it on `DanmuApp` first, then call it from Web.
 

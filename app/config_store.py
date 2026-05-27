@@ -113,6 +113,16 @@ class ConfigStore:
                           "time TEXT, persona TEXT, content TEXT, image BLOB, round INT)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                           "name TEXT, version INT, system_pt TEXT, user_pt TEXT, created_at TEXT)")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_runs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "started_at REAL NOT NULL, "
+            "ended_at REAL NOT NULL, "
+            "model TEXT NOT NULL DEFAULT '', "
+            "input_tokens INTEGER NOT NULL DEFAULT 0, "
+            "output_tokens INTEGER NOT NULL DEFAULT 0, "
+            "danmu_count INTEGER NOT NULL DEFAULT 0)"
+        )
         self.conn.commit()
 
     def _load_cache(self):
@@ -125,11 +135,12 @@ class ConfigStore:
         return self._cache.get(key, default)
 
     def set(self, key: str, value: str):
-        self._cache[key] = value
+        """单键写入：commit 成功后再更新 _cache（与 set_batch 一致，失败不污染缓存）。"""
         with self._write_lock:
             try:
                 self.conn.execute("REPLACE INTO config (key, value) VALUES (?, ?)", (key, value))
                 self.conn.commit()
+                self._cache[key] = value
             except sqlite3.OperationalError as e:
                 safe_value = _redact_config_value_for_log(key, value)
                 logger.error(

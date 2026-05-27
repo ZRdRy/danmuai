@@ -8,7 +8,7 @@ class RequestTimingService:
     def __init__(
         self,
         *,
-        request_started_at_by_id: dict[int, float] | None = None,
+        request_started_at_by_id: dict[str, float] | None = None,
         rtt_history: list[float] | None = None,
     ) -> None:
         self.request_started_at_by_id = request_started_at_by_id or {}
@@ -29,20 +29,20 @@ class RequestTimingService:
     def mark_started(
         self,
         *,
-        request_id: int,
+        request_id: str,
         now: float,
     ) -> float:
-        self.request_started_at_by_id[int(request_id)] = float(now)
+        self.request_started_at_by_id[str(request_id)] = float(now)
         return float(now)
 
     def consume_timing(
         self,
         *,
-        request_id: int,
+        request_id: str,
         now: float,
         max_samples: int = 20,
     ) -> float | None:
-        started_at = self.request_started_at_by_id.pop(int(request_id), None)
+        started_at = self.request_started_at_by_id.pop(str(request_id), None)
         if started_at is None:
             return None
         rtt = float(now) - float(started_at)

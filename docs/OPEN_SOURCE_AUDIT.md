@@ -40,7 +40,7 @@
 - 截图默认不落盘，截图压缩在内存中完成
 - 日志会脱敏 API Key、Bearer Token 和长 base64 数据
 - 当前版本默认按 `screen_index` 截取所选显示器全屏；`region_*` 宽高大于 0 时会按所选屏幕相对坐标裁剪
-- 旧截图对应的 AI 回复会按 `screenshot_id` / `scene_generation` 丢弃
+- 普通模式当前**不会**因 TTL / supersede 丢弃在途 AI 回复（`_is_reply_stale()` 恒为不丢弃）；`scene_generation` 主要用于记忆与请求元数据
 
 ## 公开发布前仍需人工确认
 

@@ -439,6 +439,11 @@ class DanmuOverlay(QWidget):
         item._cached_opacity = opacity
         return opacity
 
+    def _global_opacity_factor(self) -> float:
+        """Config opacity 0–100% → draw alpha multiplier (100 = fully opaque)."""
+        pct = self.config.get_int("opacity", 100)
+        return max(0.0, min(1.0, pct / 100.0))
+
     def paintEvent(self, event):
         clip = event.region().boundingRect()
         drawable_h = self._drawable_height_px()
@@ -459,7 +464,7 @@ class DanmuOverlay(QWidget):
                 if not clip.intersects(item_rect.toRect()):
                     continue
 
-                opacity = self._item_opacity(item)
+                opacity = self._item_opacity(item) * self._global_opacity_factor()
                 if opacity <= 0.0:
                     continue
 

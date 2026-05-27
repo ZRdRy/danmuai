@@ -89,6 +89,14 @@ class TestP1007LogSanitization:
 
         assert sanitized == msg
 
+    def test_percent_format_args(self, logger, caplog):
+        """支持 logging 风格 msg % args（与 FakeLogger 一致）。"""
+        import logging
+
+        caplog.set_level(logging.DEBUG)
+        logger.debug("tick skip: id=%s elapsed=%s", 4, 1200)
+        assert "tick skip: id=4 elapsed=1200" in caplog.text
+
     def test_debug_log_sanitized(self, logger, caplog):
         """DEBUG 日志应脱敏。"""
         import logging

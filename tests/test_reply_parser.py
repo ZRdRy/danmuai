@@ -5,7 +5,6 @@ from app.reply_parser import (
     parse_ai_reply_payload,
     parse_ai_reply_with_memory,
 )
-from app.translations import tr
 
 
 class FakeConfig:
@@ -66,6 +65,7 @@ def test_normalize_reply_batch_pads_to_default_five_items():
     items = normalize_reply_batch(["强相关1", "强相关2"])
     assert len(items) == 5
     assert items[:2] == ["强相关1", "强相关2"]
+    assert len(items) == len(set(items))
 
 
 def test_normalize_reply_batch_custom_partition():
@@ -74,38 +74,26 @@ def test_normalize_reply_batch_custom_partition():
     assert items[0] == "a"
 
 
-def test_normalize_reply_batch_uses_legacy_when_pool_disabled():
-    cfg = FakeConfig({"danmu_pool_enabled": "0"})
+def test_normalize_reply_batch_shortfall_when_pool_disabled():
+    cfg = FakeConfig({"danmu_pool_enabled": "0", "danmu_pool_use_custom": "0"})
     items = normalize_reply_batch(["only"], config=cfg)
-    assert len(items) == 5
-    assert items[0] == "only"
-    legacy_scene = {tr("reply.scene_filler_1"), tr("reply.scene_filler_2")}
-    legacy_generic = {
-        tr("reply.generic_filler_1"),
-        tr("reply.generic_filler_2"),
-        tr("reply.generic_filler_3"),
-    }
-    assert set(items[1:]) <= legacy_scene | legacy_generic
+    assert items == ["only"]
 
 
-def test_normalize_reply_batch_shortfall_unique_only(monkeypatch):
+def test_normalize_reply_batch_no_duplicate_padding(monkeypatch):
     monkeypatch.setattr(
         "app.reply_parser._scene_fillers",
         lambda config=None: ["场景A", "场景B"],
     )
     monkeypatch.setattr(
         "app.reply_parser._generic_fillers",
-        lambda config=None: ["泛用1", "泛用2"],
+        lambda config=None: ["泛用1", "泛用2", "泛用3"],
     )
-    items = normalize_reply_batch(
-        ["only"],
-        scene_count=4,
-        filler_count=4,
-        allow_shortfall=True,
-    )
-    assert len(items) < 8
+    items = normalize_reply_batch(["only"], scene_count=5, filler_count=0)
+    assert len(items) == 5
     assert len(items) == len(set(items))
     assert items[0] == "only"
+    assert "继续看下一手" not in items
 
 
 def test_build_local_fallback_batch_no_intra_batch_duplicates():
@@ -125,15 +113,14 @@ def test_build_local_fallback_batch_shortfall_when_pool_exhausted(monkeypatch):
     assert len(items) == len(set(items))
 
 
-def test_build_local_fallback_batch_ignores_pool_when_disabled(monkeypatch):
+def test_build_local_fallback_batch_empty_when_pool_disabled(monkeypatch):
     monkeypatch.setattr(
         "app.danmu_pool.load_danmu_pool",
         lambda: ["句库不应出现"] * 20,
     )
-    cfg = FakeConfig({"danmu_pool_enabled": "0"})
+    cfg = FakeConfig({"danmu_pool_enabled": "0", "danmu_pool_use_custom": "0"})
     items = build_local_fallback_batch(scene_count=2, filler_count=3, config=cfg)
-    assert len(items) == 5
-    assert "句库不应出现" not in items
+    assert items == []
 
 
 def test_builtin_persona_prompt_contains_release_contract():

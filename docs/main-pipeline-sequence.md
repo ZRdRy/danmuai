@@ -19,9 +19,10 @@ main.py::DanmuApp.start()
 main.py::screenshot_timer.timeout
   -> main.py::_on_screenshot_timer()
   -> main.py::_on_normal_capture_tick()
-       -> [if visual in-flight: return]
+       -> [if visual in-flight: return; debug or inflight_watchdog if >= 45s]
        -> main.py::_capture_screenshot()
             -> app/snipper.py::ScreenCapturer.grab()
+            -> [invalid pixmap: return, no id++]
             -> update _latest_screenshot / _latest_screenshot_id / time
             -> _collect_activity_observation()
        -> main.py::_trigger_api_call(source="normal_interval")
@@ -62,8 +63,8 @@ Removed from product: `_rhythm_check_timer`, `_check_rhythm_trigger()`, realtime
 |-------|--------|------------|-----------|
 | Start | `DanmuApp.start()` | timers, overlay, `_on_normal_capture_tick` | session reset |
 | Capture tick | `_on_normal_capture_tick()` | `_capture_screenshot`, `_trigger_api_call` | skips if in-flight |
-| Capture | `_capture_screenshot()` | `ScreenCapturer.grab` | `_latest_screenshot_id++` |
-| Trigger | `_trigger_api_call()` | `AiRunnable` | meta, `ai_in_flight` |
+| Capture | `_capture_screenshot()` | `ScreenCapturer.grab` | `_latest_screenshot_id++` only on valid frame |
+| Trigger | `_trigger_api_call()` | `AiRunnable` | meta, timing mark_started, `ai_in_flight` |
 | Worker | `AiRunnable.run()` | `AiWorker._request` | compressed image URI |
 | Reply | `_on_ai_reply()` | parse, enqueue | tokens, memory |
 | Enqueue | `_enqueue_reply_batch()` | `reply_buffer.extend` | `QueuedReply` list |
@@ -72,9 +73,22 @@ Removed from product: `_rhythm_check_timer`, `_check_rhythm_trigger()`, realtime
 
 ## Key fields
 
-- `screenshot_id`: set in `_capture_screenshot()`; validated in `_on_ai_reply()` / consume.
+- `screenshot_id`: set in `_capture_screenshot()` on valid frames only; carried on requests and queue items.
 - `scene_generation`: reset on start/stop; carried on requests (memory); not advanced by live scene-change loop today.
 - `request_round`: `screenshot_round` for visual; negative for mic.
+- `request_timing_id`: `f"{request_round}:{screenshot_id}:{scene_generation}"` for `_pending_request_meta` and `RequestTimingService`.
+
+## Observability (structured log `reason=`)
+
+| reason | When |
+|--------|------|
+| `invalid_pixmap` | Capture rejected (null / zero size) |
+| `inflight_watchdog` | Visual in-flight ≥ `VISUAL_INFLIGHT_WARN_SEC` (45s) |
+| `request_meta_missing` | Reply/error without pending meta |
+| `timing_not_started` | RTT consume with no matching mark_started |
+| `empty_parse` | AI text parsed to zero danmu items |
+
+See also [AGENTS.md](../AGENTS.md) and `DANMU_SCENE_DEBUG` / `DANMU_API_SCHEDULE_DEBUG`.
 
 ## Web status side path (unchanged pipeline)
 

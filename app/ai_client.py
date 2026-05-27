@@ -21,7 +21,7 @@ import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from app.config_store import ConfigStore
-from app.model_providers import is_doubao_mode, normalize_endpoint, normalize_mode
+from app.model_providers import normalize_endpoint, normalize_mode, resolve_api_transport
 from app.translations import tr
 
 # 弹幕固定 5 条 JSON 数组需要输出 token 余量；过低会在 JSON 中途截断导致解析失败。
@@ -29,6 +29,77 @@ DEFAULT_MAX_TOKENS = 512
 DANMU_MIN_OUTPUT_TOKENS = 512  # 非 thinking 模式下限
 DANMU_MIN_OUTPUT_TOKENS_THINKING = 1024  # thinking 模式需要更多 token（内部推理也计费）
 THINKING_DISABLED = {"type": "disabled"}
+
+
+def openai_compatible_request_extensions(endpoint: str) -> dict[str, object]:
+    """OpenAI 兼容请求体附加字段。
+
+    仅 MiMo 需要顶层 ``thinking: disabled``，否则可能只流 reasoning 导致正文为空。
+    硅基流动、百炼等不接受该字段，会返回 HTTP 400。
+    """
+    normalized = normalize_endpoint(endpoint).lower()
+    if "api.xiaomimimo.com" in normalized:
+        return {"thinking": dict(THINKING_DISABLED)}
+    return {}
+
+
+def _http_error_message_and_code(exc: httpx.HTTPStatusError) -> tuple[str, object]:
+    message = ""
+    code: object = None
+    try:
+        body = exc.response.json()
+        if isinstance(body, dict):
+            code = body.get("code")
+            raw = body.get("message")
+            if isinstance(raw, str):
+                message = raw.strip()
+            if not message:
+                err = body.get("error")
+                if isinstance(err, dict):
+                    code = code or err.get("code")
+                    nested = err.get("message")
+                    if isinstance(nested, str):
+                        message = nested.strip()
+    except Exception:
+        pass
+    return message, code
+
+
+def _looks_like_model_not_found(status: int, code: object, message: str) -> bool:
+    if status == 404:
+        return True
+    if code in (20012, "ModelNotFound", "InvalidEndpointOrModel.NotFound"):
+        return True
+    lower = message.lower()
+    if "model does not exist" in lower or "model not found" in lower:
+        return True
+    if "模型" in message and ("不存在" in message or "未找到" in message or "无效" in message):
+        return True
+    return False
+
+
+def format_http_status_error(exc: httpx.HTTPStatusError) -> str:
+    """Map provider HTTP errors to user-facing messages (body message when safe)."""
+    status = exc.response.status_code
+    if status == 401:
+        return tr("ai.error_auth_failed")
+    if status == 429:
+        return tr("ai.error_rate_limited")
+    if status == 402:
+        return tr("ai.error_insufficient_balance")
+    if status == 504:
+        return tr("ai.error_gateway_timeout")
+    message, code = _http_error_message_and_code(exc)
+    if _looks_like_model_not_found(status, code, message):
+        return tr("ai.error_model_not_found")
+    if message and len(message) <= 240:
+        return tr("ai.error_http_with_message").format(status_code=status, message=message)
+    return tr("ai.error_http_hidden").format(status_code=status)
+
+
+def format_openai_http_error(exc: httpx.HTTPStatusError) -> str:
+    """Alias kept for tests and api_probe imports."""
+    return format_http_status_error(exc)
 
 
 def resolve_danmu_max_output_tokens(configured: int, *, use_thinking: bool = False) -> int:
@@ -172,8 +243,8 @@ class AiWorker(QObject):
                 0,
             )
             return
-        _, _, _, api_mode = resolved
-        if is_doubao_mode(api_mode):
+        endpoint, _, _, api_mode = resolved
+        if resolve_api_transport(endpoint, api_mode) == "doubao":
             self._request_doubao(
                 image_data_uri,
                 system_pt,
@@ -326,18 +397,7 @@ class AiWorker(QObject):
                     continue
                 self._emit_result("error", tr("ai.error_timeout"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 401:
-                    msg = tr("ai.error_auth_failed")
-                elif e.response.status_code == 429:
-                    msg = tr("ai.error_rate_limited")
-                elif e.response.status_code == 402:
-                    msg = tr("ai.error_insufficient_balance")
-                elif e.response.status_code == 404:
-                    msg = tr("ai.error_model_not_found")
-                elif e.response.status_code == 504:
-                    msg = tr("ai.error_gateway_timeout")
-                else:
-                    msg = tr("ai.error_http_hidden").format(status_code=e.response.status_code)
+                msg = format_http_status_error(e)
                 self._emit_result("error", msg, persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
                 return
             except Exception as e:
@@ -423,8 +483,7 @@ class AiWorker(QObject):
             "stream": True,
             # DashScope / 百炼 compatible-mode: usage only in final chunk when enabled.
             "stream_options": {"include_usage": True},
-            # MiMo 等：未显式关闭时可能只流式输出 reasoning_content，导致正文为空。
-            "thinking": dict(THINKING_DISABLED),
+            **openai_compatible_request_extensions(endpoint),
         }
         url = f"{endpoint}/chat/completions"
         headers = {
@@ -446,18 +505,7 @@ class AiWorker(QObject):
                     continue
                 self._emit_result("error", tr("ai.error_timeout"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 401:
-                    msg = tr("ai.error_auth_failed")
-                elif e.response.status_code == 429:
-                    msg = tr("ai.error_rate_limited")
-                elif e.response.status_code == 402:
-                    msg = tr("ai.error_insufficient_balance")
-                elif e.response.status_code == 404:
-                    msg = tr("ai.error_model_not_found")
-                elif e.response.status_code == 504:
-                    msg = tr("ai.error_gateway_timeout")
-                else:
-                    msg = tr("ai.error_http_hidden").format(status_code=e.response.status_code)
+                msg = format_http_status_error(e)
                 self._emit_result("error", msg, persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
                 return
             except Exception as e:

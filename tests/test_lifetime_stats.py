@@ -38,6 +38,8 @@ def _make_bridge_status_app(**attrs):
         "start": MagicMock(),
         "stop": MagicMock(),
         "toggle": MagicMock(),
+        "request_capture_region_selection": MagicMock(),
+        "reset_capture_region": MagicMock(),
         "logger": MagicMock(),
         "state_changed": MagicMock(),
     }

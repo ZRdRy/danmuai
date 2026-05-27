@@ -84,14 +84,30 @@ def test_min_api_interval_blocks_and_then_allows(monkeypatch):
 
 def test_consume_request_timing_updates_history_and_clears_id(monkeypatch):
     app = _make_request_app()
-    app._request_started_at_by_id[7] = 10.0
+    request_id = app._reply_request_id(2, 7, 0)
+    app._request_started_at_by_id[request_id] = 10.0
     app._register_request_meta(2, 7, 0, "visual")
     monkeypatch.setattr(main.time, "monotonic", lambda: 11.5)
 
-    app._consume_request_timing(7)
+    app._consume_request_timing(2, 7, 0)
 
-    assert 7 not in app._request_started_at_by_id
+    assert request_id not in app._request_started_at_by_id
     assert app._rtt_history == pytest.approx([1.5])
+
+
+def test_request_timing_keys_do_not_collide_for_mic_and_visual(monkeypatch):
+    app = _make_request_app()
+    visual_id = app._reply_request_id(3, 5, 0)
+    mic_id = app._reply_request_id(-1, 5, 0)
+    assert visual_id != mic_id
+
+    app._get_request_timing_service().mark_started(request_id=visual_id, now=10.0)
+    app._get_request_timing_service().mark_started(request_id=mic_id, now=20.0)
+    monkeypatch.setattr(main.time, "monotonic", lambda: 21.5)
+
+    visual_rtt = app._get_request_timing_service().consume_timing(request_id=visual_id, now=21.5)
+    assert visual_rtt == pytest.approx(11.5)
+    assert mic_id in app._request_started_at_by_id
 
 
 def test_request_scheduler_records_trigger_time():
@@ -111,10 +127,11 @@ def test_request_timing_service_avg_rtt():
 
 def test_rtt_history_facade_stays_in_sync(monkeypatch):
     app = _make_request_app()
-    app._request_started_at_by_id[1] = 0.0
+    request_id = app._reply_request_id(1, 1, 0)
+    app._request_started_at_by_id[request_id] = 0.0
     monkeypatch.setattr(main.time, "monotonic", lambda: 1.0)
 
-    app._consume_request_timing(1)
+    app._consume_request_timing(1, 1, 0)
 
     assert app._rtt_history == [1.0]
     assert app._get_request_timing_service().rtt_history == [1.0]
@@ -124,7 +141,8 @@ def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
     app = _make_request_app()
     app.ai_in_flight = 1
     app._is_generating = True
-    app._request_started_at_by_id[5] = 10.0
+    request_id = app._reply_request_id(3, 5, 0)
+    app._request_started_at_by_id[request_id] = 10.0
     app._register_request_meta(3, 5, 0, "visual")
     app._is_reply_stale = lambda *_args, **_kwargs: (False, "")  # type: ignore[method-assign]
     app._enqueue_reply_batch = Mock()
@@ -136,7 +154,7 @@ def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
 
     app._on_ai_reply('["A"]', "p1", 3, 5, 10.0, 0)
 
-    assert 5 not in app._request_started_at_by_id
+    assert request_id not in app._request_started_at_by_id
     assert app._rtt_history == pytest.approx([1.2])
     assert app._enqueue_reply_batch.called
     app._consume_reply_queue.assert_called_once_with()
@@ -146,11 +164,12 @@ def test_on_ai_error_consumes_timing_on_error_path(monkeypatch):
     app = _make_request_app()
     app.ai_in_flight = 1
     app._is_generating = True
-    app._request_started_at_by_id[8] = 20.0
+    request_id = app._reply_request_id(4, 8, 0)
+    app._request_started_at_by_id[request_id] = 20.0
     app._register_request_meta(4, 8, 0, "visual")
     monkeypatch.setattr(main.time, "monotonic", lambda: 21.5)
 
     app._on_ai_error("boom", "p1", 4, 8, 20.0, 0)
 
-    assert 8 not in app._request_started_at_by_id
+    assert request_id not in app._request_started_at_by_id
     assert app._rtt_history == pytest.approx([1.5])

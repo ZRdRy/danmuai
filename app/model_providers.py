@@ -183,6 +183,35 @@ def is_doubao_mode(mode: str) -> bool:
     return normalize_mode(mode) == "doubao"
 
 
+_OPENAI_HOST_MARKERS: tuple[str, ...] = (
+    "api.siliconflow.cn",
+    "dashscope.aliyuncs.com",
+    "open.bigmodel.cn",
+    "api.moonshot.cn",
+    "api.xiaomimimo.com",
+)
+
+_DOUBAO_HOST_MARKERS: tuple[str, ...] = (
+    "ark.cn-beijing.volces.com",
+)
+
+
+def resolve_api_transport(endpoint: str, api_mode: str) -> str:
+    """Choose Responses (``doubao``) vs Chat Completions (``openai``).
+
+    Known provider hosts override ``api_mode`` so Volcengine Ark is never sent to
+    ``/chat/completions`` when the UI still says OpenAI-compatible.
+    """
+    normalized = normalize_endpoint(endpoint).lower()
+    if any(marker in normalized for marker in _DOUBAO_HOST_MARKERS):
+        return "doubao"
+    if any(marker in normalized for marker in _OPENAI_HOST_MARKERS):
+        return "openai"
+    if is_doubao_mode(api_mode):
+        return "doubao"
+    return "openai"
+
+
 def resolve_active_model_id(config) -> str:
     """Model id used for API requests (matches ``AiWorker._resolve_request_credentials``)."""
     default_id = (config.get_default_model_id() or "").strip()

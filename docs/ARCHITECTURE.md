@@ -100,7 +100,8 @@ Process-local scene memory and bullet dedup (`app/memory/`, `app/memory_prompt_b
 
 ## Stability
 
-- Monotonic `screenshot_id` per accepted frame.
+- Monotonic `screenshot_id` per **valid** accepted frame (`isNull()` / zero-size captures do not increment the id).
+- `RequestTimingService` keys RTT samples by composite `{request_round}:{screenshot_id}:{scene_generation}` so mic and visual requests on the same frame do not overwrite each other.
 - Consecutive API failures → backoff pause; 401/403/402 pause immediately.
 - `quit()`: `stop()` → release hotkeys/tray → close `AiWorker` → `waitForDone` thread pool → flush history/config.
 

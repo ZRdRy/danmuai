@@ -138,6 +138,18 @@ class WebStatusSnapshot:
     lifetime_input_tokens: int = 0
     lifetime_output_tokens: int = 0
     session_runs: list[dict] = field(default_factory=list)
+    active_model_id: str = ""
+    inferred_provider_id: str = ""
+    model_display_name: str = ""
+    uses_custom_credentials: bool = False
+    model_source: str = "unknown"
+    provider_model_mismatch: bool = False
+    capture_region_mode: str = "full"
+    region_x: int = 0
+    region_y: int = 0
+    region_w: int = 0
+    region_h: int = 0
+    region_selection_state: str = "idle"
 
 
 def _mask_api_key(config) -> str:
@@ -152,9 +164,13 @@ def export_config(config) -> dict[str, Any]:
     data = {key: config_value_with_default(config, key) for key in WEB_CONFIG_KEYS}
     data["api_key"] = _mask_api_key(config)
     data["has_api_key"] = bool(config.get_api_key())
+    from app.model_selection import resolve_model_status
+
     active_model_id = resolve_active_model_id(config)
+    model_status = resolve_model_status(config)
     data["default_model_id"] = config.get_default_model_id()
     data["active_model_id"] = active_model_id
+    data.update(model_status)
     data["mic_audio_likely_supported"] = model_likely_supports_mic_audio(active_model_id)
     data["custom_models"] = [
         _mask_model(m) for m in config.get_custom_models() if isinstance(m, dict)
@@ -162,6 +178,14 @@ def export_config(config) -> dict[str, Any]:
     from app.personae import normal_reply_count_from_config
 
     data["reply_batch_total"] = normal_reply_count_from_config(config)
+    rx, ry, rw, rh = config.get_region()
+    data["region_x"] = rx
+    data["region_y"] = ry
+    data["region_w"] = rw
+    data["region_h"] = rh
+    from app.web_api.capture_region import capture_region_mode
+
+    data["capture_region_mode"] = capture_region_mode(config)
     return data
 
 
@@ -198,6 +222,8 @@ class WebConsoleBridge(QObject):
     stop_requested = pyqtSignal()
     toggle_requested = pyqtSignal()
     save_config_requested = pyqtSignal(object)
+    region_select_requested = pyqtSignal()
+    region_reset_requested = pyqtSignal()
 
     def __init__(self, danmu_app: "DanmuApp"):
         super().__init__()
@@ -216,6 +242,12 @@ class WebConsoleBridge(QObject):
         self.stop_requested.connect(danmu_app.stop)
         self.toggle_requested.connect(danmu_app.toggle)
         self.save_config_requested.connect(self._on_save_config)
+        region_select = getattr(danmu_app, "request_capture_region_selection", None)
+        if callable(region_select):
+            self.region_select_requested.connect(region_select)
+        region_reset = getattr(danmu_app, "reset_capture_region", None)
+        if callable(region_reset):
+            self.region_reset_requested.connect(region_reset)
 
         danmu_app.logger.log_emitted.connect(self._on_log)
         danmu_app.state_changed.connect(self._on_state_changed)
@@ -321,8 +353,26 @@ class WebConsoleBridge(QObject):
 
     @pyqtSlot(object)
     def _on_save_config(self, payload: object) -> None:
-        if isinstance(payload, dict):
+        if not isinstance(payload, dict):
+            return
+        keys = sorted(payload.keys())
+        try:
             self.danmu_app.apply_web_config_payload(payload)
+        except Exception as exc:
+            self.danmu_app.logger.error(
+                "配置保存失败: keys=%s, error=%s",
+                keys,
+                exc,
+                exc_info=True,
+            )
+            self.danmu_app.set_web_error_status(
+                f"配置保存失败: {exc}",
+                is_error=True,
+            )
+            self.publish_status()
+            return
+        self.danmu_app.logger.info("配置保存成功: keys=%s", keys)
+        self.danmu_app.set_web_error_status("", is_error=False)
         self.publish_status()
 
 
@@ -543,6 +593,9 @@ class WebConsoleServer:
             _check_token(authorization)
             try:
                 data = extract_config_payload(body)
+                from app.model_selection import validate_web_config_patch
+
+                validate_web_config_patch(bridge.danmu_app.config, data)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             # 与 /api/start 相同：跨线程直接 emit，由 Qt 排队到主线程槽。

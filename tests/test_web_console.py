@@ -59,6 +59,20 @@ class FakeConfig:
     def set_custom_models(self, models):
         self.values["custom_models"] = models
 
+    def get_region(self):
+        return (
+            self.get_int("region_x", 0),
+            self.get_int("region_y", 0),
+            self.get_int("region_w", 0),
+            self.get_int("region_h", 0),
+        )
+
+    def set_region(self, x, y, w, h):
+        self.values["region_x"] = str(x)
+        self.values["region_y"] = str(y)
+        self.values["region_w"] = str(w)
+        self.values["region_h"] = str(h)
+
 
 def test_export_config_masks_api_key():
     cfg = FakeConfig({"api_endpoint": "https://example.com", "_api_key": "sk-secret"})
@@ -606,6 +620,9 @@ def test_web_app_js_provider_switch_resets_vision_model():
     assert "function pickDefaultCatalogModelId" in app_js
     assert "providerSwitch: true" in app_js
     assert "function syncProviderPresetFromEndpoint" in app_js
+    assert "function resolveProviderIdForPicker" in app_js
+    assert "renderVisionModelPicker(resolveProviderIdForPicker()" in app_js
+    assert "syncProviderPresetAfterEndpointEdit" in app_js
     assert "renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true })" in app_js
     assert "apiKeyEl.value = ''" in app_js
 
@@ -652,6 +669,100 @@ def test_export_config_mismatched_model_still_loads():
     data = export_config(cfg)
     assert data["model"] == "doubao-seed-1-6-flash-250828"
     assert not is_catalog_model_for_provider("dashscope", data["active_model_id"])
+    assert data["provider_model_mismatch"] is True
+    assert data["inferred_provider_id"] == "dashscope"
+    assert data["model_source"] == "freeform"
+
+
+def test_export_config_includes_catalog_display_name():
+    from app.model_catalog import default_catalog_model_id
+
+    dash_model = default_catalog_model_id("dashscope")
+    cfg = FakeConfig(
+        {
+            "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_mode": "openai",
+            "model": dash_model,
+            "default_model_id": dash_model,
+        }
+    )
+    data = export_config(cfg)
+    assert data["active_model_id"] == dash_model
+    assert data["model_source"] == "catalog"
+    assert data["model_display_name"]
+    assert data["provider_model_mismatch"] is False
+
+
+def test_build_status_snapshot_includes_model_projection():
+    from app.model_catalog import default_catalog_model_id
+
+    dash_model = default_catalog_model_id("dashscope")
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock()),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        stats_state=StatsState(),
+        _start_time=0.0,
+        _web_error_message="",
+        _web_error_is_error=False,
+        danmu_count=0,
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig(
+            {
+                "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_mode": "openai",
+                "model": dash_model,
+                "default_model_id": dash_model,
+                "_api_key": "sk-test",
+            }
+        ),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["active_model_id"] == dash_model
+    assert status["inferred_provider_id"] == "dashscope"
+    assert status["model_source"] == "catalog"
+    assert status["uses_custom_credentials"] is False
+
+
+def test_build_status_snapshot_includes_capture_region():
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock()),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        _visible_display_count=lambda: 0,
+        stats_state=StatsState(),
+        _start_time=0.0,
+        _web_error_message="",
+        _web_error_is_error=False,
+        danmu_count=0,
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig(
+            {
+                "screen_index": "0",
+                "region_x": "12",
+                "region_y": "34",
+                "region_w": "320",
+                "region_h": "180",
+                "_api_key": "sk-test",
+            }
+        ),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        _build_live_status_snapshot=lambda: None,
+        _region_selection_state="idle",
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["capture_region_mode"] == "custom"
+    assert status["region_x"] == 12
+    assert status["region_w"] == 320
+    assert status["region_selection_state"] == "idle"
+    assert status["provider_model_mismatch"] is False
 
 
 def test_apply_config_patch_clamps_normal_batch_settings():
@@ -698,6 +809,22 @@ def test_apply_config_patch_clamps_danmu_lines():
 
     apply_config_patch(app, {"danmu_lines": "16"})
     assert config.get("danmu_lines") == "16"
+
+
+def test_apply_config_patch_clamps_opacity():
+    config = FakeConfig({})
+    app = MagicMock()
+    app.config = config
+    app.personae = MagicMock()
+
+    apply_config_patch(app, {"opacity": "30"})
+    assert config.get("opacity") == "30"
+
+    apply_config_patch(app, {"opacity": "-5"})
+    assert config.get("opacity") == "0"
+
+    apply_config_patch(app, {"opacity": "200"})
+    assert config.get("opacity") == "100"
 
 
 def test_apply_config_patch_validates_memory_settings():
@@ -914,6 +1041,102 @@ def test_probe_route_accepts_json_body(monkeypatch):
     body = res.json()
     assert body["ok"] is True
     assert body["message"] == "连接成功"
+
+
+def test_capture_region_get_route():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.get_capture_region_status.return_value = {
+        "mode": "custom",
+        "region": {"x": 10, "y": 20, "w": 100, "h": 80},
+        "selection_state": "idle",
+    }
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.get("/api/capture-region")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["mode"] == "custom"
+    assert body["region"]["w"] == 100
+    bridge.danmu_app.get_capture_region_status.assert_called_once()
+
+
+def test_capture_region_select_route_emits_signal():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.get_capture_region_status.return_value = {
+        "mode": "full",
+        "region": {"x": 0, "y": 0, "w": 0, "h": 0},
+        "selection_state": "idle",
+    }
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.post("/api/capture-region/select")
+    assert res.status_code == 200
+    assert res.json()["selection_state"] == "selecting"
+    bridge.region_select_requested.emit.assert_called_once()
+
+
+def test_capture_region_select_skips_emit_when_already_selecting():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.get_capture_region_status.return_value = {
+        "mode": "full",
+        "region": {"x": 0, "y": 0, "w": 0, "h": 0},
+        "selection_state": "selecting",
+    }
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.post("/api/capture-region/select")
+    assert res.status_code == 200
+    bridge.region_select_requested.emit.assert_not_called()
+
+
+def test_capture_region_reset_route_emits_signal():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.post("/api/capture-region/reset")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    bridge.region_reset_requested.emit.assert_called_once()
 
 
 def test_mic_test_route_uses_public_app_entry():

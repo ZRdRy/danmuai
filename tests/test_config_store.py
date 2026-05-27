@@ -1,3 +1,7 @@
+import sqlite3
+
+import pytest
+
 from app.config_store import ConfigStore
 
 
@@ -43,7 +47,7 @@ def test_first_run_seeds_config_defaults(tmp_path):
     assert store.get("freshness") == ""
     assert store.get("eviction_mode") == "natural"
     assert store.get("hotkey") == "Ctrl+Shift+B"
-    assert store.get("danmu_pool_enabled") == "0"
+    assert store.get("danmu_pool_enabled") == "1"
     store.close()
 
 
@@ -75,6 +79,33 @@ def test_set_batch_empty_dict(tmp_path):
 
     assert store.get("existing") == "kept"
 
+    store.close()
+
+
+def test_set_does_not_pollute_cache_on_write_failure(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("stable_key", "original")
+    inner = store.conn
+
+    class _FailingConn:
+        def execute(self, sql, params=()):
+            raise sqlite3.OperationalError("database is locked")
+
+        def commit(self):
+            return inner.commit()
+
+        def rollback(self):
+            return inner.rollback()
+
+        def close(self):
+            return inner.close()
+
+    store.conn = _FailingConn()
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.set("stable_key", "new_value")
+
+    assert store.get("stable_key") == "original"
     store.close()
 
 

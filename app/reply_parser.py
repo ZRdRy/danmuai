@@ -8,7 +8,7 @@
 畸形 JSON 容错：流式截断导致 ``][`` 拼接时，只解析第一个完整数组段。
 
 normalize_reply_batch 将 AI 条数补齐到 scene_count + filler_count：
-  先取 AI 原文去重，不足时用本地池（danmu_pool_zh.json）或内置 i18n 占位句轮换填充。
+  不足时从公式化弹幕库（danmu_pool_zh.json / 自定义句）轮换去重填充；池为空则保留短批次。
   上屏截断在 danmu_engine.normalize_danmu_display_text（中文默认 15 字 / 英文 40 字符 + ``...``）。
 
 调用方：DanmuApp._on_ai_reply() → parse_ai_reply_with_memory → normalize_reply_batch
@@ -20,42 +20,23 @@ import random
 from typing import TYPE_CHECKING
 
 from app.danmu_pool import load_danmu_pool_for_config, sample_danmu_for_config
-from app.translations import tr
 
 if TYPE_CHECKING:
     from app.memory.types import VisualMemoryUpdate
 
-_LEGACY_SCENE_FILLERS = (
-    "reply.scene_filler_1",
-    "reply.scene_filler_2",
-)
-_LEGACY_GENERIC_FILLERS = (
-    "reply.generic_filler_1",
-    "reply.generic_filler_2",
-    "reply.generic_filler_3",
-)
-
-
-def _legacy_scene_fillers() -> list[str]:
-    return [tr(key) for key in _LEGACY_SCENE_FILLERS]
-
-
-def _legacy_generic_fillers() -> list[str]:
-    return [tr(key) for key in _LEGACY_GENERIC_FILLERS]
-
 
 def _scene_fillers(config=None) -> list[str]:
     pool = load_danmu_pool_for_config(config)
-    if pool:
-        return sample_danmu_for_config(config, min(32, len(pool)), rng=random)
-    return _legacy_scene_fillers()
+    if not pool:
+        return []
+    return sample_danmu_for_config(config, min(32, len(pool)), rng=random)
 
 
 def _generic_fillers(config=None) -> list[str]:
     pool = load_danmu_pool_for_config(config)
-    if pool:
-        return sample_danmu_for_config(config, min(48, len(pool)), rng=random)
-    return _legacy_generic_fillers()
+    if not pool:
+        return []
+    return sample_danmu_for_config(config, min(48, len(pool)), rng=random)
 
 
 def _try_parse_json_array(raw: str):
@@ -180,12 +161,11 @@ def normalize_reply_batch(
 ) -> list[str]:
     """将 AI 回复标准化为固定条数：前 scene_count 条视为场景相关，其余为填充条。
 
-    allow_shortfall=False（默认）：池用尽前尽量凑满 scene_count + filler_count。
-    allow_shortfall=True：池无新句时提前结束，用于本地 fallback 等可接受短批次的场景。
-
-    scene_count / filler_count 由 DanmuApp._sync_reply_batch_config 从 normal_reply_count 派生；
-    与 parse_ai_reply_with_memory 返回的 memory_update 无关（记忆更新在 _on_ai_reply 单独处理）。
+    从公式化弹幕库轮换去重补齐；池为空或唯一句用尽时提前结束（allow_shortfall 保留兼容）。
+    scene_count / filler_count 由 DanmuApp._sync_reply_batch_config 从 normal_reply_count 派生。
     """
+    _ = allow_shortfall  # API 兼容；补齐始终去重，池不足则短批次
+
     scene_count = max(1, int(scene_count))
     filler_count = int(filler_count)
     if filler_count <= 0:
@@ -207,24 +187,13 @@ def normalize_reply_batch(
     scene_fillers = _scene_fillers(config)
     generic_fillers = _generic_fillers(config)
 
-    if allow_shortfall:
-        seen = set(result)
-        scene_cursor = [0]
-        while len(result) < min(scene_count, desired_count):
-            if not _append_next_unique_from_pool(result, seen, scene_fillers, scene_cursor):
-                break
-        generic_cursor = [0]
-        while len(result) < desired_count:
-            if not _append_next_unique_from_pool(result, seen, generic_fillers, generic_cursor):
-                break
-        return result
-
-    if filler_count > 0:
-        while len(result) < min(scene_count, desired_count):
-            pool_index = min(len(result), len(scene_fillers) - 1)
-            result.append(scene_fillers[pool_index])
+    seen = set(result)
+    scene_cursor = [0]
+    while len(result) < min(scene_count, desired_count):
+        if not _append_next_unique_from_pool(result, seen, scene_fillers, scene_cursor):
+            break
+    generic_cursor = [0]
     while len(result) < desired_count:
-        filler_index = max(0, len(result) - scene_count) if filler_count > 0 else len(result)
-        pool_index = min(filler_index, len(generic_fillers) - 1)
-        result.append(generic_fillers[pool_index])
+        if not _append_next_unique_from_pool(result, seen, generic_fillers, generic_cursor):
+            break
     return result[:desired_count]

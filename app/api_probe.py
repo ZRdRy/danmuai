@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.ai_client import THINKING_DISABLED
-from app.model_providers import is_doubao_mode, normalize_endpoint, normalize_mode
+from app.ai_client import format_http_status_error, openai_compatible_request_extensions
+from app.model_providers import normalize_endpoint, normalize_mode, resolve_api_transport
 from app.translations import tr
 
 
@@ -16,20 +16,6 @@ class ProbeResult:
     ok: bool
     message: str
     status_code: int | None = None
-
-
-def _map_http_error(status_code: int) -> str:
-    if status_code == 401:
-        return tr("ai.error_auth_failed")
-    if status_code == 429:
-        return tr("ai.error_rate_limited")
-    if status_code == 402:
-        return tr("ai.error_insufficient_balance")
-    if status_code == 404:
-        return tr("ai.error_model_not_found")
-    if status_code == 504:
-        return tr("ai.error_gateway_timeout")
-    return tr("ai.error_http_hidden").format(status_code=status_code)
 
 
 def probe_connection(
@@ -51,13 +37,13 @@ def probe_connection(
         return ProbeResult(False, tr("custom_model.error_model_id"))
 
     try:
-        if is_doubao_mode(mode):
+        if resolve_api_transport(endpoint, mode) == "doubao":
             return _probe_doubao(endpoint, api_key, model_id)
         return _probe_openai(endpoint, api_key, model_id)
     except httpx.TimeoutException:
         return ProbeResult(False, tr("ai.error_timeout"))
     except httpx.HTTPStatusError as exc:
-        return ProbeResult(False, _map_http_error(exc.response.status_code), exc.response.status_code)
+        return ProbeResult(False, format_http_status_error(exc), exc.response.status_code)
     except Exception as exc:
         return ProbeResult(False, tr("ai.error_request_failed").format(error=exc))
 
@@ -109,7 +95,7 @@ def _probe_openai(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
         "stream": False,
-        "thinking": dict(THINKING_DISABLED),
+        **openai_compatible_request_extensions(endpoint),
     }
     with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         resp = client.post(url, headers=headers, json=data)

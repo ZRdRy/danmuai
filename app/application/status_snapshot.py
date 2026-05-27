@@ -9,6 +9,14 @@ if TYPE_CHECKING:
     from main import DanmuApp
 
 
+def _safe_app_attr(app: object, name: str, default: object = None) -> object:
+    """Read DanmuApp field without triggering QObject.__getattr__ (DanmuApp.__new__ tests)."""
+    try:
+        return object.__getattribute__(app, name)
+    except AttributeError:
+        return default
+
+
 class StatusSnapshotBuilder:
     """DanmuApp.build_status_snapshot() 的唯一实现委托目标。"""
 
@@ -17,10 +25,24 @@ class StatusSnapshotBuilder:
 
     def build(self) -> dict[str, object]:
         """字段契约供 Web/WS 使用；诊断数据走 DiagnosticSnapshotBuilder，勿混入本 dict。"""
+        from app.model_selection import resolve_model_status
+
         state = RuntimeState.from_app(self._app)
         live_snapshot = state.live_snapshot
         lifetime = state.lifetime
         total_tokens = state.input_tokens + state.output_tokens
+        model_status = resolve_model_status(self._app.config)
+        rx, ry, rw, rh = self._app.config.get_region()
+        from app.web_api.capture_region import capture_region_mode
+
+        selection_state = _safe_app_attr(self._app, "_region_selection_state", "idle")
+        if selection_state not in (
+            "selecting",
+            "saved",
+            "cancelled",
+            "invalid",
+        ):
+            selection_state = "idle"
 
         return {
             "running": state.running,
@@ -48,5 +70,12 @@ class StatusSnapshotBuilder:
             "lifetime_input_tokens": int(lifetime.get("lifetime_input_tokens", 0)),
             "lifetime_output_tokens": int(lifetime.get("lifetime_output_tokens", 0)),
             "session_runs": state.session_runs,
+            "capture_region_mode": capture_region_mode(self._app.config),
+            "region_x": rx,
+            "region_y": ry,
+            "region_w": rw,
+            "region_h": rh,
+            "region_selection_state": selection_state,
+            **model_status,
         }
 

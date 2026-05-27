@@ -58,6 +58,7 @@
       <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
       <symbol id="i-graduation" viewBox="0 0 24 24"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></symbol>
+      <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="m3 11 7-3v8l-7-3Z"/><path d="M10 8.5V6a2 2 0 0 1 2-2h1a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-1a2 2 0 0 1-2-2v-2.5"/><path d="M17 9a5 5 0 0 1 0 6"/><path d="M19 7.5a7.5 7.5 0 0 1 0 9"/></symbol>
     </defs>
   </svg>
 
@@ -87,7 +88,7 @@
           <span id="nav-tip-settings" role="tooltip" class="warm-tooltip">
             <strong>能做什么</strong>：设置 AI 接口、用哪块屏幕识图、弹幕样式，以及截图与压缩参数。改完后点「保存配置」立即生效。<br><br>
             <strong>四个分页</strong>：API 与模型、识图区域、弹幕显示、节奏与图像。想改人设和提示词请去「人格工坊」。<br><br>
-            <strong>使用前注意</strong>：请先在「温馨控制台」开始或停止弹幕；API 密钥留空保存不会改掉旧密钥；识图始终是所选显示器的全屏；「自定义模型」可单独填地址和密钥。
+            <strong>使用前注意</strong>：请先在「温馨控制台」开始或停止弹幕；API 密钥留空保存不会改掉旧密钥；默认识图所选显示器全屏，可在「识图区域」鼠标框选子区域；「自定义模型」可单独填地址和密钥。
           </span>
         </span>
       </div>
@@ -96,6 +97,10 @@
       </button>
       <button type="button" data-page="tutorial" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
         <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-graduation"></use></svg> 教程
+      </button>
+      <button type="button" data-page="announcements" class="sidebar-item sidebar-item-with-badge w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
+        <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-megaphone"></use></svg> 公告
+        <span id="announcementsNavBadge" class="sidebar-nav-badge hidden" aria-label="有新公告"></span>
       </button>
       <button type="button" data-page="feedback" class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-left">
         <svg class="ui-icon w-5" aria-hidden="true"><use href="#i-message"></use></svg> 问题反馈
@@ -212,7 +217,7 @@
         <p class="text-sm text-gray-400 mt-4" id="liveStatusLine"></p>
       </div>
 
-      <div class="card p-6 mt-6">
+      <div class="card p-6 mt-6 hidden" id="diagnosticsPanel" aria-hidden="true">
         <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
           <div>
             <h3 class="text-lg font-bold text-warmText">诊断面板</h3>
@@ -271,7 +276,7 @@
 
       <div class="card p-6 mt-6">
         <h3 class="text-lg font-bold text-warmText mb-2">弹幕场次记录</h3>
-        <p class="text-sm text-gray-400 mb-4">每次「生成弹幕」至「停止弹幕」为一轮；仅保留当前应用运行期间的记录</p>
+        <p class="text-sm text-gray-400 mb-4">每次「生成弹幕」至「停止弹幕」为一轮；保存在本机配置库，重启后仍可查看最近 100 条</p>
         <div id="sessionRunLog" class="session-run-log" role="log" aria-live="polite">
           <p id="sessionRunLogEmpty" class="session-run-log-empty text-sm text-gray-400">暂无记录，停止弹幕后会在此显示时间与 Token 用量</p>
         </div>
@@ -339,6 +344,7 @@
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-brain"></use></svg>视觉模型</label>
               <div id="visionModelField">
                 <input type="hidden" name="model" id="model" value="">
+                <p id="modelActiveSourceBanner" class="hidden text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-2" role="status"></p>
                 <div id="visionModelPicker" class="vision-model-picker" role="radiogroup" aria-label="视觉模型"></div>
                 <div id="visionModelCustom" class="vision-model-custom hidden">
                   <input type="text" id="modelCustom" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="自定义模型 ID" autocomplete="off">
@@ -405,7 +411,17 @@
           </h3>
           <div class="bg-softPeach/30 p-4 rounded-xl text-sm text-warmText border border-softPeach flex gap-3">
             <svg class="ui-icon mt-1 text-warmPink" aria-hidden="true"><use href="#i-info"></use></svg>
-            <p>识图始终是<strong class="text-warmPink">所选显示器的全屏</strong>。请在「API 与模型」里选好<strong class="text-warmPink">识图显示器</strong>。截图只在内存里压缩后发给 AI，<strong class="text-warmPink">默认不会保存到硬盘</strong>。</p>
+            <p>默认识图<strong class="text-warmPink">所选显示器全屏</strong>；也可点击下方按钮用鼠标框选子区域（坐标相对该屏左上角）。请在「API 与模型」选好<strong class="text-warmPink">识图显示器</strong>后再框选。截图只在内存里压缩后发给 AI，<strong class="text-warmPink">默认不会保存到硬盘</strong>。</p>
+          </div>
+          <div class="settings-section space-y-3">
+            <p class="settings-section-title">当前识图范围</p>
+            <p id="captureRegionModeLabel" class="text-sm font-semibold text-warmText">全屏识图</p>
+            <p id="captureRegionCoords" class="text-xs text-gray-500 hidden" aria-live="polite"></p>
+            <p id="captureRegionHint" class="text-xs text-gray-400">框选时按 Esc 或右键取消；区域过小（小于 10×10 像素）将视为无效。</p>
+            <div class="flex flex-wrap gap-3">
+              <button type="button" id="btnCaptureRegionSelect" class="btn-primary px-5 py-2.5 text-white rounded-xl text-sm font-bold">鼠标框选识图范围</button>
+              <button type="button" id="btnCaptureRegionReset" class="px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-warmText hidden">恢复全屏识图</button>
+            </div>
           </div>
         </div>
 
@@ -643,6 +659,23 @@
       </div>
     </section>
 
+    <!-- 公告 -->
+    <section id="page-announcements" class="page-panel" aria-label="公告">
+      <header class="mb-8 flex flex-wrap justify-between items-start gap-4">
+        <div>
+          <h2 class="text-2xl font-bold text-warmText">公告</h2>
+          <p class="text-gray-500 mt-1">官方通知与更新说明</p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <button type="button" id="btnAnnouncementsReward" class="feedback-reward-fab js-reward-fab">赞赏</button>
+          <button type="button" id="btnAnnouncementsRefresh" class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-warmText hover:bg-gray-50">刷新</button>
+        </div>
+      </header>
+      <div id="announcementsList" class="announcements-list space-y-4" aria-live="polite">
+        <p class="text-gray-500 text-sm">正在加载公告…</p>
+      </div>
+    </section>
+
     <!-- 问题反馈 -->
     <section id="page-feedback" class="page-panel" aria-label="问题反馈">
       <header class="mb-8 flex flex-wrap justify-between items-start gap-4">
@@ -652,7 +685,32 @@
         </div>
         <button type="button" id="btnFeedbackReward" class="feedback-reward-fab shrink-0">赞赏</button>
       </header>
-      <div class="card feedback-page p-8">
+      <div class="card feedback-page p-8 space-y-6">
+        <form id="feedbackForm" class="feedback-form space-y-4">
+          <p id="feedbackQuotaHint" class="feedback-quota-hint text-sm text-gray-500">正在查询提交额度…</p>
+          <div>
+            <label for="feedbackContent" class="block text-sm font-semibold mb-2 text-warmText">反馈内容</label>
+            <textarea
+              id="feedbackContent"
+              class="feedback-textarea w-full rounded-xl border border-softPeach px-4 py-3 text-warmText"
+              rows="5"
+              maxlength="2000"
+              placeholder="请描述问题或建议（请勿填写 API Key、密码或截图中的敏感信息）"
+              required
+            ></textarea>
+          </div>
+          <div>
+            <label for="feedbackContact" class="block text-sm font-semibold mb-2 text-warmText">联系方式（可选）</label>
+            <input
+              id="feedbackContact"
+              type="text"
+              class="feedback-input w-full rounded-xl border border-softPeach px-4 py-2 text-warmText"
+              maxlength="200"
+              placeholder="QQ、邮箱等，方便回访"
+            >
+          </div>
+          <button type="submit" id="btnFeedbackSubmit" class="px-6 py-2.5 bg-warmPink hover:bg-warmPinkHover text-white rounded-xl font-semibold shadow-warm">提交反馈</button>
+        </form>
         <p class="feedback-notice text-warmText">
           有任何问题可以在qq群/抖音群/小红书群内@我，因为最近很多人私信我，我一一回答后系统警告我，说我在做不好的事情，谢谢大家理解，邮箱：utar00701233@163.com
         </p>
@@ -710,11 +768,11 @@
           <select id="modelProvider" class="w-full px-4 py-2 bg-cream rounded-xl mt-1"></select>
         </div>
         <div>
-          <label class="text-sm font-semibold text-warmText">显示名称</label>
+          <label class="text-sm font-semibold text-warmText">显示名称 <span class="text-xs font-normal text-gray-400">（仅界面展示，不参与 API）</span></label>
           <input id="modelName" class="w-full px-4 py-2 bg-cream rounded-xl mt-1">
         </div>
         <div>
-          <label class="text-sm font-semibold text-warmText">模型 ID</label>
+          <label class="text-sm font-semibold text-warmText">模型 ID <span class="text-xs font-normal text-gray-400">（API 请求使用的 model 字段）</span></label>
           <input id="modelId" class="w-full px-4 py-2 bg-cream rounded-xl mt-1">
         </div>
         <div>
@@ -760,6 +818,8 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260527-feedback"></script>
+  <script src="/static/supabase-config.js"></script>
+  <script src="/static/supabase-client.js"></script>
+  <script src="/static/app.js?v=20260528-supabase"></script>
 </body>
 </html>

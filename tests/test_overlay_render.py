@@ -166,3 +166,34 @@ def test_dt_motion_matches_legacy_per_frame(overlay_stack):
     engine.update(speed_factor=1.0, dt_sec=1.0 / 60.0)
     new_x = engine.tracks[0].items[0].x
     assert new_x == pytest.approx(old_x - 2.0)
+
+
+def test_global_opacity_factor_clamps(overlay_stack):
+    store, _, overlay = overlay_stack
+    store.set("opacity", "0")
+    assert overlay._global_opacity_factor() == 0.0
+    store.set("opacity", "50")
+    assert overlay._global_opacity_factor() == pytest.approx(0.5)
+    store.set("opacity", "100")
+    assert overlay._global_opacity_factor() == 1.0
+    store.set("opacity", "150")
+    assert overlay._global_opacity_factor() == 1.0
+    store.set("opacity", "")
+    assert overlay._global_opacity_factor() == 1.0
+
+
+def test_item_paint_opacity_includes_global(overlay_stack):
+    store, engine, overlay = overlay_stack
+    overlay.setGeometry(0, 0, 1920, 1080)
+    overlay._screen_width = 1920.0
+    item = DanmuItem(content="opaque", x=500.0, width=100.0, y=engine.tracks[0].y)
+    engine.tracks[0].add(item)
+
+    store.set("opacity", "100")
+    full = overlay._item_opacity(item) * overlay._global_opacity_factor()
+
+    store.set("opacity", "50")
+    half = overlay._item_opacity(item) * overlay._global_opacity_factor()
+
+    assert full == pytest.approx(1.0)
+    assert half == pytest.approx(0.5)

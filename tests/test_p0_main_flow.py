@@ -21,27 +21,7 @@ from app.scene_memory import SceneMemoryStore
 from app.memory.activity import RecentActivityState
 from main import DanmuApp, compress_screenshot
 
-from tests.fakes import FakeLifetimeStats
-
-
-class FakeLogger:
-    def __init__(self):
-        self.debug_messages = []
-        self.info_messages = []
-        self.error_messages = []
-        self.warning_messages = []
-
-    def debug(self, message):
-        self.debug_messages.append(message)
-
-    def info(self, message):
-        self.info_messages.append(message)
-
-    def error(self, message):
-        self.error_messages.append(message)
-
-    def warning(self, message):
-        self.warning_messages.append(message)
+from tests.fakes import FakeLifetimeStats, FakeLogger
 
 
 class FakeConfig:
@@ -192,14 +172,20 @@ class FakeCapturer:
 
 
 class FakePixmap:
-    def __init__(self, scene_byte):
+    def __init__(self, scene_byte, *, is_null: bool = False, width: int = 200, height: int = 200):
         self.scene_byte = scene_byte
+        self._is_null = is_null
+        self._width = width
+        self._height = height
+
+    def isNull(self):
+        return self._is_null
 
     def width(self):
-        return 200
+        return self._width
 
     def height(self):
-        return 200
+        return self._height
 
 
 def _make_minimal_app():
@@ -294,6 +280,12 @@ def _make_minimal_app():
     app._on_normal_capture_tick = DanmuApp._on_normal_capture_tick.__get__(app, DanmuApp)
     app._is_reply_stale = DanmuApp._is_reply_stale.__get__(app, DanmuApp)
     app._reply_request_id = DanmuApp._reply_request_id.__get__(app, DanmuApp)
+    app._register_request_meta = DanmuApp._register_request_meta.__get__(app, DanmuApp)
+    app._pop_request_meta = DanmuApp._pop_request_meta.__get__(app, DanmuApp)
+    app._consume_request_timing = DanmuApp._consume_request_timing.__get__(app, DanmuApp)
+    app._get_request_timing_service = DanmuApp._get_request_timing_service.__get__(app, DanmuApp)
+    app._release_inflight_for_source = DanmuApp._release_inflight_for_source.__get__(app, DanmuApp)
+    app._ensure_stats_state = DanmuApp._ensure_stats_state.__get__(app, DanmuApp)
     app._log_reply_drop = DanmuApp._log_reply_drop.__get__(app, DanmuApp)
     app._update_stats = DanmuApp._update_stats.__get__(app, DanmuApp)
     app._estimated_reply_gap_ms = DanmuApp._estimated_reply_gap_ms.__get__(app, DanmuApp)
@@ -491,7 +483,7 @@ def test_ai_success_reply_enqueued():
 
     assert app.ai_in_flight == 0
     assert app._is_generating is False
-    assert app.reply_buffer.size() == 4
+    assert app.reply_buffer.size() == 1
     assert len(app.engine.calls) >= 1
     assert app._consecutive_failures == 0
     assert app._failure_backoff_paused is False
@@ -707,6 +699,39 @@ def test_ai_error_does_not_crash_on_missing_ui():
 
     assert app._consecutive_failures == 1
     assert app._last_error_message == "test error"
+
+
+def test_invalid_pixmap_does_not_increment_screenshot_id():
+    """无效 pixmap 不应递增 screenshot_id 或缓存帧"""
+    app = _make_minimal_app()
+    app.engine.running = True
+    app._latest_screenshot_id = 5
+    app.capturer = FakeCapturer(FakePixmap(0, is_null=True))
+
+    app._capture_screenshot()
+
+    assert app._latest_screenshot_id == 5
+    assert app._latest_screenshot is None
+    assert any("invalid_pixmap" in msg for msg in app.logger.warning_messages)
+
+
+def test_empty_ai_reply_logs_warning(monkeypatch):
+    """AI 解析结果为空时应记录 warning 便于排障"""
+    app = _make_minimal_app()
+    app.ai_in_flight = 1
+    app._register_request_meta(10, 10, 0, "visual")
+    monkeypatch.setattr(
+        "main.parse_ai_reply_with_memory",
+        lambda _text, _gen: ([], None),
+    )
+    monkeypatch.setattr(
+        "main.normalize_reply_batch",
+        lambda raw_items, **_kwargs: raw_items,
+    )
+
+    app._on_ai_reply("not-json", "persona-1", 10, 10, time.monotonic(), 0)
+
+    assert any("empty_parse" in msg for msg in app.logger.warning_messages)
 
 
 def test_capture_failure_reschedules_next_screenshot():
