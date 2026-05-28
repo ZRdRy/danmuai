@@ -32,8 +32,8 @@ from app.application.config_service import (
     WEB_CONFIG_KEYS,
     apply_web_config_patch,
 )
-from app.live_overlay_hub import LiveOverlayHub
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen, resource_path
+from app.live_overlay_hub import LiveOverlayHub
 
 if TYPE_CHECKING:
     from main import DanmuApp

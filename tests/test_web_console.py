@@ -1252,10 +1252,9 @@ def test_session_route_does_not_require_query_request():
 
 def _build_ws_status_test_app(bridge, token: str):
     """Mirror WebConsoleServer WebSocketRoute registration for /ws/status."""
+    from app.web_console import _ws_token_valid
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
     from starlette.routing import WebSocketRoute
-
-    from app.web_console import _ws_token_valid
 
     app = FastAPI()
 
@@ -1265,7 +1264,7 @@ def _build_ws_status_test_app(bridge, token: str):
             await websocket.close(code=1008, reason="需要登录令牌")
             return
         await websocket.accept()
-        bridge._ws_log_debug(f"WebSocket /ws/status accepted peer=test")
+        bridge._ws_log_debug("WebSocket /ws/status accepted peer=test")
         queue: asyncio.Queue = asyncio.Queue(maxsize=64)
         bridge.register_status_consumer(queue)
         cached = bridge._last_status_payload

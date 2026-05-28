@@ -3,8 +3,6 @@
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.webview_shell import (
     WebViewShell,
     _webview_worker,

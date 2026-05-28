@@ -12,6 +12,11 @@ from urllib.parse import unquote
 from fastapi import File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.image_compress import compress_image_bytes
+from app.web_api import custom_models as cm_api
+from app.web_api import danmu_pool as pool_api
+from app.web_api import persona as persona_api
+
 ANNOUNCEMENTS_READ_STATE_KEY = "announcements_read_state"
 ANNOUNCEMENTS_READ_IDS_MAX = 200
 _UUID_RE = re.compile(
@@ -83,10 +88,6 @@ def _validate_announcements_read_state_payload(body: dict) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="lastSeenMs 不能为负数")
     return {"readIds": cleaned, "lastSeenMs": last_seen_ms}
 
-from app.image_compress import compress_image_bytes
-from app.web_api import custom_models as cm_api
-from app.web_api import danmu_pool as pool_api
-from app.web_api import persona as persona_api
 
 if TYPE_CHECKING:
     from app.web_console import WebConsoleBridge

@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 from unittest.mock import MagicMock
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from app.live_overlay_hub import LiveOverlayHub
 from app.web_api.live_overlay import register_live_overlay_routes
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from main import DanmuApp
+
 from tests.conftest import bind_minimal_danmu_app
 
 

@@ -2,8 +2,17 @@
 
 from app.providers.adapters.default_openai import DefaultOpenAIAdapter
 from app.providers.adapters.mimo import MimoOpenAIAdapter
-from app.providers.capabilities import ProviderCapabilities, get_capabilities, get_capabilities_for_endpoint
-from app.providers.registry import HOST_ENTRIES, guess_provider_from_endpoint, match_host_entry, resolve_api_transport
+from app.providers.capabilities import (
+    ProviderCapabilities,
+    get_capabilities,
+    get_capabilities_for_endpoint,
+)
+from app.providers.registry import (
+    HOST_ENTRIES,
+    guess_provider_from_endpoint,
+    match_host_entry,
+    resolve_api_transport,
+)
 
 _DEFAULT_ADAPTER = DefaultOpenAIAdapter()
 _MIMO_ADAPTER = MimoOpenAIAdapter()
