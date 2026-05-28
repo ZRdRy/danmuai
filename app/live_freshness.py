@@ -9,6 +9,7 @@
 - **模型缓慢检测**：当前 in-flight 请求 ≥ 4s，或历史 RTT P90 ≥ 6s 时判定为慢，
   触发本地兜底等降级策略。
 - **本地兜底批次**：模型响应慢时队列/画面可能空窗，从公式化弹幕库抽样生成轻量弹幕填充。
+  （`is_model_slow` / `build_local_fallback_batch` **未接入 main 主链路**，2026-05-28：仅单元测试覆盖，上屏见后续工单。）
 
 本文件提供常量、状态快照与纯函数；不持有 Qt/线程状态。
 """
@@ -30,7 +31,7 @@ STALE_DROP_BURST_THRESHOLD = 4  # 窗口内丢弃次数达到此值则 should_ba
 MAX_SCREENSHOT_BACKOFF_LEVEL = 4  # 退避等级上限（0=无退避）
 MAX_SCREENSHOT_INTERVAL_MS = 12_000  # 退避后截图间隔硬顶 12s
 
-# --- 场景切换 UX（medium/strict 节奏模式，main 场景探测用）---
+# --- 场景切换 UX（medium/strict gate；SCENE_RHYTHM_PAUSE_SEC，main 场景探测用）---
 SCENE_RHYTHM_PAUSE_SEC = 0.5  # 代际升高后暂停 0.5s 再调度 API，避免模糊过渡帧误触发
 SCENE_CHANGE_DEBOUNCE_SEC = 2.0  # 2s 内重复 hash 变化忽略（Alt-Tab/叠层闪烁）
 SCENE_CHANGE_FORCE_DIST = 15  # 汉明距离 ≥ 15 时强制认定场景变化，绕过防抖
@@ -69,6 +70,8 @@ def build_local_fallback_batch(
     config=None,
 ) -> list[str]:
     """生成无需 API 的轻量兜底弹幕批次（经 normalize_reply_batch 截断/补齐）。
+
+    未接入 main 主链路（2026-05-28）：仅单元测试覆盖；慢模型上屏见后续工单。
 
     模型响应慢或节奏空窗时，若不上屏会造成画面长时间无弹幕；本地兜底用池内短句
     快速填充视觉空白，且标记为 replaceable fallback，后续 AI 回复可顶掉。
@@ -117,6 +120,8 @@ def screenshot_interval_ms(base_interval_sec: int, backoff_level: int) -> int:
 
 def is_model_slow(rtt_history: list[float], inflight_elapsed: float, *, in_flight: bool) -> bool:
     """判定模型是否偏慢：当前请求超时 OR 历史 RTT P90 过慢（双条件 OR）。
+
+    未接入 main 主链路（2026-05-28）：仅单元测试覆盖；触发本地兜底见后续工单。
 
     1) in_flight 且 inflight_elapsed ≥ SLOW_REQUEST_SEC（4s）——单请求已拖太久；
     2) rtt_history 至少 3 条，排序取 P90 ≥ SLOW_RTT_P90_SEC（6s）——近期整体偏慢。

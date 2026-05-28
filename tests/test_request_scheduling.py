@@ -65,7 +65,6 @@ def _make_request_app(**overrides):
 
     object.__setattr__(app, "_log_api_schedule", lambda **_kwargs: None)
     object.__setattr__(app, "_publish_live_status", lambda: None)
-    object.__setattr__(app, "_should_request_new_batch", lambda: True)
     object.__setattr__(app, "_set_error_status_safe", lambda *_args, **_kwargs: None)
     object.__setattr__(app, "_apply_screenshot_interval_backoff", lambda: None)
     object.__setattr__(app, "_record_scene_memory_display", lambda *_args, **_kwargs: None)

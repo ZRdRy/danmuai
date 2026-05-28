@@ -132,6 +132,7 @@ TRANSLATIONS = {
         "persona.sharp": "毒舌型",
         "persona.genki": "元气型",
         "persona.shy": "社恐型",
+        "persona.test": "测试",
 
         "common.saved": "配置已保存。",
         "common.done": "完成",
@@ -260,6 +261,28 @@ TRANSLATIONS = {
         "app.unhandled_exception": "程序遇到未处理的异常:\n{message}\n\n详情请查看日志。",
         "app.unhandled_exception_log": "全局异常: {message}",
         "app.error_title": "DanmuAI 错误",
+
+        "web_console.startup_failed": (
+            "Web 控制台未能启动（{base_url}）。\n\n"
+            "可能原因：端口被占用、残留 DanmuAI 进程、或打包依赖异常。\n"
+            "请查看日志：{log_path}\n"
+            "可尝试：关闭其它实例后重启，或使用 python main.py --web-browser"
+        ),
+        "web_console.not_ready": (
+            "Web 控制台尚未就绪（{detail}）。\n\n"
+            "请查看日志：{log_path}\n"
+            "若 HTTP 已可用，将尝试用系统浏览器打开。"
+        ),
+        "web_console.pywebview_failed": (
+            "桌面控制台窗口未能打开。\n\n"
+            "原因：{detail}\n"
+            "已尝试改用系统浏览器；请查看日志：{log_path}\n"
+            "也可安装 WebView2 或使用 --web-browser"
+        ),
+        "web_console.shell_start_failed": (
+            "无法打开 Web 控制台（{detail}）。\n\n"
+            "请查看日志：{log_path}，地址：{base_url}"
+        ),
 
         "config.startup_notice": "未找到配置文件，已创建默认配置，请先检查 API Key 等基础设置。",
         "config.crypto_missing": "⚠️ 加密库 cryptography 未安装，API Key 将以不安全的 base64 格式存储。请运行 'pip install cryptography' 以启用加密存储。",
@@ -423,6 +446,7 @@ TRANSLATIONS = {
         "persona.sharp": "Sharp Tongue",
         "persona.genki": "Genki",
         "persona.shy": "Shy",
+        "persona.test": "Test",
 
         "common.saved": "Configuration saved.",
         "common.done": "Done",
@@ -551,6 +575,28 @@ TRANSLATIONS = {
         "app.unhandled_exception": "The application hit an unhandled exception:\n{message}\n\nSee the log for details.",
         "app.unhandled_exception_log": "Unhandled exception: {message}",
         "app.error_title": "DanmuAI Error",
+
+        "web_console.startup_failed": (
+            "The web console failed to start ({base_url}).\n\n"
+            "Possible causes: port in use, leftover DanmuAI process, or packaged dependency error.\n"
+            "See log: {log_path}\n"
+            "Try closing other instances or run: python main.py --web-browser"
+        ),
+        "web_console.not_ready": (
+            "The web console is not ready yet ({detail}).\n\n"
+            "See log: {log_path}\n"
+            "If HTTP is available, the system browser will be used."
+        ),
+        "web_console.pywebview_failed": (
+            "The desktop console window could not open.\n\n"
+            "Reason: {detail}\n"
+            "Fell back to the system browser; see log: {log_path}\n"
+            "You can install WebView2 or use --web-browser"
+        ),
+        "web_console.shell_start_failed": (
+            "Could not open the web console ({detail}).\n\n"
+            "See log: {log_path}, URL: {base_url}"
+        ),
 
         "config.startup_notice": "No config file was found. A default config has been created. Please review the API key and other basic settings first.",
         "config.crypto_missing": "⚠️ The cryptography package is not installed. The API key will be stored as insecure base64. Run 'pip install cryptography' to enable encrypted storage.",

@@ -15,32 +15,50 @@
 调用方：app.runnable.AiRunnable.run() → worker._request()
 """
 import json
+import logging
 import threading
 
 import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from app.config_store import ConfigStore
-from app.model_providers import normalize_endpoint, normalize_mode, resolve_api_transport
+from app.model_providers import (
+    guess_provider_from_endpoint,
+    normalize_endpoint,
+    normalize_mode,
+    resolve_api_transport,
+)
+from app.providers import get_capabilities_for_endpoint, get_openai_adapter
+from app.providers.constants import THINKING_DISABLED
 from app.translations import tr
 
 # 弹幕固定 5 条 JSON 数组需要输出 token 余量；过低会在 JSON 中途截断导致解析失败。
 DEFAULT_MAX_TOKENS = 512
 DANMU_MIN_OUTPUT_TOKENS = 512  # 非 thinking 模式下限
 DANMU_MIN_OUTPUT_TOKENS_THINKING = 1024  # thinking 模式需要更多 token（内部推理也计费）
-THINKING_DISABLED = {"type": "disabled"}
+
+logger = logging.getLogger(__name__)
 
 
-def openai_compatible_request_extensions(endpoint: str) -> dict[str, object]:
-    """OpenAI 兼容请求体附加字段。
+def is_mimo_endpoint(endpoint: str) -> bool:
+    return guess_provider_from_endpoint(endpoint) == "mimo"
 
-    仅 MiMo 需要顶层 ``thinking: disabled``，否则可能只流 reasoning 导致正文为空。
-    硅基流动、百炼等不接受该字段，会返回 HTTP 400。
-    """
-    normalized = normalize_endpoint(endpoint).lower()
-    if "api.xiaomimimo.com" in normalized:
-        return {"thinking": dict(THINKING_DISABLED)}
-    return {}
+
+def build_openai_vision_user_content(endpoint: str, user_pt: str, image_data_uri: str) -> list[dict]:
+    """Build multimodal user content; MiMo docs use image before text."""
+    adapter = get_openai_adapter(endpoint, "openai-compatible")
+    return adapter.build_vision_user_content(user_pt, image_data_uri)
+
+
+def openai_compatible_request_extensions(endpoint: str, *, max_tokens: int = 0) -> dict[str, object]:
+    """OpenAI 兼容请求体附加字段（兼容 shim；新代码请用 ProviderAdapter）。"""
+    adapter = get_openai_adapter(endpoint, "openai-compatible")
+    caps = get_capabilities_for_endpoint(endpoint, "openai-compatible")
+    data: dict[str, object] = {}
+    if max_tokens > 0:
+        data["max_tokens"] = max_tokens
+    adapter.patch_probe_body(data, caps=caps)
+    return data
 
 
 def _http_error_message_and_code(exc: httpx.HTTPStatusError) -> tuple[str, object]:
@@ -114,19 +132,13 @@ def resolve_danmu_max_output_tokens(configured: int, *, use_thinking: bool = Fal
     return max(configured, floor)
 
 
-def parse_stream_usage(usage: dict | None) -> tuple[int, int]:
-    """从 SSE 流的 usage 块中提取 token 用量，兼容 OpenAI 和 DashScope 两种字段名。
+def parse_stream_usage(usage: dict | None, *, usage_token_style: str = "openai") -> tuple[int, int]:
+    """从 SSE 流的 usage 块中提取 token 用量，兼容 OpenAI 和 DashScope 两种字段名。"""
+    from app.providers.adapters.default_openai import DefaultOpenAIAdapter
+    from app.providers.capabilities import ProviderCapabilities
 
-    OpenAI 用 prompt_tokens/completion_tokens；DashScope 用 input_tokens/output_tokens。
-    """
-    if not usage:
-        return 0, 0
-    prompt = usage.get("prompt_tokens")
-    completion = usage.get("completion_tokens")
-    if prompt is None and completion is None:
-        prompt = usage.get("input_tokens", 0)
-        completion = usage.get("output_tokens", 0)
-    return int(prompt or 0), int(completion or 0)
+    caps = ProviderCapabilities(usage_token_style=usage_token_style)
+    return DefaultOpenAIAdapter().normalize_usage(usage, caps=caps)
 
 
 class AiWorker(QObject):
@@ -455,7 +467,7 @@ class AiWorker(QObject):
                 0,
             )
             return
-        endpoint, api_key, model, _ = resolved
+        endpoint, api_key, model, api_mode = resolved
         temperature = self.config.get_float("temperature", 0.7)
         configured_max = self.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
         max_tokens = resolve_danmu_max_output_tokens(configured_max, use_thinking=False)
@@ -465,26 +477,21 @@ class AiWorker(QObject):
             return
 
         http_client = self._get_http_client()
-
-        data = {
+        adapter = get_openai_adapter(endpoint, api_mode)
+        caps = get_capabilities_for_endpoint(endpoint, api_mode)
+        data: dict[str, object] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_pt},
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_pt},
-                        {"type": "image_url", "image_url": {"url": image_data_uri}},
-                    ],
+                    "content": adapter.build_vision_user_content(user_pt, image_data_uri),
                 },
             ],
             "temperature": temperature,
-            "max_tokens": max_tokens,
             "stream": True,
-            # DashScope / 百炼 compatible-mode: usage only in final chunk when enabled.
-            "stream_options": {"include_usage": True},
-            **openai_compatible_request_extensions(endpoint),
         }
+        adapter.patch_openai_chat_body(data, max_tokens=max_tokens, caps=caps)
         url = f"{endpoint}/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -494,7 +501,9 @@ class AiWorker(QObject):
         # 重试策略同 _request_doubao；OpenAI 模式不支持 audio_data_uri
         for attempt in range(2):
             try:
-                text, input_tokens, output_tokens = self._stream_openai(http_client, url, headers, data)
+                text, input_tokens, output_tokens = self._stream_openai(
+                    http_client, url, headers, data, endpoint=endpoint, api_mode=api_mode
+                )
                 if text:
                     self._emit_result("finished", text.strip(), persona_id, request_round, screenshot_id, captured_at, scene_generation, input_tokens, output_tokens)
                 else:
@@ -522,7 +531,16 @@ class AiWorker(QObject):
                     continue
                 self._emit_result("error", tr("ai.error_request_failed").format(error=e), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
 
-    def _stream_openai(self, http_client, url: str, headers: dict, data: dict) -> tuple[str, int, int]:
+    def _stream_openai(
+        self,
+        http_client,
+        url: str,
+        headers: dict,
+        data: dict,
+        *,
+        endpoint: str = "",
+        api_mode: str = "",
+    ) -> tuple[str, int, int]:
         """OpenAI SSE 流式解析：逐行解析 data: 前缀，收集 content delta 和 usage。
 
         遇到 data: [DONE] 结束；usage 在最后一块（DashScope/百炼兼容模式下需 stream_options.include_usage）。
@@ -531,6 +549,9 @@ class AiWorker(QObject):
         collected: list[str] = []
         input_tokens = 0
         output_tokens = 0
+        saw_reasoning = False
+        caps = get_capabilities_for_endpoint(endpoint, api_mode)
+        adapter = get_openai_adapter(endpoint, api_mode)
         with http_client.stream("POST", url, headers=headers, json=data) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():
@@ -545,20 +566,31 @@ class AiWorker(QObject):
                     chunk = json.loads(payload)
                     usage = chunk.get("usage")
                     if usage:
-                        input_tokens, output_tokens = parse_stream_usage(usage)
+                        input_tokens, output_tokens = adapter.normalize_usage(usage, caps=caps)
                     choice = chunk.get("choices", [{}])[0]
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
                     if content:
                         collected.append(content)
-                    elif not delta.get("reasoning_content"):
+                    elif delta.get("reasoning_content"):
+                        saw_reasoning = True
+                    else:
                         message = choice.get("message", {})
                         message_content = message.get("content", "")
                         if message_content:
                             collected.append(message_content)
+                        elif message.get("reasoning_content"):
+                            saw_reasoning = True
                 except (json.JSONDecodeError, IndexError, KeyError):
                     continue
-        return "".join(collected), input_tokens, output_tokens
+        text = "".join(collected)
+        if not text and saw_reasoning and caps.thinking_param:
+            logger.warning(
+                "MiMo stream had reasoning_content but no content; "
+                "reason=mimo_reasoning_only endpoint=%s",
+                normalize_endpoint(endpoint) if endpoint else url,
+            )
+        return text, input_tokens, output_tokens
 
     def close(self):
         """关闭所有 httpx 客户端连接。DanmuApp.quit() 时调用。"""

@@ -32,6 +32,7 @@ from app.application.config_service import (
     WEB_CONFIG_KEYS,
     apply_web_config_patch,
 )
+from app.live_overlay_hub import LiveOverlayHub
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen, resource_path
 
 if TYPE_CHECKING:
@@ -383,6 +384,7 @@ class WebConsoleServer:
         self.bridge = bridge
         self.host = host
         self.port = port
+        self.live_overlay_hub = LiveOverlayHub()
         self.token = secrets.token_urlsafe(24)
         self._thread: threading.Thread | None = None
         self._server = None
@@ -464,6 +466,7 @@ class WebConsoleServer:
             from fastapi import Body, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
             from fastapi.responses import FileResponse
             from fastapi.staticfiles import StaticFiles
+            from starlette.routing import WebSocketRoute
         except ImportError as exc:
             msg = (
                 f"Web console dependencies missing: {exc}. "
@@ -491,6 +494,7 @@ class WebConsoleServer:
             # _DanmuWebUvicornServer.startup() only after bind succeeds.
             server_ref._loop = asyncio.get_running_loop()
             bridge.set_event_loop(server_ref._loop)
+            server_ref.live_overlay_hub.set_loop(server_ref._loop)
             try:
                 yield
             finally:
@@ -621,46 +625,19 @@ class WebConsoleServer:
             bridge.toggle_requested.emit()
             return {"ok": True}
 
+        from app.web_api.live_overlay import register_live_overlay_routes
         from app.web_api.routes import register_web_routes
 
         register_web_routes(app, bridge, _check_token)
+        register_live_overlay_routes(
+            app,
+            server_ref.live_overlay_hub,
+            self.base_url,
+            _check_token,
+        )
 
-        @app.get("/")
-        def index():
-            index_path = STATIC_DIR / "index.html"
-            if not index_path.exists():
-                raise HTTPException(status_code=404, detail="index.html missing")
-            return FileResponse(index_path)
-
-        if STATIC_DIR.is_dir():
-            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-        @app.websocket("/ws/logs")
-        async def ws_logs(websocket: WebSocket, ws_token: str | None = None):
-            if not _ws_token_valid(ws_token, token):
-                await websocket.close(code=1008, reason="需要登录令牌")
-                return
-            client = websocket.client
-            peer = f"{client.host}:{client.port}" if client else "unknown"
-            await websocket.accept()
-            bridge._ws_log_debug(f"WebSocket /ws/logs accepted peer={peer}")
-            queue: asyncio.Queue = asyncio.Queue(maxsize=200)
-            bridge.register_log_consumer(queue)
-            try:
-                while True:
-                    item = await queue.get()
-                    await websocket.send_json(item)
-            except WebSocketDisconnect:
-                bridge._ws_log_debug(f"WebSocket /ws/logs disconnected peer={peer}")
-            except Exception as exc:
-                bridge._ws_log_debug(
-                    f"WebSocket /ws/logs closed peer={peer} error={exc!r}"
-                )
-            finally:
-                bridge.unregister_log_consumer(queue)
-
-        @app.websocket("/ws/status")
-        async def ws_status(websocket: WebSocket, ws_token: str | None = None):
+        async def _ws_status_endpoint(websocket: WebSocket):
+            ws_token = websocket.query_params.get("ws_token")
             if not _ws_token_valid(ws_token, token):
                 await websocket.close(code=1008, reason="需要登录令牌")
                 return
@@ -687,6 +664,45 @@ class WebConsoleServer:
             finally:
                 bridge.unregister_status_consumer(queue)
 
+        async def _ws_logs_endpoint(websocket: WebSocket):
+            ws_token = websocket.query_params.get("ws_token")
+            if not _ws_token_valid(ws_token, token):
+                await websocket.close(code=1008, reason="需要登录令牌")
+                return
+            client = websocket.client
+            peer = f"{client.host}:{client.port}" if client else "unknown"
+            await websocket.accept()
+            bridge._ws_log_debug(f"WebSocket /ws/logs accepted peer={peer}")
+            queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+            bridge.register_log_consumer(queue)
+            try:
+                while True:
+                    item = await queue.get()
+                    await websocket.send_json(item)
+            except WebSocketDisconnect:
+                bridge._ws_log_debug(f"WebSocket /ws/logs disconnected peer={peer}")
+            except Exception as exc:
+                bridge._ws_log_debug(
+                    f"WebSocket /ws/logs closed peer={peer} error={exc!r}"
+                )
+            finally:
+                bridge.unregister_log_consumer(queue)
+
+        # FastAPI @app.websocket 在本项目路由规模下未进入 handler（升级直接 403）；
+        # 改用 Starlette WebSocketRoute 注册，token 仍从 query ws_token 读取。
+        app.router.routes.insert(0, WebSocketRoute("/ws/status", endpoint=_ws_status_endpoint))
+        app.router.routes.insert(0, WebSocketRoute("/ws/logs", endpoint=_ws_logs_endpoint))
+
+        @app.get("/")
+        def index():
+            index_path = STATIC_DIR / "index.html"
+            if not index_path.exists():
+                raise HTTPException(status_code=404, detail="index.html missing")
+            return FileResponse(index_path)
+
+        if STATIC_DIR.is_dir():
+            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
         config_kwargs: dict[str, Any] = {
             "host": self.host,
             "port": self.port,
@@ -705,7 +721,7 @@ class WebConsoleServer:
         config = uvicorn.Config(app, **config_kwargs)
         append_frozen_log(
             f"uvicorn Config ready host={self.host} port={self.port} "
-            f"frozen={is_frozen()} static={STATIC_DIR}"
+            f"frozen={is_frozen()} static={STATIC_DIR} ws={ws_impl}"
         )
 
         class _DanmuWebUvicornServer(uvicorn.Server):

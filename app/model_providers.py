@@ -71,8 +71,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         label_en="Xiaomi MiMo",
         default_endpoint="https://api.xiaomimimo.com/v1",
         mode="openai-compatible",
-        model_id_hint_zh="截图弹幕：mimo-v2.5；全模态：mimo-v2-omni",
-        model_id_hint_en="Vision danmu: mimo-v2.5; omni: mimo-v2-omni",
+        model_id_hint_zh="截图弹幕：mimo-v2.5",
+        model_id_hint_en="Vision danmu: mimo-v2.5",
     ),
     ProviderSpec(
         id="custom_openai",
@@ -101,21 +101,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 _PROVIDER_BY_ID = {p.id: p for p in PROVIDERS}
 
 DEFAULT_PROVIDER_ID = "custom_openai"
-
-# endpoint substring -> provider id (longer matches first)
-_ENDPOINT_GUESSES: tuple[tuple[str, str], ...] = tuple(
-    sorted(
-        [
-            ("ark.cn-beijing.volces.com", "doubao"),
-            ("dashscope.aliyuncs.com", "dashscope"),
-            ("open.bigmodel.cn", "zhipu"),
-            ("api.moonshot.cn", "moonshot"),
-            ("api.siliconflow.cn", "siliconflow"),
-            ("api.xiaomimimo.com", "mimo"),
-        ],
-        key=lambda item: -len(item[0]),
-    )
-)
 
 
 def list_providers() -> list[ProviderSpec]:
@@ -147,16 +132,6 @@ def apply_provider_to_form(provider_id: str) -> dict:
     }
 
 
-def guess_provider_from_endpoint(endpoint: str, mode: str = "") -> str:
-    normalized = normalize_endpoint(endpoint) if endpoint else ""
-    for fragment, provider_id in _ENDPOINT_GUESSES:
-        if fragment in normalized:
-            return provider_id
-    if normalize_mode(mode) == "doubao":
-        return "custom_doubao"
-    return DEFAULT_PROVIDER_ID
-
-
 def normalize_endpoint(url: str) -> str:
     value = (url or "").strip().rstrip("/")
     return value
@@ -183,33 +158,16 @@ def is_doubao_mode(mode: str) -> bool:
     return normalize_mode(mode) == "doubao"
 
 
-_OPENAI_HOST_MARKERS: tuple[str, ...] = (
-    "api.siliconflow.cn",
-    "dashscope.aliyuncs.com",
-    "open.bigmodel.cn",
-    "api.moonshot.cn",
-    "api.xiaomimimo.com",
-)
+def guess_provider_from_endpoint(endpoint: str, mode: str = "") -> str:
+    from app.providers.registry import guess_provider_from_endpoint as _guess
 
-_DOUBAO_HOST_MARKERS: tuple[str, ...] = (
-    "ark.cn-beijing.volces.com",
-)
+    return _guess(endpoint, mode)
 
 
 def resolve_api_transport(endpoint: str, api_mode: str) -> str:
-    """Choose Responses (``doubao``) vs Chat Completions (``openai``).
+    from app.providers.registry import resolve_api_transport as _resolve
 
-    Known provider hosts override ``api_mode`` so Volcengine Ark is never sent to
-    ``/chat/completions`` when the UI still says OpenAI-compatible.
-    """
-    normalized = normalize_endpoint(endpoint).lower()
-    if any(marker in normalized for marker in _DOUBAO_HOST_MARKERS):
-        return "doubao"
-    if any(marker in normalized for marker in _OPENAI_HOST_MARKERS):
-        return "openai"
-    if is_doubao_mode(api_mode):
-        return "doubao"
-    return "openai"
+    return _resolve(endpoint, api_mode)
 
 
 def resolve_active_model_id(config) -> str:

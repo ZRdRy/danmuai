@@ -1,4 +1,4 @@
-"""API rhythm scheduling helpers (debug logging, throttling, anchor timing)."""
+"""API scheduling helpers: debug logging, min-interval throttling, anchor-boundary timing."""
 
 from __future__ import annotations
 

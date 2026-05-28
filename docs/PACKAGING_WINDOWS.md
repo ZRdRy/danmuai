@@ -296,6 +296,31 @@ python scripts/generate_app_icon.py   # 生成 icon.png + icon.ico
 
 ---
 
+### 问题 9：有托盘、无 Web 控制台窗口
+
+**现象**：`DanmuAI.exe` 或 `python main.py` 后托盘图标出现，但看不到设置/控制台窗口；有时托盘「设置」也无反应。
+
+**原因**（叠加，见 [ISSUE-009](templates/已知问题记录/ISSUE-009-有托盘无Web控制台.md)）：
+
+| 子原因 | 表现 |
+|--------|------|
+| Web 未监听 | `startup_ok=False`，仅日志 / `startup.log` |
+| pywebview `hidden` + 未 `loaded` | 子进程有窗但不可见 |
+| `ready` 信号过早 | 不回退系统浏览器 |
+| 主进程 `open()` 访问 `webview.windows` | 托盘打开设置无反应 |
+| 多实例占端口 | 第二个进程托盘在、18765 失败 |
+
+**修复**（W-009～W-012）：`nav_queue` 跨进程导航；`QLocalServer` 单实例；失败时托盘提示 + 浏览器回退。pywebview 握手为 `hidden=True` → `put(True)` → `webview.start()` → `loaded` 时 `show()`（**禁止**在 `start()` 前 `show()`，见 ISSUE-010）。
+
+**排查**：
+
+1. `%APPDATA%\DanmuAI\startup.log`（`pywebview start failed` / `fallback to system browser` / `web console not ready`）
+2. `netstat -ano | findstr 18765`
+3. `DanmuAI.exe --web-browser` 或安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+4. 浏览器打开 `http://127.0.0.1:18765`
+
+---
+
 ### 问题 7：`startup.log` 仅「未就绪」无栈
 
 **现象**：只有 `Web 控制台未在 http://127.0.0.1:18765 就绪`，没有崩溃详情。

@@ -209,13 +209,9 @@ def _make_minimal_app():
     app._mic_request_seq = 0
     app._mic_batch_id = 0
     app._pending_request_meta = {}
-    app.STAGGER_INTERVAL = 1.0
-    app._screenshot_scheduled = False
-    app._schedule_next_screenshot = lambda delay_ms: None
     app.reply_timer.active = False
     app._queue_low_watermark = 3
     app._queue_fallback_keep = 3
-    app._queue_run_dry_window_ms = 2000
     app._queue_batch_size = 5
     app._reply_scene_count = 2
     app._reply_filler_count = 3
@@ -244,10 +240,8 @@ def _make_minimal_app():
     app._scene_captures_after_change = 0
     app._scene_api_gate_active = False
     app._last_api_trigger_at = 0.0
-    app.scheduled_delays = []
     app.screenshot_timer = FakeTimer()
     app.capturer = FakeCapturer(None)
-    app._schedule_next_screenshot = lambda delay_ms: app.scheduled_delays.append(delay_ms)
     app._is_generating = False
     app._batch_id = 0
     app._current_batch = None
@@ -258,8 +252,6 @@ def _make_minimal_app():
     app._stale_drop_count = 0
     app._stale_drop_times = []
     app._screenshot_backoff_level = 0
-    app._local_fallback_active = False
-    app._local_fallback_for_batch = 0
     app._publish_live_status = lambda: None
     app.web_bridge = None
     app.ai_worker = Mock()
@@ -525,29 +517,6 @@ def test_older_reply_not_dropped_in_normal_mode():
     assert not any("superseded_by_newer_request" in msg for msg in app.logger.info_messages)
 
 
-def test_low_water_buffer_can_schedule_prefetch():
-    """测试节奏模式下 _maybe_schedule_screenshot 不再手动调度"""
-    app = _make_minimal_app()
-    app.engine.running = True
-    app.reply_buffer.push(QueuedReply("persona-1", 1, 0, "pending", screenshot_id=1))
-
-    app._maybe_schedule_screenshot()
-
-    assert app.scheduled_delays == []
-
-
-def test_inventory_policy_ignores_capture_mode_flag():
-    """测试节奏模式下 _maybe_schedule_screenshot 不再手动调度"""
-    app = _make_minimal_app()
-    app.config = FakeConfig({"capture_mode": "smart"})
-    app.engine.running = True
-    app.reply_buffer.push(QueuedReply("persona-1", 1, 0, "pending", screenshot_id=1))
-
-    app._maybe_schedule_screenshot()
-
-    assert app.scheduled_delays == []
-
-
 def test_ai_error_releases_in_flight():
     """测试 AI 失败后错误提示和 in-flight 释放"""
     app = _make_minimal_app()
@@ -609,9 +578,6 @@ def test_fatal_error_immediate_backoff():
     # 验证立即进入退避状态
     assert app._failure_backoff_paused is True
     assert app._consecutive_failures == 1
-
-    # 验证截图调度标志被清除
-    assert app._screenshot_scheduled is False
 
 
 def test_success_resets_failure_count():
@@ -735,7 +701,7 @@ def test_empty_ai_reply_logs_warning(monkeypatch):
 
 
 def test_capture_failure_reschedules_next_screenshot():
-    """测试截图失败不会让主循环卡死（节奏模式由定时器驱动）"""
+    """测试截图失败不会让主循环卡死（普通模式由 screenshot_timer 驱动）"""
     app = _make_minimal_app()
     app.engine.running = True
 

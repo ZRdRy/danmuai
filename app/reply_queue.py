@@ -105,7 +105,7 @@ class AIReplyFIFOBuffer:
         preserve_scene_generation: int | None = None,
         preserve_replaceable: bool = True,
     ):
-        """场景切换或兜底/节奏模式插入时，新批次插在队首而非 append。
+        """场景切换、麦克风或本地兜底插入时，新批次插在队首而非 append。
 
         与 push 的区别：push 追加到队尾（正常 AI 回复），prepend_batch 插到队首
         （新场景弹幕应优先消费）。超长裁剪方向也不同：push 从队首丢（旧优先丢弃），

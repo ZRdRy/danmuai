@@ -528,6 +528,87 @@ function startDiagnosticsPolling() {
   DIAGNOSTICS.pollTimer = setInterval(refreshDiagnostics, 2500);
 }
 
+let liveOverlayStatusTimer = null;
+
+function formatLiveOverlayLastBroadcast(ts) {
+  if (ts == null || Number.isNaN(Number(ts))) {
+    return '—';
+  }
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) {
+    return '—';
+  }
+  return d.toLocaleTimeString();
+}
+
+async function refreshLiveOverlayStatus() {
+  const connEl = document.getElementById('liveOverlayConnections');
+  const lastEl = document.getElementById('liveOverlayLastBroadcast');
+  const urlEl = document.getElementById('liveOverlayUrl');
+  if (!connEl || !API.base) {
+    return;
+  }
+  try {
+    const st = await fetch(`${API.base}/api/live-overlay/status`, { cache: 'no-store' }).then((r) => {
+      if (!r.ok) {
+        throw new Error(String(r.status));
+      }
+      return r.json();
+    });
+    connEl.textContent = String(st.connections ?? 0);
+    lastEl.textContent = formatLiveOverlayLastBroadcast(st.last_broadcast_at);
+    if (urlEl && st.overlay_url) {
+      urlEl.value = st.overlay_url;
+    }
+  } catch (_e) {
+    connEl.textContent = '—';
+    if (lastEl) {
+      lastEl.textContent = '—';
+    }
+  }
+}
+
+function initLiveOverlayPanel() {
+  const panel = document.getElementById('liveOverlayPanel');
+  if (!panel) {
+    return;
+  }
+  document.getElementById('btnCopyLiveOverlayUrl')?.addEventListener('click', () => {
+    const url = document.getElementById('liveOverlayUrl')?.value || '';
+    if (!url) {
+      showToast('暂无直播地址');
+      return;
+    }
+    navigator.clipboard.writeText(url).then(
+      () => showToast('直播地址已复制~'),
+      () => showToast('复制失败，请手动选择复制'),
+    );
+  });
+  document.getElementById('btnLiveOverlayTest')?.addEventListener('click', async () => {
+    try {
+      await apiFetch('/api/live-overlay/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      showToast('测试弹幕已发送~');
+      await refreshLiveOverlayStatus();
+    } catch (e) {
+      showToast(`发送失败：${e.message || e}`);
+    }
+  });
+  refreshLiveOverlayStatus();
+  if (liveOverlayStatusTimer) {
+    clearInterval(liveOverlayStatusTimer);
+  }
+  liveOverlayStatusTimer = setInterval(() => {
+    if (document.hidden) {
+      return;
+    }
+    refreshLiveOverlayStatus();
+  }, 2000);
+}
+
 function initDiagnosticsPanel() {
   document.getElementById('btnCopyDiagnosticsReport')?.addEventListener('click', async () => {
     const text = buildDiagnosticReportText(DIAGNOSTICS.last);
@@ -1175,6 +1256,10 @@ async function loadProviders() {
 function pickDefaultCatalogModelId(providerId) {
   const platform = resolveCatalogPlatform(providerId);
   if (!platform?.models?.length) return '';
+  const preferred = platform.default_model_id;
+  if (preferred && platform.models.some((m) => m.id === preferred)) {
+    return preferred;
+  }
   const cheapest = platform.models.find((m) => m.cheapest);
   return (cheapest || platform.models[0]).id;
 }
@@ -1925,21 +2010,154 @@ function initSettingsTabs() {
   });
 }
 
+const ANNOUNCEMENTS_READ_IDS_KEY = 'danmu_announcements_read_ids';
+const ANNOUNCEMENTS_LAST_SEEN_MS_KEY = 'danmu_announcements_last_seen_ms';
+/** @deprecated migrated to ID set + ms; removed after one-time migration */
 const ANNOUNCEMENTS_LAST_SEEN_KEY = 'danmu_announcements_last_seen_at';
+const ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY =
+  'danmu_announcements_overview_banner_dismissed_id';
 const ANNOUNCEMENTS_BADGE_POLL_MS = 5 * 60 * 1000;
+const ANNOUNCEMENTS_READ_IDS_MAX = 200;
+const ANNOUNCEMENT_SNIPPET_MAX_CHARS = 30;
 let announcementsBadgePollTimer = null;
+let announcementsReadStateLoaded = false;
+let announcementsLegacyMigrated = false;
+let overviewBannerLatestId = null;
 
-function getAnnouncementsLastSeenAt() {
+const announcementsReadState = {
+  readIds: new Set(),
+  lastSeenMs: 0,
+};
+
+function readAnnouncementsReadIdsFromLocal() {
   try {
-    return localStorage.getItem(ANNOUNCEMENTS_LAST_SEEN_KEY) || '';
+    const raw = localStorage.getItem(ANNOUNCEMENTS_READ_IDS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string' && id) : [];
   } catch {
-    return '';
+    return [];
   }
 }
 
-function setAnnouncementsLastSeenAt(iso) {
+function readAnnouncementsLastSeenMsFromLocal() {
   try {
-    if (iso) localStorage.setItem(ANNOUNCEMENTS_LAST_SEEN_KEY, iso);
+    const raw = localStorage.getItem(ANNOUNCEMENTS_LAST_SEEN_MS_KEY);
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeAnnouncementsReadStateToLocal() {
+  try {
+    const ids = [...announcementsReadState.readIds];
+    const trimmed =
+      ids.length > ANNOUNCEMENTS_READ_IDS_MAX
+        ? ids.slice(-ANNOUNCEMENTS_READ_IDS_MAX)
+        : ids;
+    localStorage.setItem(ANNOUNCEMENTS_READ_IDS_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(
+      ANNOUNCEMENTS_LAST_SEEN_MS_KEY,
+      String(announcementsReadState.lastSeenMs),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function mergeAnnouncementsReadState(remote, localIds, localMs) {
+  const mergedIds = new Set();
+  if (Array.isArray(remote?.readIds)) {
+    for (const id of remote.readIds) {
+      if (typeof id === 'string' && id) mergedIds.add(id);
+    }
+  }
+  for (const id of localIds) mergedIds.add(id);
+  let lastSeenMs = 0;
+  if (remote && Number.isFinite(Number(remote.lastSeenMs))) {
+    lastSeenMs = Math.max(0, Math.floor(Number(remote.lastSeenMs)));
+  }
+  lastSeenMs = Math.max(lastSeenMs, localMs);
+  announcementsReadState.readIds = mergedIds;
+  announcementsReadState.lastSeenMs = lastSeenMs;
+}
+
+function serializeAnnouncementsReadState() {
+  const readIds = [...announcementsReadState.readIds];
+  const trimmed =
+    readIds.length > ANNOUNCEMENTS_READ_IDS_MAX
+      ? readIds.slice(-ANNOUNCEMENTS_READ_IDS_MAX)
+      : readIds;
+  return {
+    readIds: trimmed,
+    lastSeenMs: announcementsReadState.lastSeenMs,
+  };
+}
+
+async function loadAnnouncementsReadState() {
+  const localIds = readAnnouncementsReadIdsFromLocal();
+  const localMs = readAnnouncementsLastSeenMsFromLocal();
+  let remote = null;
+  try {
+    if (API.base) {
+      remote = await fetch(`${API.base}/api/announcements-read-state`, {
+        cache: 'no-store',
+      }).then((r) => (r.ok ? r.json() : null));
+    }
+  } catch {
+    remote = null;
+  }
+  mergeAnnouncementsReadState(remote, localIds, localMs);
+  writeAnnouncementsReadStateToLocal();
+  announcementsReadStateLoaded = true;
+}
+
+async function persistAnnouncementsReadState() {
+  writeAnnouncementsReadStateToLocal();
+  try {
+    await apiFetch('/api/announcements-read-state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(serializeAnnouncementsReadState()),
+    });
+  } catch {
+    /* localStorage remains; next GET will merge */
+  }
+}
+
+function maxAnnouncementCreatedMs(rows) {
+  let maxMs = 0;
+  for (const row of rows || []) {
+    const t = Date.parse(row.created_at || '');
+    if (!Number.isNaN(t) && t > maxMs) maxMs = t;
+  }
+  return maxMs;
+}
+
+function migrateLegacyAnnouncementsLastSeen(rows) {
+  if (announcementsLegacyMigrated) return;
+  announcementsLegacyMigrated = true;
+  let legacyIso = '';
+  try {
+    legacyIso = localStorage.getItem(ANNOUNCEMENTS_LAST_SEEN_KEY) || '';
+  } catch {
+    legacyIso = '';
+  }
+  if (!legacyIso) return;
+  const seenMs = Date.parse(legacyIso);
+  if (!Number.isNaN(seenMs)) {
+    for (const row of rows || []) {
+      const t = Date.parse(row.created_at || '');
+      if (row.id && !Number.isNaN(t) && t <= seenMs) {
+        announcementsReadState.readIds.add(row.id);
+      }
+    }
+    announcementsReadState.lastSeenMs = Math.max(announcementsReadState.lastSeenMs, seenMs);
+  }
+  try {
+    localStorage.removeItem(ANNOUNCEMENTS_LAST_SEEN_KEY);
   } catch {
     /* ignore */
   }
@@ -1947,31 +2165,23 @@ function setAnnouncementsLastSeenAt(iso) {
 
 function hasUnreadAnnouncements(rows) {
   if (!rows?.length) return false;
-  const lastSeen = getAnnouncementsLastSeenAt();
-  if (!lastSeen) return true;
-  const seenMs = Date.parse(lastSeen);
-  if (Number.isNaN(seenMs)) return rows.length > 0;
-  return rows.some((row) => {
-    const t = Date.parse(row.created_at || '');
-    return !Number.isNaN(t) && t > seenMs;
-  });
+  return rows.some((row) => row.id && !announcementsReadState.readIds.has(row.id));
 }
 
 function markAnnouncementsRead(rows) {
-  if (!rows?.length) {
-    setAnnouncementsLastSeenAt(new Date().toISOString());
-    return;
+  migrateLegacyAnnouncementsLastSeen(rows);
+  for (const row of rows || []) {
+    if (row.id) announcementsReadState.readIds.add(row.id);
   }
-  let maxMs = 0;
-  let maxIso = '';
-  for (const row of rows) {
-    const t = Date.parse(row.created_at || '');
-    if (!Number.isNaN(t) && t >= maxMs) {
-      maxMs = t;
-      maxIso = row.created_at;
-    }
+  const maxMs = maxAnnouncementCreatedMs(rows);
+  if (maxMs > 0) {
+    announcementsReadState.lastSeenMs = Math.max(announcementsReadState.lastSeenMs, maxMs);
   }
-  setAnnouncementsLastSeenAt(maxIso || new Date().toISOString());
+  if (announcementsReadState.readIds.size > ANNOUNCEMENTS_READ_IDS_MAX) {
+    const trimmed = [...announcementsReadState.readIds].slice(-ANNOUNCEMENTS_READ_IDS_MAX);
+    announcementsReadState.readIds = new Set(trimmed);
+  }
+  persistAnnouncementsReadState().catch(console.error);
 }
 
 function updateAnnouncementsNavBadge(show) {
@@ -1981,14 +2191,147 @@ function updateAnnouncementsNavBadge(show) {
   badge.setAttribute('aria-hidden', show ? 'false' : 'true');
 }
 
+function getOverviewBannerDismissedId() {
+  try {
+    return localStorage.getItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setOverviewBannerDismissedId(id) {
+  try {
+    if (id) localStorage.setItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+function buildAnnouncementSnippetParts(row) {
+  const title = String(row?.title ?? '').trim();
+  const body = String(row?.body ?? '').trim();
+  let combined;
+  let titleCharCount;
+
+  if (title && body) {
+    combined = `${title}：${body}`;
+    titleCharCount = Array.from(title).length + 1;
+  } else if (title) {
+    combined = title;
+    titleCharCount = Array.from(title).length;
+  } else if (body) {
+    combined = body;
+    titleCharCount = 0;
+  } else {
+    return null;
+  }
+
+  const chars = Array.from(combined);
+  const overLimit = chars.length > ANNOUNCEMENT_SNIPPET_MAX_CHARS;
+  const truncatedChars = overLimit ? chars.slice(0, ANNOUNCEMENT_SNIPPET_MAX_CHARS) : chars;
+  const suffix = overLimit ? '…' : '';
+
+  if (!title || !body) {
+    if (title) {
+      return { hasTitle: true, titlePart: truncatedChars.join('') + suffix, restPart: '' };
+    }
+    return { hasTitle: false, titlePart: '', restPart: truncatedChars.join('') + suffix };
+  }
+
+  const titleOnlyLen = Array.from(title).length;
+  if (truncatedChars.length <= titleOnlyLen) {
+    return { hasTitle: true, titlePart: truncatedChars.join('') + suffix, restPart: '' };
+  }
+
+  return {
+    hasTitle: true,
+    titlePart: title,
+    restPart: truncatedChars.slice(titleCharCount).join('') + suffix,
+  };
+}
+
+function buildAnnouncementSnippet(row) {
+  const parts = buildAnnouncementSnippetParts(row);
+  if (!parts) return '';
+  return (parts.hasTitle ? parts.titlePart : '') + parts.restPart;
+}
+
+function renderOverviewAnnouncementBannerText(textEl, parts) {
+  if (!parts || (!parts.titlePart && !parts.restPart)) {
+    textEl.textContent = '';
+    return;
+  }
+  if (parts.hasTitle && parts.titlePart) {
+    textEl.innerHTML =
+      `<strong class="overview-announcement-banner-title">${escapeHtml(parts.titlePart)}</strong>` +
+      escapeHtml(parts.restPart);
+  } else {
+    textEl.textContent = parts.restPart;
+  }
+}
+
+function hideOverviewAnnouncementBanner() {
+  const banner = document.getElementById('overviewAnnouncementBanner');
+  if (!banner) return;
+  banner.classList.add('hidden');
+  overviewBannerLatestId = null;
+}
+
+function updateOverviewAnnouncementBanner(rows) {
+  const banner = document.getElementById('overviewAnnouncementBanner');
+  const textEl = document.getElementById('overviewAnnouncementBannerText');
+  if (!banner || !textEl) return;
+
+  if (!window.DanmuSupabase?.isConfigured?.() || !rows?.length) {
+    hideOverviewAnnouncementBanner();
+    return;
+  }
+
+  const latest = rows[0];
+  if (!latest?.id) {
+    hideOverviewAnnouncementBanner();
+    return;
+  }
+
+  const parts = buildAnnouncementSnippetParts(latest);
+  if (!parts || (!parts.titlePart && !parts.restPart)) {
+    hideOverviewAnnouncementBanner();
+    return;
+  }
+
+  if (latest.id === getOverviewBannerDismissedId()) {
+    hideOverviewAnnouncementBanner();
+    return;
+  }
+
+  overviewBannerLatestId = latest.id;
+  const level = ['info', 'warning', 'critical'].includes(latest.level) ? latest.level : 'info';
+  banner.classList.remove('hidden', 'announcement-level-warning', 'announcement-level-critical');
+  if (level === 'warning' || level === 'critical') {
+    banner.classList.add(`announcement-level-${level}`);
+  }
+  renderOverviewAnnouncementBannerText(textEl, parts);
+}
+
+function dismissOverviewAnnouncementBanner(id) {
+  if (id) setOverviewBannerDismissedId(id);
+  hideOverviewAnnouncementBanner();
+}
+
 async function refreshAnnouncementsUnreadBadge() {
+  if (!announcementsReadStateLoaded) {
+    await loadAnnouncementsReadState();
+  }
   if (!window.DanmuSupabase?.isConfigured?.()) {
     updateAnnouncementsNavBadge(false);
+    hideOverviewAnnouncementBanner();
     return;
   }
   try {
     const rows = await window.DanmuSupabase.listAnnouncements();
     const list = Array.isArray(rows) ? rows : [];
+    migrateLegacyAnnouncementsLastSeen(list);
+    updateOverviewAnnouncementBanner(list);
     const onAnnouncementsPage = document.getElementById('page-announcements')?.classList.contains('active');
     if (onAnnouncementsPage) {
       markAnnouncementsRead(list);
@@ -1997,6 +2340,7 @@ async function refreshAnnouncementsUnreadBadge() {
     }
     updateAnnouncementsNavBadge(hasUnreadAnnouncements(list));
   } catch {
+    hideOverviewAnnouncementBanner();
     /* keep current badge state */
   }
 }
@@ -2169,7 +2513,10 @@ function navigate(page) {
   }
   if (page === 'persona') loadPersonaEditor().catch(console.error);
   if (page === 'danmu-pool') loadDanmuPoolPage().catch((e) => showToast(e.message, true));
-  if (page === 'announcements') loadAnnouncementsPage().catch((e) => showToast(e.message, true));
+  if (page === 'announcements') {
+    updateAnnouncementsNavBadge(false);
+    loadAnnouncementsPage().catch((e) => showToast(e.message, true));
+  }
   if (page === 'feedback') initFeedbackPage();
   if (page === 'logs') {
     renderLogView();
@@ -2527,6 +2874,12 @@ function connectStatusWebSocket() {
     console.debug('[realtime] status WS close', ev.code, ev.reason || '');
     REALTIME.statusOpen = false;
     if (!REALTIME.statusWsDownAt) REALTIME.statusWsDownAt = Date.now();
+    if (ev.code === 1008) {
+      refreshSession()
+        .catch((e) => console.warn('[realtime] session refresh after WS 1008 failed', e))
+        .finally(() => scheduleStatusReconnect());
+      return;
+    }
     scheduleStatusReconnect();
   };
 }
@@ -2574,6 +2927,12 @@ function connectLogsWebSocket() {
     console.debug('[realtime] logs WS close', ev.code, ev.reason || '');
     REALTIME.logsOpen = false;
     if (!REALTIME.logsWsDownAt) REALTIME.logsWsDownAt = Date.now();
+    if (ev.code === 1008) {
+      refreshSession()
+        .catch((e) => console.warn('[realtime] session refresh after WS 1008 failed', e))
+        .finally(() => scheduleLogsReconnect());
+      return;
+    }
     scheduleLogsReconnect();
     updateRealtimeConnUI();
   };
@@ -2593,6 +2952,7 @@ function startRealtimeTransport() {
 
 async function init() {
   await refreshSession();
+  await loadAnnouncementsReadState();
 
   await loadModelCatalog();
   await loadProviders();
@@ -2603,6 +2963,7 @@ async function init() {
   }
   applyStatus(await fetch(`${API.base}/api/status`).then((r) => r.json()));
   initDiagnosticsPanel();
+  initLiveOverlayPanel();
   startRealtimeTransport();
 
   initSettingsTabs();
@@ -2661,7 +3022,7 @@ async function init() {
 
   updateLogPanelState();
 
-  refreshAnnouncementsUnreadBadge().catch(console.error);
+  await refreshAnnouncementsUnreadBadge();
   startAnnouncementsBadgePolling();
 
   document.getElementById('btnToggle').addEventListener('click', async () => {
@@ -2845,6 +3206,9 @@ async function init() {
   document.getElementById('btnModelCancel')?.addEventListener('click', closeModelModal);
   document.getElementById('btnAnnouncementsRefresh')?.addEventListener('click', () => {
     loadAnnouncementsPage().catch((e) => showToast(e.message, true));
+  });
+  document.getElementById('btnOverviewAnnouncementDismiss')?.addEventListener('click', () => {
+    dismissOverviewAnnouncementBanner(overviewBannerLatestId);
   });
   document.querySelectorAll('.js-reward-fab').forEach((btn) => {
     btn.addEventListener('click', openRewardModal);

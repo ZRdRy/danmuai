@@ -109,7 +109,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 |------|----------------|------|------------------|
 | 火山方舟 | `https://ark.cn-beijing.volces.com/api/v3` | 豆包 Responses | `doubao-seed-1-6-flash-250828` |
 | 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI 兼容 | `qwen-vl-max` |
-| 小米 MiMo | `https://api.xiaomimimo.com/v1` | OpenAI 兼容 | `mimo-v2.5`（推荐）、`mimo-v2-omni` |
+| 小米 MiMo | `https://api.xiaomimimo.com/v1` | OpenAI 兼容 | `mimo-v2.5`（MiMo-V2.5） |
 | 硅基流动 | `https://api.siliconflow.cn/v1` | OpenAI 兼容 | `Qwen/Qwen3-VL-8B-Instruct` |
 
 完整列表见 `app/model_providers.py`；带价格/徽章的目录见 `app/model_catalog.py` 与 `GET /api/model-catalog`。

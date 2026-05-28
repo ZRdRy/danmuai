@@ -8,7 +8,9 @@ from app.ai_client import (
     DANMU_MIN_OUTPUT_TOKENS,
     DANMU_MIN_OUTPUT_TOKENS_THINKING,
     AiWorker,
+    build_openai_vision_user_content,
     format_openai_http_error,
+    is_mimo_endpoint,
     openai_compatible_request_extensions,
     parse_stream_usage,
     resolve_danmu_max_output_tokens,
@@ -72,7 +74,7 @@ def test_request_openai_enables_stream_usage_option():
     )
     captured: dict = {}
 
-    def capture(_http_client, _url, _headers, data):
+    def capture(_http_client, _url, _headers, data, **kwargs):
         captured["data"] = data
         return ("ok", 1, 1)
 
@@ -96,7 +98,7 @@ def test_request_openai_includes_thinking_for_mimo():
     )
     captured: dict = {}
 
-    def capture(_http_client, _url, _headers, data):
+    def capture(_http_client, _url, _headers, data, **kwargs):
         captured["data"] = data
         return ("ok", 1, 1)
 
@@ -104,12 +106,53 @@ def test_request_openai_includes_thinking_for_mimo():
         with patch.object(worker, "_emit_safe"):
             worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
 
-    assert captured["data"]["thinking"] == {"type": "disabled"}
+    data = captured["data"]
+    assert data["thinking"] == {"type": "disabled"}
+    assert data["max_completion_tokens"] == DANMU_MIN_OUTPUT_TOKENS
+    assert "max_tokens" not in data
+    assert "stream_options" not in data
+    user_content = data["messages"][1]["content"]
+    assert user_content[0]["type"] == "image_url"
+    assert user_content[1]["type"] == "text"
     worker.close()
 
 
 def test_openai_compatible_request_extensions_siliconflow_omits_thinking():
     assert openai_compatible_request_extensions("https://api.siliconflow.cn/v1") == {}
+
+
+def test_openai_compatible_request_extensions_mimo_includes_max_completion_tokens():
+    ext = openai_compatible_request_extensions(
+        "https://api.xiaomimimo.com/v1",
+        max_tokens=512,
+    )
+    assert ext["thinking"] == {"type": "disabled"}
+    assert ext["max_completion_tokens"] == 512
+
+
+def test_build_openai_vision_user_content_mimo_image_first():
+    parts = build_openai_vision_user_content(
+        "https://api.xiaomimimo.com/v1",
+        "hello",
+        "data:image/jpeg;base64,abc",
+    )
+    assert parts[0]["type"] == "image_url"
+    assert parts[1]["type"] == "text"
+
+
+def test_build_openai_vision_user_content_other_text_first():
+    parts = build_openai_vision_user_content(
+        "https://api.siliconflow.cn/v1",
+        "hello",
+        "data:image/jpeg;base64,abc",
+    )
+    assert parts[0]["type"] == "text"
+    assert parts[1]["type"] == "image_url"
+
+
+def test_is_mimo_endpoint():
+    assert is_mimo_endpoint("https://api.xiaomimimo.com/v1")
+    assert not is_mimo_endpoint("https://api.siliconflow.cn/v1")
 
 
 def test_format_openai_http_error_maps_siliconflow_model_missing_code():
@@ -159,9 +202,48 @@ def test_stream_openai_ignores_reasoning_content():
 
     client = MagicMock()
     client.stream.side_effect = fake_stream
-    text, in_tok, out_tok = worker._stream_openai(client, "https://api.xiaomimimo.com/v1/chat/completions", {}, {})
+    text, in_tok, out_tok = worker._stream_openai(
+        client,
+        "https://api.xiaomimimo.com/v1/chat/completions",
+        {},
+        {},
+        endpoint="https://api.xiaomimimo.com/v1",
+    )
     assert text == ""
     assert in_tok == 0 and out_tok == 0
+    worker.close()
+
+
+def test_stream_openai_logs_mimo_reasoning_only(caplog):
+    import logging
+
+    worker = AiWorker(FakeConfig())
+
+    @contextmanager
+    def fake_stream(*_args, **_kwargs):
+        chunk = {"choices": [{"delta": {"reasoning_content": "only reasoning"}}]}
+        lines = [f"data: {json.dumps(chunk)}", "data: [DONE]"]
+
+        class Resp:
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                return iter(lines)
+
+        yield Resp()
+
+    client = MagicMock()
+    client.stream.side_effect = fake_stream
+    with caplog.at_level(logging.WARNING):
+        worker._stream_openai(
+            client,
+            "https://api.xiaomimimo.com/v1/chat/completions",
+            {},
+            {},
+            endpoint="https://api.xiaomimimo.com/v1",
+        )
+    assert any("reason=mimo_reasoning_only" in r.message for r in caplog.records)
     worker.close()
 
 

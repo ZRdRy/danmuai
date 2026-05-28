@@ -65,7 +65,7 @@ def test_list_platform_catalogs_has_four_platforms():
     mimo = _platform_by_id(platforms, "mimo")
     assert mimo["provider_id"] == "mimo"
     assert mimo["platform_label"] == "小米 MiMo"
-    assert len(mimo["models"]) == 2
+    assert len(mimo["models"]) == 1
     all_models = doubao["models"] + dashscope["models"] + siliconflow["models"] + mimo["models"]
     for model in all_models:
         assert "name" in model
@@ -125,18 +125,22 @@ def test_get_catalog_for_provider_siliconflow():
     assert len(catalog["models"]) == 9
 
 
-def test_mimo_cheapest_is_v2_omni():
+def test_mimo_cheapest_is_v2_5():
     enriched = enrich_platform_models(MIMO_MODELS)
     cheapest = [m for m in enriched if m["cheapest"]]
     assert len(cheapest) == 1
-    assert cheapest[0]["id"] == "mimo-v2-omni"
+    assert cheapest[0]["id"] == "mimo-v2.5"
 
 
 def test_get_catalog_for_provider_mimo():
     catalog = get_catalog_for_provider("mimo")
     assert catalog is not None
     assert catalog["platform_label"] == "小米 MiMo"
-    assert {m["id"] for m in catalog["models"]} == {"mimo-v2.5", "mimo-v2-omni"}
+    assert {m["id"] for m in catalog["models"]} == {"mimo-v2.5"}
+    by_id = {m["id"]: m for m in catalog["models"]}
+    assert by_id["mimo-v2.5"]["name"] == "MiMo-V2.5"
+    assert by_id["mimo-v2.5"]["price"]["input"] == 1.0
+    assert by_id["mimo-v2.5"]["price"]["output"] == 2.0
 
 
 def test_get_catalog_for_provider_unknown():
@@ -153,7 +157,7 @@ def test_default_catalog_model_id_uses_cheapest():
     assert default_catalog_model_id("doubao") == "doubao-seed-1-6-flash-250828"
     assert default_catalog_model_id("dashscope") == "qwen3-vl-flash"
     assert default_catalog_model_id("siliconflow") == "Qwen/Qwen3-VL-8B-Instruct"
-    assert default_catalog_model_id("mimo") == "mimo-v2-omni"
+    assert default_catalog_model_id("mimo") == "mimo-v2.5"
 
 
 def test_default_catalog_model_id_unknown_provider():

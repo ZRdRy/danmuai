@@ -28,20 +28,21 @@ python main.py --web-browser    # 系统浏览器
 | HTTP API | `app/web_console.py` | FastAPI，`127.0.0.1:18765`，Bearer 鉴权 |
 | 扩展路由 | `app/web_api/routes.py` | 人格、自定义模型、公式化弹幕库、压缩预览 |
 | 静态页 | `web/static/` | Qwen 温馨风格 |
-| 桌面壳 | `app/webview_shell.py` | pywebview（Windows WebView2） |
+| 桌面壳 | `app/webview_shell.py` | pywebview 子进程 + `nav_queue` 跨进程导航；失败回退系统浏览器 |
+| 单实例 | `app/single_instance.py` | `QLocalServer`；二次启动激活已有窗口并退出 |
 | Overlay | `app/overlay.py` | Qt 透明置顶弹幕 |
 
 ## 页面地图
 
 | 侧栏 | 能力 |
 |------|------|
-| 运行概览 | 启停、状态、会话统计与持久累计（生成总弹幕、运行总时长、消耗总 Token）；**弹幕场次记录**（每轮启停，本机 `config.db` 最近 100 条）；诊断面板默认隐藏，`GET /api/diagnostics` 仍可供调试 |
+| 运行概览 | 启停、状态、会话统计与持久累计（生成总弹幕、运行总时长、消耗总 Token）；**弹幕场次记录**（每轮启停，本机 `config.db` 最近 100 条）；**直播输出**（OBS/直播伴侣浏览器源 URL、SSE 连接数、测试弹幕）；诊断面板默认隐藏，`GET /api/diagnostics` 仍可供调试 |
 | 助手设置 | 全局配置、节奏/截图、图像压缩预览、自定义模型 |
 | 公式化弹幕库 | 内置/自定义公式化短句开关、最小同屏补足、自定义句增删 |
 | 人格工坊 | 提示词编辑、版本回滚预览、新建/删除自定义人格 |
 | 弹幕日记 | 多级别过滤、复制可见、自动滚动 |
 | 教程 | 飞书文档外链 |
-| 公告 | Supabase 已发布公告列表（置顶优先；需 `web/static/supabase-config.js`） |
+| 公告 | Supabase 已发布公告列表（置顶优先；需 `web/static/supabase-config.js`）；**温馨控制台**顶栏可显示最新公告「标题：正文」前 30 字，可关闭 |
 | 问题反馈 | 在线反馈表单（Supabase）、社群说明、QQ 群二维码、赞赏码弹窗 |
 
 ### Supabase（公告与反馈）
@@ -51,6 +52,7 @@ python main.py --web-browser    # 系统浏览器
 | 能力 | 说明 |
 |------|------|
 | 公告 | `announcements` 表，`published=true` 且在 `starts_at`/`ends_at` 窗口内可对 anon 只读 |
+| 控制台顶栏 | 列表首条简略展示（`title：body` 截 30 字）；`localStorage` 键 `danmu_announcements_overview_banner_dismissed_id` 记录已关闭的公告 `id`，新公告成为首条后再次显示；与侧栏未读红点（`read_ids` / `last_seen_ms`）独立 |
 | 反馈 | `feedback` 表，anon 仅 INSERT；每 `client_id`（`localStorage`）3 小时内最多 2 条 |
 | 管理 | Supabase Dashboard → Table Editor 发布公告、查看反馈 |
 
@@ -69,12 +71,32 @@ python main.py --web-browser    # 系统浏览器
 | GET | `/api/providers` | 否 | 服务商预设 |
 | GET | `/api/model-catalog` | 否 | 视觉模型平台目录（模型 ID、价格、最便宜/麦克风标记） |
 | GET | `/api/meta` | 否 | UI 模式、快捷键等 |
+| GET | `/api/announcements-read-state` | 否 | 公告已读状态（`readIds`、`lastSeenMs`），持久化于本机 `config.db` 键 `announcements_read_state` |
+| PUT | `/api/announcements-read-state` | Bearer | 写入公告已读状态；`readIds` 为公告 UUID 数组（最多 200），`lastSeenMs` 为非负整数 |
 
 **视觉模型（助手设置 · API 页）**：选择带目录的服务商（火山方舟、阿里云百炼/DashScope、硅基流动/SiliconFlow、小米 MiMo 等）后，列表主文案为模型展示名，副文案为 model ID；悬停 info 可查看名称、ID 与价格。视觉模型目录由当前 **API 地址** 推断平台（非仅服务商下拉框）；手动改地址后会同步下拉框并刷新列表。切换服务商预设时会重置为该平台默认视觉模型（目录中最便宜项）并清空 API 密钥输入框；保存时若 endpoint 与 model 目录不匹配将拒绝保存。无目录平台或自选 ID 时使用「自定义模型」行。默认模型若来自「自定义模型 → 设为默认」，页面会提示全局 API 地址/密钥不用于生成弹幕。
 | GET | `/api/personae` | 否 | 人格列表与激活状态 |
 | POST | `/api/start` `/api/stop` `/api/toggle` | Bearer | 生成/停止弹幕 |
 | POST | `/api/probe` | Bearer | 全局 API 连接测试 |
 | WS | `/ws/logs` `/ws/status` | Query `ws_token` | 日志与状态推送（与 session token 相同） |
+
+### 直播网页弹幕层（`app/web_api/live_overlay.py`）
+
+供 OBS、抖音直播伴侣等以**浏览器源 / 网页源**采集透明背景弹幕；与 Qt Overlay **并行**，不替代桌面叠加层。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/live-overlay` | 否 | 透明背景弹幕页（`web/static/live-overlay.html`） |
+| GET | `/api/live-overlay/events` | 否 | SSE：`event: hello` 后推送 `danmu_item`（`text`、`y`、`screen_width`、`screen_height`、`speed`）；新连接回放最近 80 条 |
+| GET | `/api/live-overlay/status` | 否 | `connections`、`last_broadcast_at`、`overlay_url` |
+| POST | `/api/live-overlay/test` | Bearer | 发送测试弹幕（不调 AI）；body 可选 `{ "items": ["…"] }` |
+
+**OBS / 直播伴侣配置（本机）**
+
+1. 启动 `python main.py`，在控制台「运行概览 → 直播输出」复制地址（默认 `http://127.0.0.1:18765/live-overlay`）。
+2. 添加浏览器源，宽高建议 1920×1080，勾选**透明背景**（若软件支持）。
+3. 在控制台点「发送测试弹幕」，确认网页源出现滚动白字。
+4. 正常启停生成后，AI 弹幕在 Qt 上屏时经 `danmu_item` 同步到网页层（视觉 AI + 开麦 AI）；无 SSE 连接时不影响主链路。OBS 更新后须刷新浏览器源以加载最新 `live-overlay.js`。
 
 ### 人格与提示词（`app/web_api/persona.py`）
 
@@ -158,6 +180,8 @@ python main.py --web-browser    # 系统浏览器
 公式化弹幕库（专用 API，不在 `WEB_CONFIG_KEYS`）：`danmu_pool_enabled`（内置库）、`danmu_pool_use_custom`（自定义库）、`min_on_screen`（默认 **5**，任一库开启且值 **>0** 时从合并池补足；两库都关则运行时不补足）。
 
 弹幕生成 · `normal_recognition_interval_sec`（识图间隔，默认 **5** 秒，范围 1–60；截图后**立即**触发 AI）、`normal_reply_count`（每批弹幕条数，默认 **5**，范围 1–20）。上一请求 in-flight 时跳过本轮截图；回复入队为 append。
+
+温度（助手设置 · API 页，**简化/全面模式均显示**）：`temperature`（0–2，步进 0.1，默认 **0.7**）。`max_tokens` 等高级项仅在全面模式显示。
 
 记忆（助手设置 · API 页，**简化/全面模式均显示**）：`memory_mode`（`off` / `dedup_only` / `scene_card` / `strong`，默认 `off`）、`memory_window`（1–20，默认 **10**）。进程内短记忆，不持久化；详见 [ARCHITECTURE.md](ARCHITECTURE.md#memory-modes)。
 

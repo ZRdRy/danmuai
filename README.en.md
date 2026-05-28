@@ -27,7 +27,7 @@ Built-in presets (see `app/model_providers.py`) include Volcengine Ark (Doubao),
 | Preset | Default endpoint | Protocol | Vision danmu example |
 |--------|------------------|----------|----------------------|
 | Volcengine Ark | `https://ark.cn-beijing.volces.com/api/v3` | Doubao `/responses` | `doubao-seed-1-6-flash-250828` |
-| Xiaomi MiMo | `https://api.xiaomimimo.com/v1` | OpenAI-compatible | `mimo-v2.5` (recommended), `mimo-v2-omni` |
+| Xiaomi MiMo | `https://api.xiaomimimo.com/v1` | OpenAI-compatible | `mimo-v2.5` (MiMo-V2.5) |
 
 Platforms with a model picker catalog: Doubao, DashScope, SiliconFlow, MiMo (`GET /api/model-catalog`).
 

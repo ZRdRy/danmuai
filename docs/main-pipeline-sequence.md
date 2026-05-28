@@ -53,9 +53,8 @@ app/overlay.py::DanmuOverlay.start_render_loop()
 | `_live_status_timer` | 500 ms | `_publish_live_status` | Web status push |
 | `_lifetime_flush_timer` | (config) | lifetime flush | Stats persistence |
 | `QThreadPool` | on demand | `AiRunnable.run` | AI HTTP (visual + mic) |
-| `QTimer.singleShot` | variable | `_do_scheduled_screenshot` | Supplemental capture scheduling |
 
-Removed from product: `_rhythm_check_timer`, `_check_rhythm_trigger()`, realtime display mode branch.
+Removed from product: `_rhythm_check_timer`, `_check_rhythm_trigger()`, realtime display mode branch, inventory prefetch (`_schedule_next_screenshot` / `_should_request_new_batch`, W-002).
 
 ## Stage table
 

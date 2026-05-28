@@ -1,7 +1,3 @@
-# NOTE: PipelineSimulator._maybe_schedule_screenshot mirrors pre-rhythm inventory
-# scheduling. Production main._maybe_schedule_screenshot is a no-op; do not infer
-# API pacing from these tests alone.
-
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -134,10 +130,6 @@ class PipelineSimulator:
         self.reply_buffer = AIReplyFIFOBuffer(max_items=8)
         self.reply_timer = FakeTimer()
         self.ai_in_flight = 0
-        self.MAX_IN_FLIGHT = 1
-        self.STAGGER_INTERVAL = 3.0
-        self._screenshot_scheduled = False
-        self.scheduled_delays = []
         self.danmu_count = 0
         self.screenshot_round = 10
         self._latest_displayed_round = 0
@@ -145,19 +137,7 @@ class PipelineSimulator:
         self._last_request_time = 0.0
         self._queue_low_watermark = 3
         self._queue_fallback_keep = 3
-        self._queue_run_dry_window_ms = 2000
-        self._queue_batch_size = 5
         self.config = FakeConfig(config_values)
-        self.screenshot_timer = FakeTimer()
-
-    def _schedule_next_screenshot(self, delay_ms):
-        if self._screenshot_scheduled:
-            return
-        self._screenshot_scheduled = True
-        self.scheduled_delays.append(delay_ms)
-
-    def _do_scheduled_screenshot(self):
-        self._screenshot_scheduled = False
 
     def _estimated_reply_gap_ms(self):
         if self.reply_timer.isActive():
@@ -175,39 +155,6 @@ class PipelineSimulator:
         if right_count > 0:
             return 500
         return 200
-
-    def _estimated_inventory_ms(self):
-        inventory_units = self.reply_buffer.size() + self.engine.current_display_count()
-        if inventory_units <= 0:
-            return 0
-        return inventory_units * self._estimated_reply_gap_ms()
-
-    def _will_queue_run_dry_within(self, threshold_ms=None):
-        threshold = self._queue_run_dry_window_ms if threshold_ms is None else threshold_ms
-        return self._estimated_inventory_ms() <= threshold
-
-    def _should_request_new_batch(self):
-        if not self.engine.running:
-            return False
-        if self.ai_in_flight >= self.MAX_IN_FLIGHT:
-            return False
-        if self.reply_buffer.size() <= self._queue_low_watermark:
-            return True
-        return self._will_queue_run_dry_within()
-
-    def _next_inventory_trigger_delay_ms(self):
-        if self.reply_buffer.is_empty() and self.engine.current_display_count() == 0:
-            return 0
-        if self.reply_buffer.size() <= 1:
-            return 80
-        if self._will_queue_run_dry_within(1000):
-            return 120
-        return 250
-
-    def _maybe_schedule_screenshot(self):
-        if not self._should_request_new_batch():
-            return
-        self._schedule_next_screenshot(self._next_inventory_trigger_delay_ms())
 
     def _smart_cooldown_ms(self):
         if len(self._rtt_history) >= 3:
@@ -242,7 +189,6 @@ class PipelineSimulator:
             delay = 100 if item is None else self._estimated_reply_gap_ms()
             self.reply_timer.start(delay)
 
-        self._maybe_schedule_screenshot()
         self.danmu_count += 1
 
     def _on_ai_reply(self, text, persona_id, request_round):
@@ -289,8 +235,6 @@ class PipelineSimulator:
                 self._consume_reply_queue()
             else:
                 self.reply_timer.setInterval(min(self.reply_timer.interval(), 200))
-
-        self._maybe_schedule_screenshot()
 
 
 def test_consume_reply_queue_discarded_danmu_uses_short_delay():
@@ -353,46 +297,6 @@ def test_on_ai_reply_reduces_timer_interval_when_buffer_small():
     assert sim.reply_timer._interval <= 200
 
 
-def test_maybe_schedule_screenshot_no_schedule_when_request_in_flight():
-    sim = PipelineSimulator({"capture_mode": "continuous"})
-    sim.ai_in_flight = 1
-    sim.engine._right_zone_count = 10
-
-    sim._maybe_schedule_screenshot()
-
-    assert len(sim.scheduled_delays) == 0
-
-
-def test_maybe_schedule_screenshot_schedules_when_in_flight_zero():
-    sim = PipelineSimulator({"capture_mode": "continuous"})
-    sim.ai_in_flight = 0
-    sim.engine._right_zone_count = 10
-
-    sim._maybe_schedule_screenshot()
-
-    assert len(sim.scheduled_delays) > 0
-
-
-def test_maybe_schedule_screenshot_no_schedule_when_max_in_flight():
-    sim = PipelineSimulator()
-    sim.ai_in_flight = 3
-
-    sim._maybe_schedule_screenshot()
-
-    assert len(sim.scheduled_delays) == 0
-
-
-def test_maybe_schedule_screenshot_low_inventory_uses_short_delay():
-    sim = PipelineSimulator({"capture_mode": "continuous"})
-    sim.ai_in_flight = 0
-    sim.reply_buffer.push(QueuedReply("p1", 1, 0, "only-one", screenshot_round=10))
-
-    sim._maybe_schedule_screenshot()
-
-    assert len(sim.scheduled_delays) == 1
-    assert sim.scheduled_delays[0] == 80
-
-
 def test_stale_danmu_uses_short_delay():
     sim = PipelineSimulator({"drop_stale": "1", "freshness": "medium"})
     sim.screenshot_round = 20
@@ -440,31 +344,6 @@ def test_consume_reply_queue_drains_buffer_without_stalling():
 
     sim._consume_reply_queue()
     assert sim.reply_buffer.is_empty()
-
-
-def test_pipeline_does_not_schedule_second_request_when_in_flight():
-    sim = PipelineSimulator({"capture_mode": "continuous"})
-    sim.ai_in_flight = 1
-    sim.engine._right_zone_count = 10
-    sim.engine._config_values["min_on_screen"] = 6
-
-    sim._maybe_schedule_screenshot()
-
-    assert len(sim.scheduled_delays) == 0
-
-
-def test_needs_refill_false_does_not_deadlock_pipeline():
-    sim = PipelineSimulator({"freq_mode": "auto", "min_on_screen": 5})
-    sim.engine.needs_refill = MagicMock(return_value=False)
-    sim.engine.running = True
-    sim.ai_in_flight = 0
-    sim.screenshot_timer._interval = 3000
-
-    if not sim.engine.needs_refill():
-        sim._schedule_next_screenshot(sim.screenshot_timer.interval())
-
-    assert len(sim.scheduled_delays) > 0
-    assert sim.scheduled_delays[0] == 3000
 
 
 def test_continuous_flow_multiple_replies():

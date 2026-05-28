@@ -117,6 +117,7 @@ class FakeEngine:
         self.calls = []
         self.running = False
         self.screen_width = 1920.0
+        self.screen_height = 1080.0
         self.tracks = []
         self._config_values = {}
 
@@ -128,6 +129,7 @@ class FakeEngine:
             batch_id=batch_id,
             scene_generation=scene_generation,
             x=2000.0,
+            y=90.0,
             speed=2.2,
         )
 

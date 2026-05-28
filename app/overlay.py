@@ -33,12 +33,18 @@ if sys.platform == "win32":
     _GWL_EXSTYLE = -20
     _WS_EX_LAYERED = 0x00080000
     _WS_EX_TRANSPARENT = 0x00000020
+    _HWND_TOPMOST = -1
+    _SWP_NOMOVE = 0x0002
+    _SWP_NOSIZE = 0x0001
+    _SWP_NOACTIVATE = 0x0010
+    _SWP_SHOWWINDOW = 0x0040
     try:
         _SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW
         _GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW
     except AttributeError:
         _SetWindowLong = ctypes.windll.user32.SetWindowLongW
         _GetWindowLong = ctypes.windll.user32.GetWindowLongW
+    _SetWindowPos = ctypes.windll.user32.SetWindowPos
 
 _FRAME_DT = 1.0 / 60.0
 _INTERVAL_MS = 16
@@ -121,6 +127,29 @@ class DanmuOverlay(QWidget):
         ex_style = _GetWindowLong(hwnd, _GWL_EXSTYLE)
         _SetWindowLong(hwnd, _GWL_EXSTYLE,
                        ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT)
+
+    def reassert_topmost_zorder(self) -> None:
+        """Win32：Alt+Tab / 其它置顶窗抢栈后，用 SetWindowPos 恢复 HWND_TOPMOST（不抢焦点）。"""
+        if not self.isVisible():
+            return
+        self.raise_()
+        if sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if not hwnd:
+            return
+        _SetWindowPos(
+            hwnd,
+            _HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
+        )
 
     def _has_animatable_content(self) -> bool:
         """是否仍需 60fps：引擎内加速剩余、淡入淡出区或屏上可见条任一成立。"""
@@ -365,6 +394,7 @@ class DanmuOverlay(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.reassert_topmost_zorder()
         if self.engine.running:
             self.ensure_render_loop()
 
@@ -506,3 +536,4 @@ class DanmuOverlay(QWidget):
         self._apply_font_from_config()
         self.show()
         self._apply_win32_click_through()
+        self.reassert_topmost_zorder()

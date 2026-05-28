@@ -1,5 +1,7 @@
 """Tests for local web console helpers."""
 
+import asyncio
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -72,6 +74,15 @@ class FakeConfig:
         self.values["region_y"] = str(y)
         self.values["region_w"] = str(w)
         self.values["region_h"] = str(h)
+
+    def get_json(self, key: str, default=None):
+        val = self.get(key)
+        if not val:
+            return default if default is not None else {}
+        return json.loads(val)
+
+    def set_json(self, key: str, value):
+        self.values[key] = json.dumps(value, ensure_ascii=False)
 
 
 def test_export_config_masks_api_key():
@@ -580,9 +591,10 @@ def test_model_catalog_api_payload():
 
     mimo = by_id["mimo"]
     assert mimo["provider_id"] == "mimo"
-    assert len(mimo["models"]) == 2
+    assert mimo["default_model_id"] == "mimo-v2.5"
+    assert len(mimo["models"]) == 1
     mimo_ids = {m["id"] for m in mimo["models"]}
-    assert mimo_ids == {"mimo-v2.5", "mimo-v2-omni"}
+    assert mimo_ids == {"mimo-v2.5"}
 
 
 def test_providers_excludes_deepseek():
@@ -618,6 +630,7 @@ def test_web_app_js_provider_switch_resets_vision_model():
 
     app_js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "function pickDefaultCatalogModelId" in app_js
+    assert "platform.default_model_id" in app_js
     assert "providerSwitch: true" in app_js
     assert "function syncProviderPresetFromEndpoint" in app_js
     assert "function resolveProviderIdForPicker" in app_js
@@ -1235,3 +1248,187 @@ def test_session_route_does_not_require_query_request():
     body = res.json()
     assert body["token"] == token
     assert body["base_url"] == "http://127.0.0.1:18765"
+
+
+def _build_ws_status_test_app(bridge, token: str):
+    """Mirror WebConsoleServer WebSocketRoute registration for /ws/status."""
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from starlette.routing import WebSocketRoute
+
+    from app.web_console import _ws_token_valid
+
+    app = FastAPI()
+
+    async def _ws_status_endpoint(websocket: WebSocket):
+        ws_token = websocket.query_params.get("ws_token")
+        if not _ws_token_valid(ws_token, token):
+            await websocket.close(code=1008, reason="需要登录令牌")
+            return
+        await websocket.accept()
+        bridge._ws_log_debug(f"WebSocket /ws/status accepted peer=test")
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        bridge.register_status_consumer(queue)
+        cached = bridge._last_status_payload
+        if cached:
+            await websocket.send_json(cached)
+        bridge.status_refresh_requested.emit()
+        try:
+            while True:
+                item = await queue.get()
+                await websocket.send_json(item)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            bridge.unregister_status_consumer(queue)
+
+    app.router.routes.insert(0, WebSocketRoute("/ws/status", endpoint=_ws_status_endpoint))
+    return app
+
+
+def test_ws_status_websocket_accepts_valid_token_and_sends_status():
+    """Regression: FastAPI @app.websocket must not be the only registration path."""
+    from fastapi.testclient import TestClient
+
+    token = "ws-test-token-valid"
+    bridge = MagicMock()
+    bridge._last_status_payload = {
+        "running": True,
+        "danmu_count": 2,
+        "queue_count": 0,
+        "display_count": 1,
+    }
+
+    app = _build_ws_status_test_app(bridge, token)
+    client = TestClient(app)
+
+    with client.websocket_connect(f"/ws/status?ws_token={token}") as ws:
+        payload = ws.receive_json()
+        assert payload["running"] is True
+        assert "danmu_count" in payload
+
+    bridge.register_status_consumer.assert_called_once()
+    bridge.unregister_status_consumer.assert_called_once()
+    bridge.status_refresh_requested.emit.assert_called_once()
+
+
+def test_ws_status_websocket_rejects_invalid_token_with_1008():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    token = "ws-test-token-valid"
+    bridge = MagicMock()
+    bridge._last_status_payload = {"running": False}
+
+    app = _build_ws_status_test_app(bridge, token)
+    client = TestClient(app)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/status?ws_token=invalid-token"):
+            pass
+
+    assert exc_info.value.code == 1008
+    bridge.register_status_consumer.assert_not_called()
+
+
+def test_ws_status_websocket_rejects_missing_token_with_1008():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    token = "ws-test-token-valid"
+    bridge = MagicMock()
+
+    app = _build_ws_status_test_app(bridge, token)
+    client = TestClient(app)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/status"):
+            pass
+
+    assert exc_info.value.code == 1008
+    bridge.register_status_consumer.assert_not_called()
+
+
+def test_announcements_read_state_get_default():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.get("/api/announcements-read-state")
+    assert res.status_code == 200
+    assert res.json() == {"readIds": [], "lastSeenMs": 0}
+
+
+def test_announcements_read_state_put_roundtrip():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        if _authorization != "Bearer test-token":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    payload = {
+        "readIds": [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ],
+        "lastSeenMs": 1716969600000,
+    }
+    res = client.put(
+        "/api/announcements-read-state",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+
+    res = client.get("/api/announcements-read-state")
+    assert res.status_code == 200
+    assert res.json() == payload
+
+
+def test_announcements_read_state_put_rejects_invalid_body():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={"readIds": ["not-a-uuid"], "lastSeenMs": 0},
+    )
+    assert res.status_code == 400
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={"readIds": [], "lastSeenMs": -1},
+    )
+    assert res.status_code == 400

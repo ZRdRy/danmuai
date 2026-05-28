@@ -5,11 +5,83 @@
 - 写操作需 Bearer；勿在路由内直接改 DanmuApp 私有字段或 QTimer
 """
 
+import re
 from typing import TYPE_CHECKING, Callable
 from urllib.parse import unquote
 
 from fastapi import File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
+
+ANNOUNCEMENTS_READ_STATE_KEY = "announcements_read_state"
+ANNOUNCEMENTS_READ_IDS_MAX = 200
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _empty_announcements_read_state() -> dict[str, object]:
+    return {"readIds": [], "lastSeenMs": 0}
+
+
+def _normalize_announcements_read_state(raw: object) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        return _empty_announcements_read_state()
+    read_ids = raw.get("readIds")
+    if not isinstance(read_ids, list):
+        read_ids = []
+    cleaned: list[str] = []
+    for item in read_ids:
+        if not isinstance(item, str):
+            continue
+        item = item.strip()
+        if item and item not in cleaned:
+            cleaned.append(item)
+    last_seen_ms = raw.get("lastSeenMs", 0)
+    try:
+        last_seen_ms = int(last_seen_ms)
+    except (TypeError, ValueError):
+        last_seen_ms = 0
+    if last_seen_ms < 0:
+        last_seen_ms = 0
+    return {
+        "readIds": cleaned[:ANNOUNCEMENTS_READ_IDS_MAX],
+        "lastSeenMs": last_seen_ms,
+    }
+
+
+def _get_announcements_read_state_from_config(config) -> dict[str, object]:
+    raw = config.get_json(ANNOUNCEMENTS_READ_STATE_KEY, default=_empty_announcements_read_state())
+    return _normalize_announcements_read_state(raw)
+
+
+def _validate_announcements_read_state_payload(body: dict) -> dict[str, object]:
+    read_ids = body.get("readIds")
+    if read_ids is None:
+        read_ids = []
+    if not isinstance(read_ids, list):
+        raise HTTPException(status_code=400, detail="readIds 必须为数组")
+    cleaned: list[str] = []
+    for item in read_ids:
+        if not isinstance(item, str):
+            raise HTTPException(status_code=400, detail="readIds 元素必须为字符串")
+        item = item.strip()
+        if not item:
+            continue
+        if not _UUID_RE.match(item):
+            raise HTTPException(status_code=400, detail="readIds 包含无效的公告 ID")
+        if item not in cleaned:
+            cleaned.append(item)
+    if len(cleaned) > ANNOUNCEMENTS_READ_IDS_MAX:
+        cleaned = cleaned[-ANNOUNCEMENTS_READ_IDS_MAX:]
+    last_seen_ms = body.get("lastSeenMs", 0)
+    try:
+        last_seen_ms = int(last_seen_ms)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="lastSeenMs 必须为整数") from exc
+    if last_seen_ms < 0:
+        raise HTTPException(status_code=400, detail="lastSeenMs 不能为负数")
+    return {"readIds": cleaned, "lastSeenMs": last_seen_ms}
 
 from app.image_compress import compress_image_bytes
 from app.web_api import custom_models as cm_api
@@ -87,6 +159,10 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
     class DanmuPoolCustomDeletePayload(BaseModel):
         texts: list[str]
 
+    class AnnouncementsReadStatePayload(BaseModel):
+        readIds: list[str] = []
+        lastSeenMs: int = 0
+
     def _danmu():
         return bridge.danmu_app
 
@@ -103,6 +179,20 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
             "ok": True,
             "diagnostics": _danmu().build_diagnostic_snapshot(),
         }
+
+    @app.get("/api/announcements-read-state")
+    def get_announcements_read_state():
+        return _get_announcements_read_state_from_config(_danmu().config)
+
+    @app.put("/api/announcements-read-state")
+    def put_announcements_read_state(
+        body: AnnouncementsReadStatePayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        state = _validate_announcements_read_state_payload(body.model_dump())
+        _danmu().config.set_json(ANNOUNCEMENTS_READ_STATE_KEY, state)
+        return {"ok": True}
 
     @app.get("/api/personae/{name}/template")
     def get_persona_template(name: str):

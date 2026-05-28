@@ -62,6 +62,7 @@ from app.lifetime_stats import LifetimeStats
 from app.live_freshness import (
     LiveStatusSnapshot,
     prune_stale_drop_times,
+    screenshot_interval_ms,
     should_backoff_screenshot,
 )
 from app.logger import SanitizedLogger
@@ -135,18 +136,16 @@ VISUAL_INFLIGHT_WARN_SEC = 45.0
 
 
 class BatchTracker:
-    """节奏模式下「当前批次」的节拍锚点。
+    """当前视觉批次的锚点元数据（普通模式）。
 
     anchor_item：本批首条成功上屏弹幕；滚到屏幕 75% 宽处时写入 next_generation_time，
-    供 _check_rhythm_trigger 预加载下一发视觉 API（减去 RTT 均值提前触发）。
-    next_generation_triggered：同一锚点窗口内只 fire 一次 rhythm，避免 200ms 定时器连打。
+    供 API 调度 debug 日志（_log_api_schedule）与批次观测，不驱动额外截图定时器。
     """
 
     def __init__(self, batch_id: int):
         self.batch_id = batch_id
         self.anchor_item: DanmuItem | None = None
         self.next_generation_time: float = 0.0
-        self.next_generation_triggered: bool = False
 
 
 class DanmuApp(QObject):
@@ -156,8 +155,7 @@ class DanmuApp(QObject):
     _is_reply_stale 不做 TTL 硬过期，避免队列积压时误丢。
     麦克风轨：与视觉 ai_in_flight 独立，request_round 为负数以区分 _pending_request_meta。
 
-    遗留：BatchTracker / _check_rhythm_trigger / _rhythm_check_timer 等为旧 realtime 节奏路径，
-    新功能勿复用；配置中 danmu_display_mode=realtime 会在加载时规范为 normal。
+    配置中遗留的 danmu_display_mode=realtime 会在加载时规范为 normal。
 
     下列对象/字段禁止在未更新架构文档前迁出本类：reply_buffer、QPixmap 截图缓存、
     QTimer、QThreadPool、_mic_service（见 docs/final-architecture-baseline.md）。
@@ -191,6 +189,9 @@ class DanmuApp(QObject):
         self.engine = DanmuEngine(self.config)
         self.overlay = DanmuOverlay(self.config, self.engine)
         self.engine.overlay = self.overlay
+        qt_app = QApplication.instance()
+        if qt_app is not None:
+            qt_app.focusChanged.connect(self._on_app_focus_changed)
         self.web_runtime_state.set_overlay_cache(
             danmu_lines=self.config.get_int("danmu_lines", 0),
             layout_mode=self.config.get("layout_mode", "fullscreen"),
@@ -220,8 +221,6 @@ class DanmuApp(QObject):
         self._mic_poll_ms = 400
         self._mic_poll_timer.setInterval(self._mic_poll_ms)
         self._mic_poll_timer.timeout.connect(self._poll_mic_utterance)
-        self.STAGGER_INTERVAL = 1.0
-        self._screenshot_scheduled = False
 
         # --- 最新帧与批次节拍（_is_generating=意图标记；ai_in_flight=在途计数，二者不同步混用）---
         self._latest_screenshot: QPixmap | None = None
@@ -244,7 +243,6 @@ class DanmuApp(QObject):
 
         self._queue_low_watermark = 3
         self._queue_fallback_keep = 3
-        self._queue_run_dry_window_ms = 2000
         self._reply_scene_count = 2
         self._reply_filler_count = 3
         self._queue_batch_size = 5
@@ -290,8 +288,6 @@ class DanmuApp(QObject):
         self._stale_drop_count: int = 0
         self._stale_drop_times: list[float] = []
         self._screenshot_backoff_level: int = 0
-        self._local_fallback_active: bool = False
-        self._local_fallback_for_batch: int = 0
         self._live_status_timer = QTimer(self)
         self._live_status_timer.setInterval(500)
         self._live_status_timer.timeout.connect(self._publish_live_status)
@@ -346,6 +342,9 @@ class DanmuApp(QObject):
                 f"Web 控制台未能启动: {self.web_server.base_url} "
                 "（端口可能被占用，请关闭其它 DanmuAI 实例后重启）"
             )
+            from app.webview_shell import notify_web_console_failure
+
+            notify_web_console_failure(self, "web_console.startup_failed")
 
         self._sync_reply_batch_config()
 
@@ -512,7 +511,6 @@ class DanmuApp(QObject):
         web_runtime_state = self._ensure_web_runtime_state()
         self.screenshot_timer.setInterval(self._normal_recognition_interval_ms())
         self.MAX_IN_FLIGHT = 1
-        self.STAGGER_INTERVAL = 1.0
         self.reply_buffer.set_max_items(self._queue_capacity())
         new_lines = self.config.get_int("danmu_lines", 0)
         lines_changed = new_lines != web_runtime_state.cached_danmu_lines
@@ -855,6 +853,10 @@ class DanmuApp(QObject):
         self.config_changed.emit()
         self._publish_capture_region_status()
 
+    def _on_app_focus_changed(self, _old_widget, _new_widget) -> None:
+        if self.engine.running and self.overlay.isVisible():
+            self.overlay.reassert_topmost_zorder()
+
     def _close_region_selector(self) -> None:
         overlay = self._region_selector
         self._region_selector = None
@@ -876,6 +878,8 @@ class DanmuApp(QObject):
             overlay.close()
         except RuntimeError:
             pass
+        if self.engine.running and self.overlay.isVisible():
+            self.overlay.reassert_topmost_zorder()
 
     def _on_region_selector_destroyed(self, *_args) -> None:
         if self._region_selector is not None:
@@ -993,7 +997,20 @@ class DanmuApp(QObject):
         self._publish_live_status()
 
     def _apply_screenshot_interval_backoff(self):
-        self.screenshot_timer.setInterval(self._normal_recognition_interval_ms())
+        old_ms = self.screenshot_timer.interval()
+        try:
+            base_sec = int(self.config.get("normal_recognition_interval_sec", "5"))
+        except (TypeError, ValueError):
+            base_sec = 5
+        base_sec = max(1, min(base_sec, 60))
+        new_ms = screenshot_interval_ms(base_sec, self._screenshot_backoff_level)
+        self.screenshot_timer.setInterval(new_ms)
+        self.logger.info(
+            "screenshot_interval_backoff "
+            f"backoff_level={self._screenshot_backoff_level} "
+            f"old_interval_ms={old_ms} new_interval_ms={new_ms} "
+            f"reason=stale_drop_burst"
+        )
 
     def _current_danmu_delay_sec(self) -> float:
         if self._has_visual_request_in_flight() and self._inflight_started_at > 0:
@@ -1008,8 +1025,8 @@ class DanmuApp(QObject):
     def _build_live_status_snapshot(self) -> LiveStatusSnapshot:
         in_flight = self._has_visual_request_in_flight()
         return LiveStatusSnapshot(
-            analyzing=in_flight and not self._local_fallback_active,
-            local_fallback=self._local_fallback_active,
+            analyzing=in_flight,
+            local_fallback=False,
             delay_sec=self._current_danmu_delay_sec(),
             stale_drops=self._stale_drop_count,
         )
@@ -1078,17 +1095,6 @@ class DanmuApp(QObject):
                 cooldown_left_ms=self._rhythm_cooldown_left_ms(),
             )
         )
-
-    def _schedule_next_screenshot(self, delay_ms: int):
-        if self._screenshot_scheduled:
-            return
-        self._screenshot_scheduled = True
-        QTimer.singleShot(delay_ms, self._do_scheduled_screenshot)
-
-    def _do_scheduled_screenshot(self):
-        self._screenshot_scheduled = False
-        if self.engine.running:
-            self._screenshot_loop()
 
     def _consume_request_timing(
         self,
@@ -1280,36 +1286,6 @@ class DanmuApp(QObject):
             return 500
         return 200
 
-    def _estimated_inventory_ms(self) -> int:
-        inventory_units = self.reply_buffer.size() + self._visible_display_count()
-        if inventory_units <= 0:
-            return 0
-        return inventory_units * self._estimated_reply_gap_ms()
-
-    def _will_queue_run_dry_within(self, threshold_ms: int | None = None) -> bool:
-        threshold = self._queue_run_dry_window_ms if threshold_ms is None else threshold_ms
-        return self._estimated_inventory_ms() <= threshold
-
-    def _should_request_new_batch(self) -> bool:
-        if not self.engine.running:
-            return False
-        if self._failure_backoff_paused:
-            return False
-        if self._has_visual_request_in_flight():
-            return False
-        if self.reply_buffer.size() <= self._queue_low_watermark:
-            return True
-        return self._will_queue_run_dry_within()
-
-    def _next_inventory_trigger_delay_ms(self) -> int:
-        if self.reply_buffer.is_empty() and self._visible_display_count() == 0:
-            return 0
-        if self.reply_buffer.size() <= 1:
-            return 80
-        if self._will_queue_run_dry_within(1000):
-            return 120
-        return 250
-
     def _capture_screenshot(self):
         if not self.engine.running:
             return
@@ -1414,8 +1390,6 @@ class DanmuApp(QObject):
         self._inflight_screenshot_id = screenshot_id
         self._inflight_scene_generation = self._scene_generation
         self._inflight_started_at = time.monotonic()
-        self._local_fallback_active = False
-        self._local_fallback_for_batch = 0
         self._publish_live_status()
 
         persona = self.personae.pick_random()
@@ -1484,15 +1458,6 @@ class DanmuApp(QObject):
         distance = self.engine.screen_width * 0.25
         return distance / speed_per_second
 
-    def _screenshot_loop_legacy(self):
-        pass
-
-    def _on_ai_reply_legacy(self, text: str, persona_id: str, request_round: int, screenshot_id: int, captured_at: float, scene_generation: int):
-        pass
-
-    def _maybe_schedule_screenshot_legacy(self):
-        pass
-
     def _reply_low_watermark(self) -> int:
         return max(0, self.config.get_int("reply_low_watermark", 1))
 
@@ -1509,31 +1474,24 @@ class DanmuApp(QObject):
             return self.engine.right_visible_count()
         return self.engine.right_zone_count()
 
-    def _can_prefetch_with_buffer(self) -> bool:
-        if self.reply_buffer.is_empty():
-            return True
-        if self.config.get("capture_mode", "continuous") == "smart":
-            return False
-        min_n = self._min_density_target()
-        right_target = self._density_right_target(min_n)
-        if hasattr(self.engine, "visibility_counts"):
-            visible_total, right_count = self.engine.visibility_counts()
-        else:
-            visible_total = self._visible_display_count()
-            right_count = self._right_visible_count()
-        if visible_total == 0:
-            return True
-        if min_n > 0 and visible_total < min_n:
-            return True
-        if self.reply_buffer.size() > self._reply_low_watermark():
-            return False
-        return right_count < right_target
-
-    def _consume_reply_queue_legacy(self):
-        pass
-
-    def _screenshot_loop(self):
-        self._capture_screenshot()
+    def _broadcast_live_overlay_item(self, item, text: str, *, source: str) -> None:
+        """Qt 上屏后旁路同步单条弹幕到网页层（含轨道 Y，与 Overlay 对齐）。"""
+        state = getattr(self, "__dict__", None) or {}
+        server = state.get("web_server")
+        hub = getattr(server, "live_overlay_hub", None) if server else None
+        if not hub or not text:
+            return
+        try:
+            hub.broadcast_item(
+                text,
+                y=float(item.y),
+                screen_width=float(self.engine.screen_width),
+                screen_height=float(self.engine.screen_height),
+                speed=float(item.speed),
+                source=source,
+            )
+        except Exception as exc:
+            self.logger.debug(f"live overlay broadcast skipped: {exc!r}")
 
     def _enqueue_reply_batch(
         self,
@@ -1704,7 +1662,6 @@ class DanmuApp(QObject):
             normalized_items,
             from_local_fallback=False,
         )
-        self._local_fallback_active = False
         self._publish_live_status()
 
         if not self.reply_timer.isActive():
@@ -1757,16 +1714,11 @@ class DanmuApp(QObject):
             self.reply_timer.stop()
             self._consume_reply_queue()
 
-    def _maybe_schedule_screenshot(self):
-        """DEPRECATED (rhythm mode): inventory-driven screenshot prefetch removed.
-        API pacing uses _rhythm_check_timer + _trigger_api_call_if_ready."""
-        pass
-
     def _consume_reply_queue(self):
-        """从 FIFO 弹出一条回复上屏；成功时更新 BatchTracker 锚点与下次 rhythm 触发时间。
+        """从 FIFO 弹出一条回复上屏；成功时更新 BatchTracker 锚点与 next_generation_time。
 
         消费前二次 _is_reply_stale；fallback/mic 可 skip_dedup。锚点弹幕滚到 75% 屏宽处的时间
-        写入 batch.next_generation_time，供 _check_rhythm_trigger 预加载。拒因（去重/入口过载）不入历史。
+        写入 batch.next_generation_time（debug/批次元数据）。拒因（去重/入口过载）不入历史。
         """
         queued = self.reply_buffer.pop()
         if queued is None:
@@ -1799,6 +1751,8 @@ class DanmuApp(QObject):
             self._latest_displayed_screenshot_id = max(self._latest_displayed_screenshot_id, queued.screenshot_id)
             self.history_writer.enqueue(queued.content, queued.persona_id, queued.batch_index)
             self._record_scene_memory_display(queued)
+            overlay_source = queued.source if queued.source in ("ai", "mic", "test") else "ai"
+            self._broadcast_live_overlay_item(item, display_content, source=overlay_source)
 
             batch = self._current_batch
             if batch and batch.anchor_item is None and item.batch_id == batch.batch_id:
@@ -1842,33 +1796,6 @@ class DanmuApp(QObject):
         self._update_stats(success=item is not None)
         self._maybe_pool_topup()
 
-    def _maybe_adjust_timer(self):
-        """UNUSED in rhythm mode: no callers; screenshot_timer interval set in start()."""
-        freq_mode = self.config.get("freq_mode", "auto")
-        if freq_mode != "auto":
-            return
-
-        min_n = self._min_density_target()
-        if min_n <= 0:
-            return
-
-        if hasattr(self.engine, "visibility_counts"):
-            current, right_count = self.engine.visibility_counts()
-        else:
-            current = self._visible_display_count()
-            right_count = self._right_visible_count()
-        right_target = self._density_right_target(min_n)
-        base_interval = self.config.get_int("screenshot_interval", 3)
-
-        if current == 0:
-            accelerated = max(1, base_interval // 2)
-            self.screenshot_timer.setInterval(accelerated * 1000)
-        elif current >= min_n and right_count >= right_target:
-            relaxed = base_interval * 2
-            self.screenshot_timer.setInterval(relaxed * 1000)
-        else:
-            self.screenshot_timer.setInterval(base_interval * 1000)
-
     def _calc_auto_interval(self) -> int:
         min_n = self._min_density_target()
         base = self.config.get_int("screenshot_interval", 3)
@@ -1909,7 +1836,6 @@ class DanmuApp(QObject):
             self._consume_request_timing(request_round, screenshot_id, scene_generation)
             return
 
-        self._local_fallback_active = False
         self._consume_request_timing(request_round, screenshot_id, scene_generation)
         self.logger.error(f"{msg} [persona={persona_id}, round={request_round}, screenshot_id={screenshot_id}, scene_generation={scene_generation}]")
 
@@ -1934,7 +1860,6 @@ class DanmuApp(QObject):
             self.logger.warning(tr("app.fatal_error_pause").format(message=msg))
             self._failure_backoff_paused = True
             self.screenshot_timer.stop()
-            self._screenshot_scheduled = False
             return
 
         if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
@@ -1943,7 +1868,6 @@ class DanmuApp(QObject):
             )
             self._failure_backoff_paused = True
             self.screenshot_timer.stop()
-            self._screenshot_scheduled = False
             self._set_error_status_safe(
                 tr("app.failure_paused").format(count=self.MAX_CONSECUTIVE_FAILURES, message=msg),
                 is_error=True
@@ -1973,7 +1897,7 @@ class DanmuApp(QObject):
         self._maybe_log_dedup_profile()
 
     def start(self):
-        """开始一轮会话：清零代际/在途/队列/统计，按模式启动截图与节奏定时器，显示 Overlay。
+        """开始一轮会话：清零代际/在途/队列/统计，启动 screenshot_timer 与 reply_timer，显示 Overlay。
 
         必须完整重置 start() 内列出的状态，遗漏会导致 stop 后再 start 沿用旧 scene_generation 或
         陈旧 in-flight 元数据。eviction_mode=accelerate 时触发引擎加速清空旧弹幕。
@@ -2012,8 +1936,6 @@ class DanmuApp(QObject):
         self._stale_drop_count = 0
         self._stale_drop_times = []
         self._screenshot_backoff_level = 0
-        self._local_fallback_active = False
-        self._local_fallback_for_batch = 0
         self._inflight_started_at = 0.0
         self._inflight_screenshot_id = 0
         self._scene_rhythm_pause_until = 0.0
@@ -2035,7 +1957,6 @@ class DanmuApp(QObject):
         self._live_status_timer.start()
         self._lifetime_flush_timer.start()
         self._on_normal_capture_tick()
-        self.STAGGER_INTERVAL = 1.0
         self.logger.debug(
             f"[DEBUG] Normal mode: screenshot={self._normal_recognition_interval_ms()}ms"
         )
@@ -2076,7 +1997,6 @@ class DanmuApp(QObject):
         self.screenshot_timer.stop()
         self._live_status_timer.stop()
         self._pending = False
-        self._screenshot_scheduled = False
         self.ai_worker.mark_stopping()
         self.ai_in_flight = 0
         self.mic_in_flight = 0
@@ -2085,7 +2005,6 @@ class DanmuApp(QObject):
         self._is_generating = False
         self._inflight_started_at = 0.0
         self._inflight_screenshot_id = 0
-        self._local_fallback_active = False
         self._current_batch = None
         self.reply_timer.stop()
         self._pool_topup_timer.stop()
@@ -2166,6 +2085,8 @@ class DanmuApp(QObject):
 
 
 def global_exception_hook(exc_type, exc_value, exc_tb):
+    if exc_type in (KeyboardInterrupt, SystemExit):
+        return
     msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     try:
         from app.logger import SanitizedLogger
@@ -2229,8 +2150,15 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    from app.single_instance import SingleInstanceGuard
+
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.try_acquire():
+        return sys.exit(0)
+
     launch_mode = _web_launch_mode_from_argv()
     _danmu = DanmuApp(web_launch_mode=launch_mode)
+    instance_guard.bind_activate(_danmu.show_settings)
     return sys.exit(app.exec())
 
 

@@ -6,12 +6,9 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.ai_client import (
-    THINKING_DISABLED,
-    format_http_status_error,
-    openai_compatible_request_extensions,
-)
+from app.ai_client import THINKING_DISABLED, format_http_status_error
 from app.model_providers import normalize_endpoint, normalize_mode, resolve_api_transport
+from app.providers import get_capabilities_for_endpoint, get_openai_adapter
 from app.translations import tr
 
 
@@ -43,7 +40,7 @@ def probe_connection(
     try:
         if resolve_api_transport(endpoint, mode) == "doubao":
             return _probe_doubao(endpoint, api_key, model_id)
-        return _probe_openai(endpoint, api_key, model_id)
+        return _probe_openai(endpoint, api_key, model_id, mode)
     except httpx.TimeoutException:
         return ProbeResult(False, tr("ai.error_timeout"))
     except httpx.HTTPStatusError as exc:
@@ -88,19 +85,21 @@ def _probe_doubao(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
             return ProbeResult(True, tr("custom_model.test_ok"))
 
 
-def _probe_openai(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
+def _probe_openai(endpoint: str, api_key: str, model_id: str, mode: str) -> ProbeResult:
     url = f"{endpoint}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    caps = get_capabilities_for_endpoint(endpoint, mode)
+    adapter = get_openai_adapter(endpoint, mode)
     data = {
         "model": model_id,
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
         "stream": False,
-        **openai_compatible_request_extensions(endpoint),
     }
+    adapter.patch_probe_body(data, caps=caps)
     with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         resp = client.post(url, headers=headers, json=data)
         resp.raise_for_status()

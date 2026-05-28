@@ -11,7 +11,7 @@ from app.live_freshness import (
     should_backoff_screenshot,
 )
 
-from tests.fakes import FakeTimer
+from tests.fakes import FakeConfig, FakeTimer
 from tests.test_p0_main_flow import _make_minimal_app
 
 
@@ -63,12 +63,14 @@ def test_trigger_api_call_increments_in_flight(monkeypatch):
 
 def test_stale_burst_raises_screenshot_interval():
     app = _make_minimal_app()
+    app.config = FakeConfig({"normal_recognition_interval_sec": "5"})
     app.screenshot_timer = FakeTimer()
     now = time.monotonic()
     app._stale_drop_times = [now - i for i in range(4)]
     app._record_stale_drop()
-    assert app._screenshot_backoff_level >= 1
-    assert app.screenshot_timer._interval >= 5000
+    level = app._screenshot_backoff_level
+    assert level >= 1
+    assert app.screenshot_timer._interval == screenshot_interval_ms(5, level)
 
 
 def test_local_fallback_batch_has_five_items():

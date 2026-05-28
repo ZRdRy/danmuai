@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DanmuAI Live Overlay</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+    }
+    #stage {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .danmu-item {
+      position: absolute;
+      left: 0;
+      white-space: nowrap;
+      pointer-events: none;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      text-shadow:
+        -1px -1px 0 #000,
+        1px -1px 0 #000,
+        -1px 1px 0 #000,
+        1px 1px 0 #000,
+        0 0 4px rgba(0, 0, 0, 0.85);
+      will-change: transform;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <script src="/static/live-overlay.js?v=4"></script>
+</body>
+</html>

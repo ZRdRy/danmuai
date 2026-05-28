@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DanmuAI - 你的温馨直播小助手</title>
   <link rel="stylesheet" href="/static/warm-tokens.css">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/static/tailwindcdn.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
   <script>
     tailwind.config = {
@@ -114,6 +114,10 @@
     <!-- 温馨控制台 -->
     <!-- section: 运行概览 + 诊断面板 -->
     <section id="page-overview" class="page-panel active">
+      <div id="overviewAnnouncementBanner" class="overview-announcement-banner hidden" role="status" aria-live="polite">
+        <p class="overview-announcement-banner-text" id="overviewAnnouncementBannerText"></p>
+        <button type="button" id="btnOverviewAnnouncementDismiss" class="overview-announcement-banner-dismiss" aria-label="关闭公告提示">×</button>
+      </div>
       <header class="flex flex-wrap justify-between items-center gap-4 mb-8">
         <div>
           <p class="text-gray-500" id="statusSub">小助手正在待命，随时为你生成暖心弹幕~</p>
@@ -215,6 +219,21 @@
         <h3 class="text-lg font-bold text-warmText mb-4">当前人格</h3>
         <p class="text-warmText" id="activePersonae">—</p>
         <p class="text-sm text-gray-400 mt-4" id="liveStatusLine"></p>
+      </div>
+
+      <div class="card p-8 mt-6" id="liveOverlayPanel">
+        <h3 class="text-lg font-bold text-warmText mb-2">直播输出</h3>
+        <p class="text-sm text-gray-400 mb-4">供 OBS、抖音直播伴侣等添加「浏览器源 / 网页源」，采集透明背景 AI 弹幕（本机 127.0.0.1）。</p>
+        <label class="text-sm text-gray-400 block mb-1" for="liveOverlayUrl">网页弹幕地址</label>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <input type="text" id="liveOverlayUrl" readonly class="flex-1 min-w-[200px] px-3 py-2 rounded-xl border border-gray-200 bg-cream text-sm text-warmText" value="http://127.0.0.1:18765/live-overlay" />
+          <button type="button" id="btnCopyLiveOverlayUrl" class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-warmText hover:bg-gray-50">复制地址</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 text-sm mb-4">
+          <span class="text-gray-400">SSE 连接数：<strong class="text-warmText" id="liveOverlayConnections">0</strong></span>
+          <span class="text-gray-400">上次广播：<strong class="text-warmText" id="liveOverlayLastBroadcast">—</strong></span>
+        </div>
+        <button type="button" id="btnLiveOverlayTest" class="px-4 py-2 bg-accent text-white rounded-xl text-sm font-semibold hover:opacity-90">发送测试弹幕</button>
       </div>
 
       <div class="card p-6 mt-6 hidden" id="diagnosticsPanel" aria-hidden="true">
@@ -351,7 +370,7 @@
                 </div>
               </div>
             </div>
-            <div class="settings-full-only">
+            <div>
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-thermo"></use></svg>温度</label>
               <input type="number" name="temperature" id="temperature" min="0" max="2" step="0.1" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
             </div>

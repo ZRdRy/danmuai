@@ -1,0 +1,196 @@
+"""直播网页弹幕层：LiveOverlayHub、SSE 与旁路广播。"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from unittest.mock import MagicMock
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.live_overlay_hub import LiveOverlayHub
+from app.web_api.live_overlay import register_live_overlay_routes
+from main import DanmuApp
+from tests.conftest import bind_minimal_danmu_app
+
+
+def test_hub_broadcast_batch_without_subscribers():
+    hub = LiveOverlayHub()
+    hub.broadcast_batch(["a", "b"], source="ai")
+    assert hub.connection_count == 0
+    snap = hub.snapshot()
+    assert snap["connections"] == 0
+    assert snap["last_broadcast_at"] is None
+
+
+def test_hub_broadcast_updates_snapshot_when_connected():
+    hub = LiveOverlayHub()
+    loop = asyncio.new_event_loop()
+    hub.set_loop(loop)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    hub.register(queue)
+    hub.broadcast_test(["测试1"])
+    loop.run_until_complete(asyncio.sleep(0.05))
+    item = queue.get_nowait()
+    assert item["event"] == "danmu_item"
+    assert item["text"] == "测试1"
+    assert item["source"] == "test"
+    snap = hub.snapshot()
+    assert snap["connections"] == 1
+    assert snap["last_batch_size"] == 1
+    assert snap["last_source"] == "test"
+    assert snap["last_broadcast_at"] is not None
+    loop.close()
+
+
+def test_live_overlay_routes_status_and_page():
+    app = FastAPI()
+    hub = LiveOverlayHub()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_live_overlay_routes(app, hub, "http://127.0.0.1:18765", _check_token)
+    client = TestClient(app)
+
+    res = client.get("/api/live-overlay/status")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["connections"] == 0
+    assert body["overlay_url"] == "http://127.0.0.1:18765/live-overlay"
+
+    page = client.get("/live-overlay")
+    assert page.status_code == 200
+    assert "text/html" in page.headers.get("content-type", "")
+
+
+def test_live_overlay_test_requires_token():
+    app = FastAPI()
+    hub = LiveOverlayHub()
+
+    def _check_token(authorization: str | None = None) -> None:
+        if not authorization or not authorization.startswith("Bearer "):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401)
+
+    register_live_overlay_routes(app, hub, "http://127.0.0.1:18765", _check_token)
+    client = TestClient(app)
+
+    denied = client.post("/api/live-overlay/test", json={})
+    assert denied.status_code == 401
+
+    ok = client.post(
+        "/api/live-overlay/test",
+        json={"items": ["A", "B"]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["ok"] is True
+
+
+def test_post_test_reaches_registered_subscriber():
+    """POST /api/live-overlay/test → hub → 已注册队列（等同 SSE 客户端订阅）。"""
+    app = FastAPI()
+    hub = LiveOverlayHub()
+    loop = asyncio.new_event_loop()
+    hub.set_loop(loop)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    hub.register(queue)
+
+    def _check_token(authorization: str | None = None) -> None:
+        if authorization != "Bearer secret":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401)
+
+    register_live_overlay_routes(app, hub, "http://127.0.0.1:18765", _check_token)
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/live-overlay/test",
+        json={"items": ["SSE测试"]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert res.status_code == 200
+    loop.run_until_complete(asyncio.sleep(0.05))
+    item = queue.get_nowait()
+    assert item["event"] == "danmu_item"
+    assert item["text"] == "SSE测试"
+    assert item["source"] == "test"
+
+
+def test_broadcast_failure_does_not_break_enqueue():
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app)
+    broken_hub = MagicMock()
+    broken_hub.broadcast_item.side_effect = RuntimeError("hub down")
+    app.web_server = MagicMock(live_overlay_hub=broken_hub)
+
+    app._enqueue_reply_batch(
+        "p1",
+        1,
+        10,
+        time.time(),
+        0,
+        ["弹幕一", "弹幕二"],
+    )
+    assert app.reply_buffer.size() == 2
+    broken_hub.broadcast_item.assert_not_called()
+
+    fake_item = MagicMock(y=90.0, speed=2.0)
+    app._broadcast_live_overlay_item(fake_item, "x", source="ai")
+    broken_hub.broadcast_item.assert_called_once()
+
+
+def test_broadcast_live_overlay_no_hub_noop():
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app)
+    app.web_server = None
+    fake_item = MagicMock(y=50.0, speed=2.0)
+    app._broadcast_live_overlay_item(fake_item, "不会崩溃", source="ai")
+
+
+def test_hub_remembers_recent_for_sse_replay():
+    hub = LiveOverlayHub()
+    hub.broadcast_item(
+        "回放",
+        y=50.0,
+        screen_width=1920.0,
+        screen_height=1080.0,
+        speed=2.0,
+        source="ai",
+    )
+    assert len(hub.recent_items()) == 1
+    assert hub.recent_items()[0]["text"] == "回放"
+    hub.broadcast_item(
+        "第二条",
+        y=90.0,
+        screen_width=1920.0,
+        screen_height=1080.0,
+        speed=2.0,
+        source="ai",
+    )
+    assert len(hub.recent_items()) == 2
+
+
+def test_hub_broadcast_item_payload():
+    hub = LiveOverlayHub()
+    loop = asyncio.new_event_loop()
+    hub.set_loop(loop)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    hub.register(queue)
+    hub.broadcast_item(
+        "单条",
+        y=130.0,
+        screen_width=1920.0,
+        screen_height=1080.0,
+        speed=2.5,
+        source="ai",
+    )
+    loop.run_until_complete(asyncio.sleep(0.05))
+    item = queue.get_nowait()
+    assert item["event"] == "danmu_item"
+    assert item["text"] == "单条"
+    assert item["y"] == 130.0
+    loop.close()

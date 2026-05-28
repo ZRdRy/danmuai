@@ -46,6 +46,7 @@ class PlatformCatalog:
             "platform_id": self.platform_id,
             "platform_label": self.platform_label,
             "provider_id": self.provider_id,
+            "default_model_id": default_catalog_model_id(self.provider_id),
             "models": enrich_platform_models(self.models),
         }
 
@@ -126,16 +127,12 @@ DASHSCOPE_MODELS: tuple[CatalogModel, ...] = (
     ),
 )
 
+# Vision/screenshot catalog: mimo-v2.5 only (official image input for screenshot danmu).
 MIMO_MODELS: tuple[CatalogModel, ...] = (
     CatalogModel(
-        "MiMo v2.5",
+        "MiMo-V2.5",
         "mimo-v2.5",
-        ModelPrice(input=0.8, audio=None, output=2.4),
-    ),
-    CatalogModel(
-        "MiMo v2 Omni",
-        "mimo-v2-omni",
-        ModelPrice(input=0.6, audio=None, output=2.0),
+        ModelPrice(input=1.0, audio=None, output=2.0),
     ),
 )
 
@@ -262,9 +259,18 @@ def catalog_model_ids(provider_id: str) -> frozenset[str]:
     return frozenset(m.id for m in platform.models)
 
 
+_MIMO_DEFAULT_MODEL_ID = "mimo-v2.5"
+
+
 def default_catalog_model_id(provider_id: str) -> str:
-    """Default vision model when switching provider: cheapest in catalog, else first."""
-    platform = _CATALOG_BY_PROVIDER.get((provider_id or "").strip())
+    """Default vision model when switching provider: cheapest in catalog, else first.
+
+    MiMo catalog lists only ``mimo-v2.5``.
+    """
+    pid = (provider_id or "").strip()
+    if pid == "mimo":
+        return _MIMO_DEFAULT_MODEL_ID
+    platform = _CATALOG_BY_PROVIDER.get(pid)
     if platform is None or not platform.models:
         return ""
     enriched = enrich_platform_models(platform.models)
