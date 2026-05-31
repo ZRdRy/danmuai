@@ -6,7 +6,7 @@ import hashlib
 import os
 from typing import Callable
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 _ACTIVATE_MSG = b"activate"
@@ -32,8 +32,11 @@ class SingleInstanceGuard:
             probe.write(_ACTIVATE_MSG)
             probe.flush()
             probe.waitForBytesWritten(1000)
-            # Keep socket open briefly so the primary can read before disconnect (GHA timing).
-            probe.waitForDisconnected(500)
+            # Same-process tests: pump Qt so the listening guard handles newConnection.
+            app = QCoreApplication.instance()
+            if app is not None:
+                app.processEvents()
+            probe.waitForDisconnected(2000)
             if probe.state() != QLocalSocket.LocalSocketState.UnconnectedState:
                 probe.disconnectFromServer()
             return False
@@ -73,5 +76,6 @@ class SingleInstanceGuard:
         if self._read_activate_payload(conn) == _ACTIVATE_MSG:
             handler = self._activate_handler
             if handler is not None:
-                QTimer.singleShot(0, handler)
+                # newConnection is on the server thread (main); avoid singleShot race in tests/CI.
+                handler()
         conn.disconnectFromServer()

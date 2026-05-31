@@ -8,7 +8,7 @@ pytest.importorskip("PyQt6.QtNetwork", exc_type=ImportError)
 from app.single_instance import SingleInstanceGuard
 
 
-def test_single_instance_second_client_triggers_activate(qtbot):
+def test_single_instance_second_client_triggers_activate():
     app = QApplication.instance() or QApplication([])
 
     primary = SingleInstanceGuard()
@@ -23,6 +23,5 @@ def test_single_instance_second_client_triggers_activate(qtbot):
 
     secondary = SingleInstanceGuard()
     assert secondary.try_acquire() is False
-
-    qtbot.waitUntil(lambda: activated == [True], timeout=3000)
+    # try_acquire pumps events for in-process test; assert covers handler ran.
     assert activated == [True]
