@@ -83,6 +83,7 @@ def test_danmu_pool_routes_registered(tmp_path):
 
     app = FastAPI()
     bridge = MagicMock()
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
     config = ConfigStore(db_path=tmp_path / "routes.db")
     bridge.danmu_app.config = config
     bridge.danmu_app.config_changed = MagicMock()

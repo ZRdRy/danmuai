@@ -71,8 +71,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         label_en="Xiaomi MiMo",
         default_endpoint="https://api.xiaomimimo.com/v1",
         mode="openai-compatible",
-        model_id_hint_zh="截图弹幕：mimo-v2.5",
-        model_id_hint_en="Vision danmu: mimo-v2.5",
+        model_id_hint_zh="截图弹幕与开麦：mimo-v2.5",
+        model_id_hint_en="Vision danmu and mic: mimo-v2.5",
     ),
     ProviderSpec(
         id="custom_openai",
@@ -101,10 +101,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 _PROVIDER_BY_ID = {p.id: p for p in PROVIDERS}
 
 DEFAULT_PROVIDER_ID = "custom_openai"
-
-
-def list_providers() -> list[ProviderSpec]:
-    return list(PROVIDERS)
 
 
 def get_provider(provider_id: str) -> ProviderSpec | None:
@@ -189,6 +185,40 @@ def model_likely_supports_mic_audio(model_id: str) -> bool:
     if "flash" in mid and "vision" not in mid:
         return False
     return any(tag in mid for tag in ("vision", "seed-2-0", "seed-1-8"))
+
+
+def model_supports_mic_audio(
+    model_id: str,
+    *,
+    endpoint: str = "",
+    api_mode: str = "",
+) -> bool:
+    """Whether mic insert may attach audio for the active endpoint/model."""
+    mode = normalize_mode(api_mode)
+    ep = normalize_endpoint(endpoint)
+    if is_doubao_mode(mode) or resolve_api_transport(ep, mode) == "doubao":
+        return model_likely_supports_mic_audio(model_id)
+    if guess_provider_from_endpoint(ep, mode) == "mimo":
+        return (model_id or "").strip().lower() == "mimo-v2.5"
+    return False
+
+
+def mic_audio_supported_for_config(config) -> bool:
+    """Match runtime mic gating: active model + global or custom endpoint/mode."""
+    default_model_id = (config.get_default_model_id() or "").strip()
+    if default_model_id:
+        for model in config.get_custom_models():
+            if (model.get("modelId") or "").strip() == default_model_id:
+                return model_supports_mic_audio(
+                    default_model_id,
+                    endpoint=(model.get("endpoint") or ""),
+                    api_mode=(model.get("mode") or ""),
+                )
+    return model_supports_mic_audio(
+        resolve_active_model_id(config),
+        endpoint=(config.get("api_endpoint") or ""),
+        api_mode=(config.get("api_mode") or ""),
+    )
 
 
 def validate_model_config(data: dict) -> list[str]:

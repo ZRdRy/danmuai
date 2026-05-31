@@ -331,6 +331,14 @@ class DanmuEngine(QObject):
     def set_screen_height(self, h: float):
         self.screen_height = h
 
+    def drawable_height(self) -> float:
+        """当前 layout_mode 下弹幕可绘制区域高度（与 _init_tracks / Overlay clip 一致）。"""
+        return self.screen_height * layout_height_ratio(self.config)
+
+    def _item_in_drawable_band(self, item: DanmuItem) -> bool:
+        """轨道重载前：旧 item.y 是否仍落在新可绘制带内。"""
+        return item.y < self.drawable_height() - 1.0
+
     def _right_zone_threshold(self) -> float:
         return self.screen_width * 2 / 3
 
@@ -606,6 +614,21 @@ class DanmuEngine(QObject):
             self._rebuild_visibility_counts()
         return self._visible_count
 
+    def visible_display_texts(self) -> list[str]:
+        """当前在屏可见弹幕正文（去重，供读弹幕 TTS 抽样）。"""
+        self._rebuild_visibility_counts()
+        seen: set[str] = set()
+        texts: list[str] = []
+        for track in self.tracks:
+            for item in track.items:
+                if not item._vis_on_screen:
+                    continue
+                if item.content in seen:
+                    continue
+                seen.add(item.content)
+                texts.append(item.content)
+        return texts
+
     def items_in_fade_zone(self) -> bool:
         if self._visibility_stale or not self._visibility_counts_seeded:
             self._rebuild_visibility_counts()
@@ -811,12 +834,15 @@ class DanmuEngine(QObject):
             return False
         return item.x < self.screen_width + FADE_IN_PX
 
-    def _collect_items_for_track_reload(self) -> list[DanmuItem]:
+    def _collect_items_for_track_reload(self, *, clip_to_drawable: bool = False) -> list[DanmuItem]:
         preserved: list[DanmuItem] = []
         for track in self.tracks:
             for item in track.items:
-                if self._item_needs_motion(item):
-                    preserved.append(item)
+                if not self._item_needs_motion(item):
+                    continue
+                if clip_to_drawable and not self._item_in_drawable_band(item):
+                    continue
+                preserved.append(item)
         return preserved
 
     def _nearest_track_for_y(self, y: float) -> Track | None:
@@ -824,8 +850,18 @@ class DanmuEngine(QObject):
             return None
         return min(self.tracks, key=lambda t: abs(t.y - y))
 
-    def reload_tracks(self, *, preserve_visible: bool = True) -> None:
-        preserved = self._collect_items_for_track_reload() if preserve_visible else []
+    def reload_tracks(
+        self,
+        *,
+        preserve_visible: bool = True,
+        clip_to_drawable: bool = False,
+    ) -> None:
+        if preserve_visible:
+            preserved = self._collect_items_for_track_reload(
+                clip_to_drawable=clip_to_drawable,
+            )
+        else:
+            preserved = []
         self._init_tracks()
         for item in preserved:
             track = self._nearest_track_for_y(item.y)

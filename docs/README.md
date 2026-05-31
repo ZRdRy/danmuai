@@ -19,8 +19,26 @@ Entry point: [README.md](../README.md) (install, quick start).
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Dev setup, tests, PR hygiene |
 | [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md) | Architecture boundaries and checklist |
 | [BOUNDARY_GUARD.md](BOUNDARY_GUARD.md) | `scripts/boundary_guard.py` usage |
-| [AGENTS.md](../AGENTS.md) | IDE/agent conventions (dense) |
+| [ai-project-context.md](ai-project-context.md) | **AI / IDE agent entry** — read order, frozen pipeline, verification |
+| [AGENTS.md](../AGENTS.md) | IDE/agent conventions — **§1–§10 Codex 规则** + 附录技术速查 |
 | [DANMAKU_FORMULA.md](DANMAKU_FORMULA.md) | AI output JSON contract |
+
+## Codex / IDE Agent 工作流
+
+单工单协作流程（边界、验收、完成报告）。**技术细节**仍以 [ai-project-context.md](ai-project-context.md) 为准；**产品方向**仍以 [ROADMAP.md](ROADMAP.md) 为准。
+
+| Document | Description |
+|----------|-------------|
+| [workflow/README.md](workflow/README.md) | 工作流目录与推荐顺序 |
+| [工单列表.md](工单列表.md) | 可执行小工单 backlog（W-xxx） |
+| [当前仓库状态.md](当前仓库状态.md) | 分支、测试、最近变更（每工单后更新） |
+| [手动验收指南.md](手动验收指南.md) | 通用手动验收（构建通过 ≠ 功能可用） |
+| [Codex提示词手册.md](Codex提示词手册.md) | 如何写有边界的 Codex 提示词 |
+| [Codex工单交接模板.md](Codex工单交接模板.md) | 工单交接示例 |
+| [已知问题与后续事项.md](已知问题与后续事项.md) | 范围外问题沉淀（不修只记） |
+| [设计更新说明.md](设计更新说明.md) | 已批准的设计变更记录 |
+| [提示词上下文包.md](提示词上下文包.md) | 复制给 AI 的上下文快照 |
+| [templates/](templates/) | 工单、完成报告、验收等空白模板（见 [templates/README.md](templates/README.md)） |
 
 ## Changelog & roadmap
 

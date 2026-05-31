@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from app.memory.types import (
-    INFERRED_CONFIDENCE,
-    MAX_BULLET_SNIPPET_LEN,
     SCENE_SUMMARY_MAX_LEN,
     VisualMemoryUpdate,
 )
@@ -52,31 +50,6 @@ def parse_scene_memory_envelope(parsed: dict) -> VisualMemoryUpdate | None:
         return None
     gen = int(raw.get("scene_generation", 0) or 0)
     return visual_update_from_dict(raw, gen)
-
-
-def infer_visual_update_from_batch(
-    items: list[str],
-    scene_count: int,
-    scene_generation: int,
-) -> VisualMemoryUpdate | None:
-    """Derive a low-confidence scene update from normalized reply slots (no regex topics)."""
-    if not items or scene_count < 1:
-        return None
-    scene_slots = items[:scene_count]
-    if not any(s.strip() for s in scene_slots):
-        return None
-    first = _truncate(scene_slots[0], SCENE_SUMMARY_MAX_LEN)
-    volatile = [
-        _truncate(s, MAX_BULLET_SNIPPET_LEN) for s in scene_slots if (s or "").strip()
-    ]
-    last_focus = _truncate(scene_slots[-1], SCENE_SUMMARY_MAX_LEN) if scene_slots else ""
-    return VisualMemoryUpdate(
-        scene_generation=scene_generation,
-        scene_summary=first,
-        volatile_facts=volatile,
-        last_focus=last_focus,
-        confidence=INFERRED_CONFIDENCE,
-    )
 
 
 def extract_comments_from_envelope(parsed: dict) -> list[str] | None:

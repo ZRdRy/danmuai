@@ -1,4 +1,4 @@
-"""Record microphone audio and send one probe request to the Responses API."""
+"""Record microphone audio and send one probe request (Doubao Responses or MiMo Chat)."""
 
 from __future__ import annotations
 
@@ -10,12 +10,17 @@ from PIL import Image
 
 from app.mic_encode import pcm_to_wav_data_uri
 from app.mic_test import capture_mic_sample
-from app.model_providers import is_doubao_mode, model_likely_supports_mic_audio
+from app.model_providers import model_supports_mic_audio, resolve_api_transport
 from app.translations import tr
 
 _TEST_USER_PT = "听得见吗？跟我打个招呼"
 _PREVIEW_MAX_LEN = 200
 _AUDIO_MODEL_HINT = "请确认当前模型支持音频理解（纯视觉 flash 模型可能无法处理 input_audio）。"
+_MIC_UNSUPPORTED_MSG = (
+    "当前配置不支持麦克风音频。"
+    "开麦请使用火山方舟豆包全模态模型（如 doubao-seed-2-0-mini-260428）"
+    "或小米 MiMo 的 mimo-v2.5。"
+)
 
 
 @dataclass(frozen=True)
@@ -66,19 +71,13 @@ def send_mic_probe(
             error="incomplete_credentials",
         )
 
-    _, _, model_id, api_mode = resolved
-    if not is_doubao_mode(api_mode):
-        return MicSendProbeResult(
-            ok=False,
-            message="当前 API 模式不支持麦克风音频（需火山方舟 Responses）",
-            error="unsupported_api_mode",
-        )
-    if not model_likely_supports_mic_audio(model_id):
+    endpoint, _, model_id, api_mode = resolved
+    if not model_supports_mic_audio(model_id, endpoint=endpoint, api_mode=api_mode):
         return MicSendProbeResult(
             ok=False,
             message=(
                 f"当前模型「{model_id}」可能不支持 input_audio。"
-                f"开麦建议改用 doubao-seed-2-0-mini-260428 等全模态模型。{_AUDIO_MODEL_HINT}"
+                f"开麦建议改用 doubao-seed-2-0-mini-260428 或 mimo-v2.5。{_AUDIO_MODEL_HINT}"
             ),
             error="unsupported_model",
         )
@@ -109,18 +108,31 @@ def send_mic_probe(
 
     ai_worker._emit_result = capture_emit
     try:
-        ai_worker._request_doubao(
-            image_data_uri,
-            "",
-            user_pt,
-            "mic_probe",
-            0,
-            0,
-            0.0,
-            0,
-            audio_data_uri=audio_data_uri,
-            resolved=resolved,
-        )
+        if resolve_api_transport(endpoint, api_mode) == "doubao":
+            ai_worker._request_doubao(
+                image_data_uri,
+                "",
+                user_pt,
+                "mic_probe",
+                0,
+                0,
+                0.0,
+                0,
+                audio_data_uri=audio_data_uri,
+                resolved=resolved,
+            )
+        else:
+            ai_worker._request(
+                image_data_uri,
+                "",
+                user_pt,
+                "mic_probe",
+                0,
+                0,
+                0.0,
+                0,
+                audio_data_uri=audio_data_uri,
+            )
     finally:
         ai_worker._emit_result = original_emit
 
@@ -160,7 +172,7 @@ def run_mic_test_send(danmu_app, duration_sec: float = 3.0) -> MicTestSendResult
     if not danmu_app._mic_audio_supported():
         return MicTestSendResult(
             ok=False,
-            message="当前 API 模式不支持麦克风音频（需火山方舟 Responses）",
+            message=_MIC_UNSUPPORTED_MSG,
             error="unsupported_api_mode",
         )
 

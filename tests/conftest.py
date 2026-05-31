@@ -49,7 +49,6 @@ from app.scene_memory import SceneMemoryStore
 from tests.fakes import (  # noqa: E402 — tests package (tests/__init__.py)
     FakeConfig,
     FakeEngine,
-    FakeHistory,
     FakeHistoryWriter,
     FakeLifetimeStats,
     FakeLogger,
@@ -65,6 +64,16 @@ def pytest_configure(config):
 def _safe_node_dir(request) -> Path:
     safe = request.node.nodeid.replace("::", "_").replace("/", "_").replace("\\", "_")
     return _RUN_TMP / safe
+
+
+@pytest.fixture(autouse=True)
+def _isolate_log_emit_bus():
+    """Reset global LogEmitBus between tests (Qt teardown may delete C++ object)."""
+    import app.logger as logger_mod
+
+    logger_mod._log_bus = None
+    yield
+    logger_mod._log_bus = None
 
 
 @pytest.fixture
@@ -86,7 +95,6 @@ def bind_minimal_danmu_app(app, **overrides):
     defaults = {
         "logger": FakeLogger(),
         "engine": FakeEngine(),
-        "history": FakeHistory(),
         "history_writer": FakeHistoryWriter(),
         "reply_buffer": AIReplyFIFOBuffer(max_items=8),
         "reply_timer": FakeTimer(),
@@ -108,7 +116,6 @@ def bind_minimal_danmu_app(app, **overrides):
         "_failure_backoff_paused": False,
         "_last_error_message": "",
         "_scene_generation": 0,
-        "_last_scene_hash": None,
         "_inflight_scene_generation": 0,
         "_stale_scene_inflight_drop_count": 0,
         "_stale_scene_consume_drop_count": 0,
@@ -116,9 +123,6 @@ def bind_minimal_danmu_app(app, **overrides):
         "_latest_requested_screenshot_id": 0,
         "_latest_queued_screenshot_id": 0,
         "_latest_displayed_screenshot_id": 0,
-        "_scene_rhythm_pause_until": 0.0,
-        "_scene_captures_after_change": 0,
-        "_scene_api_gate_active": False,
         "_latest_screenshot_time": 0.0,
         "_inflight_screenshot_id": 0,
         "_screenshot_backoff_level": 0,
@@ -139,7 +143,6 @@ def bind_minimal_danmu_app(app, **overrides):
         "_mic_batch_id": 0,
         "_pending_request_meta": {},
         "_scene_generation_bumped_at": 0.0,
-        "_scene_gate_prev_hash": None,
         "_active_scene_probe_size": 16,
         "session_run_log": FakeSessionRunLog(),
     }

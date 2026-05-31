@@ -74,6 +74,7 @@ hiddenimports: list[str] = [
     "websockets",
     "watchfiles",
     "anyio",
+    "app.startup_trace",
     "app.webview_shell",
     "app.web_console",
     "app.web_api.routes",

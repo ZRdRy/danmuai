@@ -115,14 +115,6 @@ class FakeEngine:
         self.running = False
 
 
-class FakeHistory:
-    def __init__(self):
-        self.calls = []
-
-    def add(self, content, persona, round_num):
-        self.calls.append((content, persona, round_num))
-
-
 class FakeHistoryWriter:
     def __init__(self):
         self.calls = []
@@ -193,11 +185,9 @@ def _make_minimal_app():
     app = DanmuApp.__new__(DanmuApp)
     object.__setattr__(app, "_dedup_profile_log_at_count", 0)
     object.__setattr__(app, "_scene_generation_bumped_at", 0.0)
-    object.__setattr__(app, "_scene_gate_prev_hash", None)
     object.__setattr__(app, "_active_scene_probe_size", 16)
     app.logger = FakeLogger()
     app.engine = FakeEngine()
-    app.history = FakeHistory()
     app.history_writer = FakeHistoryWriter()
     app.reply_buffer = AIReplyFIFOBuffer(max_items=8)
     app.danmu_queue = app.reply_buffer
@@ -227,7 +217,6 @@ def _make_minimal_app():
     app._last_error_message = ""
     app.MAX_CONSECUTIVE_FAILURES = 5
     app._pending = False
-    app._last_scene_hash = None
     app._scene_generation = 0
     app._inflight_scene_generation = 0
     app._stale_scene_inflight_drop_count = 0
@@ -236,9 +225,6 @@ def _make_minimal_app():
     app._latest_requested_screenshot_id = 0
     app._latest_queued_screenshot_id = 0
     app._latest_displayed_screenshot_id = 0
-    app._scene_rhythm_pause_until = 0.0
-    app._scene_captures_after_change = 0
-    app._scene_api_gate_active = False
     app._last_api_trigger_at = 0.0
     app.screenshot_timer = FakeTimer()
     app.capturer = FakeCapturer(None)
@@ -465,6 +451,84 @@ def test_compress_screenshot_failure_path():
     assert "压缩失败" in call_args[0][1]
 
 
+def test_runnable_request_uncaught_exception_emits_error():
+    """_request 阶段未捕获异常时应 emit error（与压缩失败对称）"""
+    mock_pixmap = Mock()
+    mock_pixmap.width.return_value = 100
+    mock_pixmap.height.return_value = 80
+
+    mock_worker = Mock()
+    mock_worker._stopping = False
+    mock_worker._request.side_effect = ValueError("bad config")
+
+    runnable = AiRunnable(
+        worker=mock_worker,
+        pixmap=mock_pixmap,
+        system_pt="system",
+        user_pt="user",
+        persona_id="test-persona",
+        request_round=2,
+        screenshot_id=3,
+        captured_at=2.0,
+        scene_generation=1,
+        compress_fn=lambda _p: "data:image/jpeg;base64,abc",
+        image_quality=85,
+    )
+    runnable.run()
+
+    mock_worker._emit_safe.assert_called_once()
+    call_args = mock_worker._emit_safe.call_args
+    assert call_args[0][0] == "error"
+    assert "bad config" in call_args[0][1]
+
+
+def test_runnable_request_failure_releases_in_flight():
+    """_request 异常经 error 信号回主线程后应释放 ai_in_flight"""
+    from PyQt6.QtWidgets import QApplication
+
+    from app.ai_client import AiWorker
+
+    _ = QApplication.instance() or QApplication([])
+
+    app = _make_minimal_app()
+    worker = AiWorker(app.config)
+    app.ai_worker = worker
+    app._on_ai_error = DanmuApp._on_ai_error.__get__(app, DanmuApp)
+    worker.error.connect(lambda *args: app._on_ai_error(*args))
+
+    app.ai_in_flight = 1
+    app._is_generating = True
+    app._register_request_meta(2, 3, 1, "visual")
+
+    mock_pixmap = Mock()
+    mock_pixmap.width.return_value = 100
+    mock_pixmap.height.return_value = 80
+
+    def _raise_request(*_args, **_kwargs):
+        raise ValueError("bad config")
+
+    worker._request = _raise_request
+
+    runnable = AiRunnable(
+        worker=worker,
+        pixmap=mock_pixmap,
+        system_pt="system",
+        user_pt="user",
+        persona_id="test-persona",
+        request_round=2,
+        screenshot_id=3,
+        captured_at=2.0,
+        scene_generation=1,
+        compress_fn=lambda _p: "data:image/jpeg;base64,abc",
+        image_quality=85,
+    )
+    runnable.run()
+    QApplication.processEvents()
+
+    assert app.ai_in_flight == 0
+    assert app._is_generating is False
+
+
 def test_ai_success_reply_enqueued():
     """测试 AI 成功返回后弹幕正确入队"""
     app = _make_minimal_app()
@@ -611,7 +675,6 @@ def test_capture_does_not_advance_scene_generation(monkeypatch):
     """普通模式截图不探测场景跳变，代际保持不变"""
     app = _make_minimal_app()
     app.engine.running = True
-    app._last_scene_hash = 0xAAAAAAAAAAAAAAAA
     app.reply_buffer.push(QueuedReply("p", 0, 0, "old", scene_generation=0))
     app.capturer = FakeCapturer(FakePixmap(0b1))
 
@@ -639,7 +702,6 @@ def test_capture_while_in_flight_still_updates_frame(monkeypatch):
 def test_repeated_capture_keeps_scene_generation(monkeypatch):
     app = _make_minimal_app()
     app.engine.running = True
-    app._last_scene_hash = 0xAAAAAAAAAAAAAAAA
     app.capturer = FakeCapturer(FakePixmap(0b1))
 
     app._capture_screenshot()

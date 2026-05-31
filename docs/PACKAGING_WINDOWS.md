@@ -42,7 +42,7 @@ DanmuAI.exe（主进程）
 | `app/bundle_paths.py` | 开发态 / 打包态资源路径（`sys._MEIPASS`） |
 | `app/web_console.py` | uvicorn 线程；含打包环境专用日志与 asyncio/日志修复 |
 | `app/webview_shell.py` | pywebview 子进程（Qt 主线程不能被 `webview.start()` 占用） |
-| `%APPDATA%\DanmuAI\startup.log` | **仅打包运行**时写入的启动诊断日志 |
+| `%APPDATA%\DanmuAI\startup.log` | **仅打包运行**时写入的启动诊断日志；W-STARTUP-001 起含 `[+毫秒] phase` 行（`app/startup_trace.py`）。开发环境可设 `DANMU_STARTUP_TRACE=1` 同步写该文件 |
 
 ---
 
@@ -306,11 +306,11 @@ python scripts/generate_app_icon.py   # 生成 icon.png + icon.ico
 |--------|------|
 | Web 未监听 | `startup_ok=False`，仅日志 / `startup.log` |
 | pywebview `hidden` + 未 `loaded` | 子进程有窗但不可见 |
-| `ready` 信号过早 | 不回退系统浏览器 |
+| `ready` 信号过早（W-014 前） | 不回退系统浏览器 |
 | 主进程 `open()` 访问 `webview.windows` | 托盘打开设置无反应 |
 | 多实例占端口 | 第二个进程托盘在、18765 失败 |
 
-**修复**（W-009～W-012）：`nav_queue` 跨进程导航；`QLocalServer` 单实例；失败时托盘提示 + 浏览器回退。pywebview 握手为 `hidden=True` → `put(True)` → `webview.start()` → `loaded` 时 `show()`（**禁止**在 `start()` 前 `show()`，见 ISSUE-010）。
+**修复**（W-009～W-014）：`nav_queue` 跨进程导航；`QLocalServer` 单实例；失败时托盘提示 + 浏览器回退。pywebview 握手为 `hidden=True` → `put("created")` → `webview.start()` → `loaded` 时 `show()` + `put("loaded")`；父进程仅在收到 `loaded` 后判定成功，否则（`start()` 失败、子进程退出、loaded 超时）自动 `_fallback_to_system_browser()`（**禁止**在 `start()` 前 `show()`，见 ISSUE-010、ISSUE-011）。
 
 **排查**：
 

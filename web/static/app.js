@@ -13,6 +13,35 @@ const CONFIG_FIELDS = [
   'normal_recognition_interval_sec', 'normal_reply_count',
 ];
 
+/**
+ * 助手设置「恢复默认」按 Tab 划分的字段范围。
+ * api_key 不参与；识图区域（capture）走独立 API，不在此恢复。
+ * 默认值来自 GET /api/config/defaults，勿在此硬编码。
+ */
+const SETTINGS_RESTORE_GROUPS = {
+  api: [
+    'api_endpoint', 'api_mode', 'screen_index', 'model', 'temperature', 'max_tokens',
+    'mic_window_sec', 'memory_mode', 'memory_window',
+  ],
+  capture: [],
+  danmu: [
+    'normal_recognition_interval_sec', 'normal_reply_count', 'danmu_speed', 'danmu_lines',
+    'font_size', 'danmu_max_chars', 'opacity', 'dedup_threshold', 'layout_mode', 'hotkey',
+    'eviction_mode',
+  ],
+  rhythm: ['image_max_width', 'image_quality'],
+};
+
+const SETTINGS_RESTORE_CHECKBOXES = {
+  api: ['mic_mode_enabled'],
+  capture: [],
+  danmu: ['empty_accel'],
+  rhythm: [],
+};
+
+let configDefaultsCache = null;
+let activeSettingsTabId = 'api';
+
 const NORMAL_REPLY_COUNT_MIN = 1;
 const NORMAL_REPLY_COUNT_MAX = 20;
 const DEFAULT_NORMAL_REPLY_COUNT = 5;
@@ -31,6 +60,14 @@ const logBuffer = [];
 let logLevelFilters = new Set(['INFO', 'WARNING', 'ERROR']);
 let logAutoScroll = true;
 let currentPersonaId = '';
+
+const ERROR_REPORT_DISMISS_STORAGE = 'danmu_error_report_dismiss';
+const ERROR_REPORT_DEDUP_MS = 24 * 60 * 60 * 1000;
+const ERROR_REPORT_LOG_WINDOW_SEC = 90;
+const ERROR_REPORT_LOG_LINE_RADIUS = 40;
+let statusHadError = false;
+let errorReportAnchor = null;
+let errorReportSubmitting = false;
 
 function authHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -418,6 +455,246 @@ function applyStatus(st) {
   } else {
     banner.classList.add('hidden');
   }
+
+  const isError = !!st.is_error;
+  if (isError && !statusHadError) {
+    maybePromptErrorReport(st).catch((e) => console.warn('[error-report] prompt failed', e));
+  }
+  statusHadError = isError;
+}
+
+function loadErrorReportDismissMap() {
+  try {
+    const raw = sessionStorage.getItem(ERROR_REPORT_DISMISS_STORAGE);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveErrorReportDismissMap(map) {
+  try {
+    const now = Date.now();
+    const pruned = {};
+    Object.entries(map).forEach(([key, entry]) => {
+      if (entry && now - Number(entry.at || 0) < ERROR_REPORT_DEDUP_MS) {
+        pruned[key] = entry;
+      }
+    });
+    sessionStorage.setItem(ERROR_REPORT_DISMISS_STORAGE, JSON.stringify(pruned));
+  } catch {
+    /* ignore */
+  }
+}
+
+function isErrorReportSuppressed(fingerprint) {
+  const entry = loadErrorReportDismissMap()[fingerprint];
+  if (!entry) return false;
+  return Date.now() - Number(entry.at || 0) < ERROR_REPORT_DEDUP_MS;
+}
+
+function markErrorReportHandled(fingerprint, kind) {
+  const map = loadErrorReportDismissMap();
+  map[fingerprint] = { at: Date.now(), kind };
+  saveErrorReportDismissMap(map);
+}
+
+async function hashErrorFingerprint(message) {
+  const text = String(message || '');
+  if (globalThis.crypto?.subtle) {
+    const data = new TextEncoder().encode(text);
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  let h = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+  }
+  return `fallback_${(h >>> 0).toString(16)}`;
+}
+
+function formatLogLine(item) {
+  const ts = Number(item.ts) || 0;
+  const iso = ts > 0 ? new Date(ts * 1000).toISOString() : '—';
+  return `${iso} [${item.level || 'INFO'}] ${item.message || ''}`;
+}
+
+function mergeLogItemsUnique(items) {
+  const map = new Map();
+  items.forEach((item) => {
+    if (!item || item.message == null) return;
+    map.set(logEntryKey(item), item);
+  });
+  return Array.from(map.values()).sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+}
+
+function pickErrorLogExcerpt(merged, anchor) {
+  const anchorTs = Number(anchor.ts) || Date.now() / 1000;
+  const anchorMsg = String(anchor.errorMessage || '');
+  const snippet = anchorMsg.slice(0, 80);
+
+  let anchorIdx = merged.findIndex(
+    (x) => x.level === 'ERROR' && snippet && String(x.message || '').includes(snippet),
+  );
+  if (anchorIdx < 0) {
+    anchorIdx = merged.reduce((best, item, idx) => {
+      const delta = Math.abs((Number(item.ts) || 0) - anchorTs);
+      if (best.idx < 0 || delta < best.delta) return { idx, delta };
+      return best;
+    }, { idx: -1, delta: Infinity }).idx;
+  }
+  if (anchorIdx < 0) anchorIdx = Math.max(0, merged.length - 1);
+
+  const windowStart = anchorTs - ERROR_REPORT_LOG_WINDOW_SEC;
+  const windowEnd = anchorTs + ERROR_REPORT_LOG_WINDOW_SEC;
+  const byTime = merged.filter((x) => {
+    const ts = Number(x.ts) || 0;
+    return ts >= windowStart && ts <= windowEnd;
+  });
+  const lineStart = Math.max(0, anchorIdx - ERROR_REPORT_LOG_LINE_RADIUS);
+  const lineEnd = Math.min(merged.length, anchorIdx + ERROR_REPORT_LOG_LINE_RADIUS + 1);
+  const byLines = merged.slice(lineStart, lineEnd);
+  const picked = mergeLogItemsUnique([...byTime, ...byLines]);
+  const structuredKeys = new Set();
+  const structured = picked.filter((x) => {
+    const match = /reason=|screenshot_id|scene_generation/i.test(x.message || '');
+    if (match) structuredKeys.add(logEntryKey(x));
+    return match;
+  });
+  const rest = picked.filter((x) => !structuredKeys.has(logEntryKey(x)));
+  return [...structured, ...rest].map(formatLogLine).join('\n');
+}
+
+async function collectErrorReportContext(anchor) {
+  const anchorTs = Number(anchor.ts) || Date.now() / 1000;
+  const sinceTs = Math.max(0, anchorTs - ERROR_REPORT_LOG_WINDOW_SEC);
+
+  let serverItems = [];
+  try {
+    const base = API.base || window.location.origin.replace(/\/$/, '');
+    const res = await fetch(
+      `${base}/api/logs/recent?since_ts=${encodeURIComponent(sinceTs)}`,
+      { cache: 'no-store' },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      serverItems = data.items || [];
+    }
+  } catch (e) {
+    console.warn('[error-report] logs/recent failed', e);
+  }
+
+  const merged = mergeLogItemsUnique([...logBuffer, ...serverItems]);
+  let logsExcerpt = pickErrorLogExcerpt(merged, { ...anchor, ts: anchorTs });
+
+  let diagnosticsJson = null;
+  try {
+    const diagRes = await apiFetch('/api/diagnostics');
+    diagnosticsJson = diagRes.diagnostics || diagRes;
+    const diagText = buildDiagnosticReportText(diagnosticsJson);
+    if (diagText) {
+      logsExcerpt = `${logsExcerpt}\n\n--- diagnostics ---\n${diagText}`;
+    }
+  } catch (e) {
+    console.warn('[error-report] diagnostics failed', e);
+  }
+
+  if (anchor.statusSnapshot) {
+    const snap = anchor.statusSnapshot;
+    const meta = [
+      `active_model_id: ${snap.active_model_id || '—'}`,
+      `personae: ${(snap.persona_names || []).join(' · ') || '—'}`,
+    ].join('\n');
+    logsExcerpt = `${logsExcerpt}\n\n--- status ---\n${meta}`;
+  }
+
+  if (logsExcerpt.length > 8000) {
+    logsExcerpt = `${logsExcerpt.slice(0, 7990)}\n…[truncated]`;
+  }
+
+  const summary = String(anchor.errorMessage || '未知错误').trim().slice(0, 500);
+  const errorFingerprint = anchor.fingerprint || (await hashErrorFingerprint(summary));
+  return { summary, logsExcerpt, diagnosticsJson, errorFingerprint };
+}
+
+function showErrorReportModal(anchor) {
+  const modal = document.getElementById('errorReportModal');
+  const msgEl = document.getElementById('errorReportModalMessage');
+  if (!modal || !msgEl) return;
+  const preview = String(anchor.errorMessage || '').trim();
+  msgEl.textContent = preview.length > 200 ? `${preview.slice(0, 200)}…` : preview;
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  const submitBtn = document.getElementById('btnErrorReportSubmit');
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '发送反馈';
+  }
+}
+
+function closeErrorReportModal() {
+  const modal = document.getElementById('errorReportModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+async function maybePromptErrorReport(st) {
+  if (!window.DanmuSupabase?.isConfigured?.()) return;
+  const msg = String(st.error_message || '').trim();
+  if (!msg) return;
+  const fingerprint = await hashErrorFingerprint(msg);
+  if (isErrorReportSuppressed(fingerprint)) return;
+  errorReportAnchor = {
+    errorMessage: msg,
+    ts: Date.now() / 1000,
+    fingerprint,
+    statusSnapshot: {
+      active_model_id: st.active_model_id,
+      persona_names: st.persona_names,
+    },
+  };
+  showErrorReportModal(errorReportAnchor);
+}
+
+async function submitErrorReportFromModal() {
+  if (!errorReportAnchor || errorReportSubmitting) return;
+  if (!window.DanmuSupabase?.isConfigured?.()) {
+    showToast('未配置云端反馈服务', true);
+    return;
+  }
+  const submitBtn = document.getElementById('btnErrorReportSubmit');
+  errorReportSubmitting = true;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '发送中…';
+  }
+  try {
+    const payload = await collectErrorReportContext(errorReportAnchor);
+    await window.DanmuSupabase.submitErrorReport(payload);
+    markErrorReportHandled(errorReportAnchor.fingerprint, 'sent');
+    closeErrorReportModal();
+    showToast('错误反馈已发送，感谢！');
+    errorReportAnchor = null;
+  } catch (err) {
+    showToast(err.message || '发送失败', true);
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '发送反馈';
+    }
+  } finally {
+    errorReportSubmitting = false;
+  }
+}
+
+function dismissErrorReportModal() {
+  if (errorReportAnchor?.fingerprint) {
+    markErrorReportHandled(errorReportAnchor.fingerprint, 'dismiss');
+  }
+  errorReportAnchor = null;
+  closeErrorReportModal();
 }
 
 function formatDiagSeconds(value) {
@@ -855,6 +1132,81 @@ async function deleteSelectedCustomDanmuPoolItems() {
   showToast(`已删除 ${result.removed} 条~`);
 }
 
+let danmuReadConfigCache = null;
+
+function applyDanmuReadForm(cfg) {
+  danmuReadConfigCache = cfg;
+  const enabledEl = document.getElementById('danmuReadEnabled');
+  const intervalEl = document.getElementById('danmuReadInterval');
+  const keyEl = document.getElementById('danmuReadApiKey');
+  const voiceEl = document.getElementById('danmuReadVoice');
+  const styleEl = document.getElementById('danmuReadStylePrompt');
+  const modelLabel = document.getElementById('danmuReadModelLabel');
+  const endpointLabel = document.getElementById('danmuReadEndpointLabel');
+  if (enabledEl) enabledEl.checked = Boolean(cfg.enabled);
+  if (intervalEl) intervalEl.value = String(cfg.interval_sec ?? 10);
+  if (keyEl) keyEl.value = cfg.api_key || '';
+  if (voiceEl && cfg.voice) voiceEl.value = cfg.voice;
+  if (styleEl) styleEl.value = cfg.style_prompt || '';
+  if (modelLabel) modelLabel.textContent = cfg.model || 'mimo-v2.5-tts';
+  if (endpointLabel) endpointLabel.textContent = cfg.endpoint || '—';
+}
+
+async function loadDanmuReadPage() {
+  const cfg = await apiFetch('/api/danmu-read/config');
+  applyDanmuReadForm(cfg);
+  const status = document.getElementById('danmuReadStatus');
+  if (status) status.textContent = '';
+}
+
+async function saveDanmuReadSettings() {
+  const body = {
+    enabled: Boolean(document.getElementById('danmuReadEnabled')?.checked),
+    interval_sec: parseInt(document.getElementById('danmuReadInterval')?.value, 10) || 10,
+    voice: document.getElementById('danmuReadVoice')?.value || '冰糖',
+    style_prompt: document.getElementById('danmuReadStylePrompt')?.value || '',
+  };
+  const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
+  if (keyInput && keyInput !== '********') {
+    body.api_key = keyInput;
+  }
+  const cfg = await apiFetch('/api/danmu-read/config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  applyDanmuReadForm(cfg);
+  showToast('读弹幕设置已保存~');
+}
+
+async function probeDanmuRead() {
+  const status = document.getElementById('danmuReadStatus');
+  if (status) status.textContent = '试听请求中（约 10–20 秒）…';
+  const body = {};
+  const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
+  if (keyInput && keyInput !== '********') {
+    body.api_key = keyInput;
+  }
+  const result = await apiFetch('/api/danmu-read/probe', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (status) status.textContent = result.message || '';
+  showToast(result.message || (result.ok ? '试听已开始' : '试听失败'), !result.ok);
+}
+
+function initDanmuReadPage() {
+  document.getElementById('btnSaveDanmuRead')?.addEventListener('click', () => {
+    saveDanmuReadSettings().catch((e) => showToast(e.message, true));
+  });
+  document.getElementById('btnDanmuReadProbe')?.addEventListener('click', () => {
+    probeDanmuRead().catch((e) => {
+      const status = document.getElementById('danmuReadStatus');
+      if (status) status.textContent = '';
+      showToast(e.message, true);
+    });
+  });
+}
+
 function initDanmuPoolPage() {
   document.getElementById('btnSavePoolSettings')?.addEventListener('click', () => {
     saveDanmuPoolSettings().catch((e) => showToast(e.message, true));
@@ -937,6 +1289,124 @@ function initNormalBatchControls() {
   updateNormalBatchPreview();
 }
 
+function configDefaultValue(key) {
+  if (configDefaultsCache && configDefaultsCache[key] !== undefined && configDefaultsCache[key] !== '') {
+    return String(configDefaultsCache[key]);
+  }
+  return '';
+}
+
+async function loadConfigDefaults() {
+  try {
+    configDefaultsCache = await apiFetch('/api/config/defaults');
+  } catch {
+    configDefaultsCache = {};
+  }
+}
+
+function allRestorableSettingKeys() {
+  const keys = new Set();
+  Object.values(SETTINGS_RESTORE_GROUPS).forEach((group) => {
+    group.forEach((key) => keys.add(key));
+  });
+  Object.values(SETTINGS_RESTORE_CHECKBOXES).forEach((group) => {
+    group.forEach((key) => keys.add(key));
+  });
+  return [...keys];
+}
+
+function restorableKeysForScope(scope) {
+  if (scope === 'all') return allRestorableSettingKeys();
+  const fields = SETTINGS_RESTORE_GROUPS[activeSettingsTabId] || [];
+  const checkboxes = SETTINGS_RESTORE_CHECKBOXES[activeSettingsTabId] || [];
+  return [...fields, ...checkboxes];
+}
+
+function applyDefaultToField(key, rawValue) {
+  const value = rawValue === undefined || rawValue === null ? '' : String(rawValue);
+  if (key === 'mic_mode_enabled' || key === 'empty_accel') {
+    const el = document.getElementById(key);
+    if (el) el.checked = value === '1';
+    return;
+  }
+  const el = document.getElementById(key);
+  if (!el) return;
+  if (key === 'memory_mode') {
+    const allowed = ['off', 'dedup_only', 'scene_card', 'strong'];
+    el.value = allowed.includes(value) ? value : 'off';
+    return;
+  }
+  if (key === 'layout_mode') {
+    const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
+    el.value = allowed.includes(value) ? value : 'fullscreen';
+    return;
+  }
+  if (key === 'eviction_mode') {
+    el.value = value === 'accelerate' ? 'accelerate' : 'natural';
+    return;
+  }
+  el.value = value;
+}
+
+/**
+ * 恢复默认只改表单、不 POST /api/config，避免误点直接覆盖持久化配置。
+ * api_key 不参与恢复：保留当前输入（含掩码 ******** 或用户刚输入的新密钥）。
+ */
+function applySettingsDefaults(scope) {
+  if (!configDefaultsCache || !Object.keys(configDefaultsCache).length) {
+    showToast('无法加载默认配置，请刷新页面后重试', true);
+    return;
+  }
+  const keys = restorableKeysForScope(scope);
+  if (scope === 'current' && keys.length === 0) {
+    showToast('当前分组无可恢复的表单项', true);
+    closeRestoreDefaultsModal();
+    return;
+  }
+  const apiKeyEl = document.getElementById('api_key');
+  const apiKeySnapshot = apiKeyEl?.value ?? '';
+  keys.forEach((key) => {
+    applyDefaultToField(key, configDefaultsCache[key]);
+  });
+  if (apiKeyEl) apiKeyEl.value = apiKeySnapshot;
+  syncProviderPresetFromEndpoint();
+  const modelId = configDefaultsCache.model || document.getElementById('model')?.value || '';
+  syncVisionModelPickerFromForm(modelId);
+  updateMicModeHint();
+  updateNormalBatchPreview();
+  closeRestoreDefaultsModal();
+  showToast('已恢复默认值，请点击「保存配置」生效');
+}
+
+function openRestoreDefaultsModal() {
+  const modal = document.getElementById('restoreDefaultsModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeRestoreDefaultsModal() {
+  const modal = document.getElementById('restoreDefaultsModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+function initRestoreDefaultsControls() {
+  document.getElementById('btnRestoreSettingsDefaults')?.addEventListener('click', openRestoreDefaultsModal);
+  document.getElementById('btnRestoreDefaultsCurrent')?.addEventListener('click', () => {
+    applySettingsDefaults('current');
+  });
+  document.getElementById('btnRestoreDefaultsAll')?.addEventListener('click', () => {
+    applySettingsDefaults('all');
+  });
+  document.getElementById('btnRestoreDefaultsCancel')?.addEventListener('click', closeRestoreDefaultsModal);
+  const modal = document.getElementById('restoreDefaultsModal');
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) closeRestoreDefaultsModal();
+  });
+}
+
 function collectFormData() {
   syncVisionModelToHidden();
   const data = {};
@@ -963,6 +1433,21 @@ function catalogModelSupportsMic(modelId) {
   return false;
 }
 
+function micModeConfigSupported() {
+  const apiMode = document.getElementById('api_mode')?.value || 'doubao';
+  const modelId = (document.getElementById('model')?.value || '').trim();
+  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const providerId = guessProviderIdFromEndpoint(endpoint, apiMode);
+  if (apiMode === 'doubao' || providerId === 'doubao') {
+    return micAudioLikelySupported || catalogModelSupportsMic(modelId);
+  }
+  if (providerId === 'mimo') {
+    return micAudioLikelySupported
+      || (modelId === 'mimo-v2.5' && catalogModelSupportsMic(modelId));
+  }
+  return false;
+}
+
 function updateMicModeHint() {
   const hint = document.getElementById('micModeHint');
   const micOn = document.getElementById('mic_mode_enabled')?.checked;
@@ -974,16 +1459,20 @@ function updateMicModeHint() {
   }
   const apiMode = document.getElementById('api_mode')?.value || 'doubao';
   const modelId = document.getElementById('model')?.value || '';
-  const supported = apiMode === 'doubao'
-    && (micAudioLikelySupported || catalogModelSupportsMic(modelId));
-  if (supported) {
+  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const providerId = guessProviderIdFromEndpoint(endpoint, apiMode);
+  if (micModeConfigSupported()) {
     hint.classList.add('hidden');
     hint.textContent = '';
     return;
   }
   hint.classList.remove('hidden');
-  if (apiMode !== 'doubao') {
-    hint.textContent = '麦克风模式需使用火山方舟豆包接口（API 模式选 doubao）。当前为 OpenAI 兼容模式，保存后对着麦克风说话也不会生成接话弹幕。';
+  if (providerId === 'mimo') {
+    hint.textContent = `麦克风模式需使用 MiMo-V2.5（mimo-v2.5）。当前模型「${modelId || '未选'}」不支持开麦；请改选目录中的 mimo-v2.5，保存配置后再开始弹幕。对着麦克风说话，句末停顿约半秒；「测试发送」不检测停顿。`;
+    return;
+  }
+  if (apiMode !== 'doubao' && providerId !== 'doubao') {
+    hint.textContent = '麦克风模式需使用火山方舟豆包（API 模式 doubao）或小米 MiMo（mimo-v2.5）。当前为其他 OpenAI 兼容配置，保存后对着麦克风说话也不会生成接话弹幕。';
     return;
   }
   hint.textContent = `当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选列表里带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），勾选后先点「保存配置」再开始弹幕。使用时对着麦克风说话，句末停顿约半秒；「测试发送」按钮不检测停顿。`;
@@ -994,51 +1483,58 @@ function fillForm(cfg) {
     const el = document.getElementById(name);
     if (el && cfg[name] !== undefined) el.value = cfg[name];
   });
-  const setIfEmpty = (id, fallback) => {
+  const setIfEmpty = (id) => {
     const el = document.getElementById(id);
-    if (el && (cfg[id] === undefined || cfg[id] === '' || cfg[id] === null)) {
+    const fallback = configDefaultValue(id);
+    if (el && fallback && (cfg[id] === undefined || cfg[id] === '' || cfg[id] === null)) {
       el.value = fallback;
     }
   };
-  setIfEmpty('danmu_speed', '2');
-  setIfEmpty('danmu_lines', '20');
-  setIfEmpty('font_size', '24');
-  setIfEmpty('opacity', '100');
-  setIfEmpty('dedup_threshold', '0.5');
-  setIfEmpty('hotkey', 'Ctrl+Shift+B');
-  setIfEmpty('image_max_width', '768');
-  setIfEmpty('temperature', '0.7');
-  setIfEmpty('max_tokens', '512');
-  const imageQuality = document.getElementById('image_quality');
-  if (imageQuality && !cfg.image_quality) imageQuality.value = '85';
-  const danmuMaxChars = document.getElementById('danmu_max_chars');
-  if (danmuMaxChars && !cfg.danmu_max_chars) danmuMaxChars.value = '15';
+  setIfEmpty('danmu_speed');
+  setIfEmpty('danmu_lines');
+  setIfEmpty('font_size');
+  setIfEmpty('opacity');
+  setIfEmpty('dedup_threshold');
+  setIfEmpty('hotkey');
+  setIfEmpty('image_max_width');
+  setIfEmpty('temperature');
+  setIfEmpty('max_tokens');
+  setIfEmpty('image_quality');
+  setIfEmpty('danmu_max_chars');
   const evictionMode = document.getElementById('eviction_mode');
-  if (evictionMode && !cfg.eviction_mode) evictionMode.value = 'natural';
+  if (evictionMode && !cfg.eviction_mode) {
+    evictionMode.value = configDefaultValue('eviction_mode') || 'natural';
+  }
   const emptyAccel = document.getElementById('empty_accel');
   if (emptyAccel) emptyAccel.checked = cfg.empty_accel !== '0';
   const memoryMode = document.getElementById('memory_mode');
   if (memoryMode) {
     const allowed = ['off', 'dedup_only', 'scene_card', 'strong'];
-    memoryMode.value = allowed.includes(cfg.memory_mode) ? cfg.memory_mode : 'off';
+    const fallback = configDefaultValue('memory_mode') || 'off';
+    memoryMode.value = allowed.includes(cfg.memory_mode) ? cfg.memory_mode : fallback;
   }
   const memoryWindow = document.getElementById('memory_window');
-  if (memoryWindow && !cfg.memory_window) memoryWindow.value = '10';
+  if (memoryWindow && !cfg.memory_window) memoryWindow.value = configDefaultValue('memory_window') || '10';
   micAudioLikelySupported = cfg.mic_audio_likely_supported !== false;
   const micMode = document.getElementById('mic_mode_enabled');
   if (micMode) micMode.checked = cfg.mic_mode_enabled === '1';
   updateMicModeHint();
   const micWindow = document.getElementById('mic_window_sec');
-  if (micWindow && !cfg.mic_window_sec) micWindow.value = '5';
+  if (micWindow && !cfg.mic_window_sec) micWindow.value = configDefaultValue('mic_window_sec') || '5';
   const layoutMode = document.getElementById('layout_mode');
   if (layoutMode) {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
-    layoutMode.value = allowed.includes(cfg.layout_mode) ? cfg.layout_mode : 'fullscreen';
+    const fallback = configDefaultValue('layout_mode') || 'fullscreen';
+    layoutMode.value = allowed.includes(cfg.layout_mode) ? cfg.layout_mode : fallback;
   }
   const normalInterval = document.getElementById('normal_recognition_interval_sec');
-  if (normalInterval && !cfg.normal_recognition_interval_sec) normalInterval.value = '5';
+  if (normalInterval && !cfg.normal_recognition_interval_sec) {
+    normalInterval.value = configDefaultValue('normal_recognition_interval_sec') || '5';
+  }
   const normalCount = document.getElementById('normal_reply_count');
-  if (normalCount && !cfg.normal_reply_count) normalCount.value = '5';
+  if (normalCount && !cfg.normal_reply_count) {
+    normalCount.value = configDefaultValue('normal_reply_count') || String(DEFAULT_NORMAL_REPLY_COUNT);
+  }
   updateNormalBatchPreview();
   const modelId = cfg.active_model_id || cfg.default_model_id || cfg.model || '';
   const modelEl = document.getElementById('model');
@@ -1992,6 +2488,7 @@ function initSettingsFieldHints() {
 }
 
 function switchSettingsTab(tabId) {
+  activeSettingsTabId = tabId;
   document.querySelectorAll('.settings-tab').forEach((tab) => {
     const active = tab.dataset.settingsTab === tabId;
     tab.classList.toggle('active', active);
@@ -2008,6 +2505,232 @@ function initSettingsTabs() {
   document.querySelectorAll('.settings-tab').forEach((tab) => {
     tab.addEventListener('click', () => switchSettingsTab(tab.dataset.settingsTab));
   });
+}
+
+/** 默认 GitHub Releases（Supabase release_url 为空时回退） */
+const DEFAULT_RELEASE_URL = 'https://github.com/PEPETII/danmuai/releases';
+const APP_UPDATE_DISMISS_LOCAL_KEY = 'danmu_app_update_dismissed_latest';
+
+const appVersionState = {
+  current: '',
+  latest: '',
+  releaseUrl: DEFAULT_RELEASE_URL,
+  message: '',
+  checkStatus: 'pending', // pending | up_to_date | update_available | check_failed
+};
+
+const appUpdateDismissState = {
+  dismissedLatestVersion: '',
+};
+
+let pendingAppUpdatePrompt = null;
+
+/** 与 app/version_compare.py 一致：数字段比较，禁止字符串 > */
+function normalizeVersionString(raw) {
+  let s = String(raw || '').trim();
+  if (s.length > 1 && (s[0] === 'v' || s[0] === 'V') && /\d/.test(s[1])) {
+    s = s.slice(1);
+  }
+  return s;
+}
+
+function parseVersionSegments(raw) {
+  const normalized = normalizeVersionString(raw);
+  if (!normalized) throw new Error('empty version');
+  let core = normalized;
+  let prerelease = null;
+  const dash = normalized.indexOf('-');
+  if (dash >= 0) {
+    core = normalized.slice(0, dash);
+    prerelease = normalized.slice(dash + 1).trim() || null;
+  }
+  if (!core) return { segments: [0], prerelease };
+  const segments = core.split('.').map((piece) => {
+    const m = /^(\d*)/.exec(piece.trim());
+    if (!m || m[1] === '') throw new Error(`invalid segment: ${piece}`);
+    return parseInt(m[1], 10);
+  });
+  return { segments, prerelease };
+}
+
+function compareVersions(a, b) {
+  const pa = parseVersionSegments(a);
+  const pb = parseVersionSegments(b);
+  const len = Math.max(pa.segments.length, pb.segments.length);
+  for (let i = 0; i < len; i += 1) {
+    const va = pa.segments[i] ?? 0;
+    const vb = pb.segments[i] ?? 0;
+    if (va !== vb) return va < vb ? -1 : 1;
+  }
+  if (pa.prerelease === null && pb.prerelease === null) return 0;
+  if (pa.prerelease === null && pb.prerelease !== null) return 1;
+  if (pa.prerelease !== null && pb.prerelease === null) return -1;
+  if (pa.prerelease === pb.prerelease) return 0;
+  return pa.prerelease < pb.prerelease ? -1 : 1;
+}
+
+function readAppUpdateDismissFromLocal() {
+  try {
+    return String(localStorage.getItem(APP_UPDATE_DISMISS_LOCAL_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function writeAppUpdateDismissToLocal(version) {
+  try {
+    localStorage.setItem(APP_UPDATE_DISMISS_LOCAL_KEY, version ? String(version) : '');
+  } catch {
+    /* ignore */
+  }
+}
+
+function mergeAppUpdateDismissState(remote, localDismissed) {
+  const remoteDismissed =
+    typeof remote?.dismissedLatestVersion === 'string'
+      ? remote.dismissedLatestVersion.trim()
+      : '';
+  appUpdateDismissState.dismissedLatestVersion = remoteDismissed || localDismissed || '';
+}
+
+async function loadAppUpdateDismissState() {
+  const localDismissed = readAppUpdateDismissFromLocal();
+  let remote = null;
+  try {
+    if (API.base) {
+      remote = await fetch(`${API.base}/api/app-update-state`, { cache: 'no-store' }).then((r) =>
+        r.ok ? r.json() : null,
+      );
+    }
+  } catch {
+    remote = null;
+  }
+  mergeAppUpdateDismissState(remote, localDismissed);
+  writeAppUpdateDismissToLocal(appUpdateDismissState.dismissedLatestVersion);
+}
+
+async function persistAppUpdateDismiss(latestVersion) {
+  const normalized = normalizeVersionString(latestVersion);
+  appUpdateDismissState.dismissedLatestVersion = normalized;
+  writeAppUpdateDismissToLocal(normalized);
+  try {
+    await apiFetch('/api/app-update-state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dismissedLatestVersion: normalized }),
+    });
+  } catch {
+    /* localStorage remains */
+  }
+}
+
+function refreshAppVersionFooter() {
+  const currentEl = document.getElementById('appVersionCurrent');
+  const latestEl = document.getElementById('appVersionLatest');
+  if (!currentEl || !latestEl) return;
+  currentEl.textContent = appVersionState.current || '—';
+  latestEl.classList.remove('version-latest-ok', 'version-latest-update', 'version-latest-failed');
+  if (appVersionState.checkStatus === 'check_failed') {
+    latestEl.textContent = '检查失败';
+    latestEl.classList.add('version-latest-failed');
+    return;
+  }
+  if (appVersionState.checkStatus === 'update_available') {
+    latestEl.textContent = appVersionState.latest || '—';
+    latestEl.classList.add('version-latest-update');
+    return;
+  }
+  if (appVersionState.checkStatus === 'up_to_date') {
+    latestEl.textContent = '已是最新';
+    latestEl.classList.add('version-latest-ok');
+    return;
+  }
+  latestEl.textContent = '—';
+}
+
+function showAppUpdateModal(latest, message) {
+  const modal = document.getElementById('appUpdateModal');
+  const msgEl = document.getElementById('appUpdateModalMessage');
+  if (!modal || !msgEl) return;
+  let text = `发现新版本 ${latest}，是否前往下载？`;
+  if (message) text += `\n\n${message}`;
+  msgEl.textContent = text;
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeAppUpdateModal() {
+  const modal = document.getElementById('appUpdateModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+function maybeShowAppUpdateModal() {
+  if (!pendingAppUpdatePrompt) return;
+  const { latest, message } = pendingAppUpdatePrompt;
+  // 同一 remote latest 用户点「否」后不再弹；Supabase 升到更新版本后会再弹
+  if (appUpdateDismissState.dismissedLatestVersion === normalizeVersionString(latest)) {
+    pendingAppUpdatePrompt = null;
+    return;
+  }
+  showAppUpdateModal(latest, message);
+  pendingAppUpdatePrompt = null;
+}
+
+async function initAppVersionAndUpdateCheck() {
+  try {
+    if (!API.base) {
+      appVersionState.checkStatus = 'check_failed';
+      refreshAppVersionFooter();
+      return;
+    }
+    const verRes = await fetch(`${API.base}/api/version`, { cache: 'no-store' });
+    if (!verRes.ok) throw new Error('version api failed');
+    const verData = await verRes.json();
+    const current = String(verData.current_version || '').trim();
+    appVersionState.current = current;
+    window.DANMU_APP_VERSION = current;
+    refreshAppVersionFooter();
+
+    let remoteRow = null;
+    try {
+      if (window.DanmuSupabase?.isConfigured?.()) {
+        remoteRow = await window.DanmuSupabase.fetchAppUpdate();
+      }
+    } catch (e) {
+      console.warn('[version] supabase check failed', e);
+      remoteRow = null;
+    }
+
+    if (!remoteRow?.latest_version) {
+      appVersionState.checkStatus = 'check_failed';
+      refreshAppVersionFooter();
+      await loadAppUpdateDismissState();
+      return;
+    }
+
+    const latest = normalizeVersionString(remoteRow.latest_version);
+    appVersionState.latest = latest;
+    appVersionState.releaseUrl = remoteRow.release_url || DEFAULT_RELEASE_URL;
+    appVersionState.message = remoteRow.message || '';
+
+    if (compareVersions(latest, current) > 0) {
+      appVersionState.checkStatus = 'update_available';
+      pendingAppUpdatePrompt = { latest, message: appVersionState.message };
+    } else {
+      appVersionState.checkStatus = 'up_to_date';
+      pendingAppUpdatePrompt = null;
+    }
+    refreshAppVersionFooter();
+
+    await loadAppUpdateDismissState();
+    maybeShowAppUpdateModal();
+  } catch (e) {
+    console.warn('[version] init check failed', e);
+    appVersionState.checkStatus = 'check_failed';
+    refreshAppVersionFooter();
+  }
 }
 
 const ANNOUNCEMENTS_READ_IDS_KEY = 'danmu_announcements_read_ids';
@@ -2027,6 +2750,7 @@ let overviewBannerLatestId = null;
 const announcementsReadState = {
   readIds: new Set(),
   lastSeenMs: 0,
+  overviewBannerDismissedId: '',
 };
 
 function readAnnouncementsReadIdsFromLocal() {
@@ -2050,6 +2774,26 @@ function readAnnouncementsLastSeenMsFromLocal() {
   }
 }
 
+function readOverviewBannerDismissedIdFromLocal() {
+  try {
+    return localStorage.getItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeOverviewBannerDismissedIdToLocal(id) {
+  try {
+    if (id) {
+      localStorage.setItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY, id);
+    } else {
+      localStorage.removeItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY);
+    }
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 function writeAnnouncementsReadStateToLocal() {
   try {
     const ids = [...announcementsReadState.readIds];
@@ -2062,12 +2806,15 @@ function writeAnnouncementsReadStateToLocal() {
       ANNOUNCEMENTS_LAST_SEEN_MS_KEY,
       String(announcementsReadState.lastSeenMs),
     );
+    writeOverviewBannerDismissedIdToLocal(
+      announcementsReadState.overviewBannerDismissedId,
+    );
   } catch {
     /* ignore quota / private mode */
   }
 }
 
-function mergeAnnouncementsReadState(remote, localIds, localMs) {
+function mergeAnnouncementsReadState(remote, localIds, localMs, localOverviewDismissedId) {
   const mergedIds = new Set();
   if (Array.isArray(remote?.readIds)) {
     for (const id of remote.readIds) {
@@ -2080,8 +2827,14 @@ function mergeAnnouncementsReadState(remote, localIds, localMs) {
     lastSeenMs = Math.max(0, Math.floor(Number(remote.lastSeenMs)));
   }
   lastSeenMs = Math.max(lastSeenMs, localMs);
+  const remoteDismissed =
+    typeof remote?.overviewBannerDismissedId === 'string'
+      ? remote.overviewBannerDismissedId.trim()
+      : '';
+  const overviewBannerDismissedId = remoteDismissed || localOverviewDismissedId || '';
   announcementsReadState.readIds = mergedIds;
   announcementsReadState.lastSeenMs = lastSeenMs;
+  announcementsReadState.overviewBannerDismissedId = overviewBannerDismissedId;
 }
 
 function serializeAnnouncementsReadState() {
@@ -2093,12 +2846,14 @@ function serializeAnnouncementsReadState() {
   return {
     readIds: trimmed,
     lastSeenMs: announcementsReadState.lastSeenMs,
+    overviewBannerDismissedId: announcementsReadState.overviewBannerDismissedId || '',
   };
 }
 
 async function loadAnnouncementsReadState() {
   const localIds = readAnnouncementsReadIdsFromLocal();
   const localMs = readAnnouncementsLastSeenMsFromLocal();
+  const localOverviewDismissedId = readOverviewBannerDismissedIdFromLocal();
   let remote = null;
   try {
     if (API.base) {
@@ -2109,7 +2864,7 @@ async function loadAnnouncementsReadState() {
   } catch {
     remote = null;
   }
-  mergeAnnouncementsReadState(remote, localIds, localMs);
+  mergeAnnouncementsReadState(remote, localIds, localMs, localOverviewDismissedId);
   writeAnnouncementsReadStateToLocal();
   announcementsReadStateLoaded = true;
 }
@@ -2192,19 +2947,13 @@ function updateAnnouncementsNavBadge(show) {
 }
 
 function getOverviewBannerDismissedId() {
-  try {
-    return localStorage.getItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY) || '';
-  } catch {
-    return '';
-  }
+  return announcementsReadState.overviewBannerDismissedId || '';
 }
 
 function setOverviewBannerDismissedId(id) {
-  try {
-    if (id) localStorage.setItem(ANNOUNCEMENTS_OVERVIEW_BANNER_DISMISSED_ID_KEY, id);
-  } catch {
-    /* ignore */
-  }
+  announcementsReadState.overviewBannerDismissedId = id ? String(id) : '';
+  writeOverviewBannerDismissedIdToLocal(announcementsReadState.overviewBannerDismissedId);
+  persistAnnouncementsReadState().catch(console.error);
 }
 
 function buildAnnouncementSnippetParts(row) {
@@ -2500,6 +3249,246 @@ function initFeedbackPage() {
   });
 }
 
+const AI_BUTLER_STATE = {
+  messages: [],
+  pendingPatch: null,
+  pendingReasons: null,
+  pendingCurrent: null,
+  sending: false,
+};
+
+const AI_BUTLER_FIELD_LABELS = {
+  temperature: '创意程度 (temperature)',
+  max_tokens: '输出 token 上限',
+  danmu_speed: '弹幕速度',
+  danmu_lines: '弹幕行数',
+  danmu_max_chars: '单条字数上限',
+  dedup_threshold: '去重阈值',
+  layout_mode: '显示区域',
+  opacity: '透明度',
+  font_size: '字号',
+  eviction_mode: '退场模式',
+  empty_accel: '空轨道加速',
+  image_max_width: '截图最大宽度',
+  image_quality: 'JPEG 质量',
+  memory_mode: '记忆模式',
+  memory_window: '记忆窗口',
+  normal_recognition_interval_sec: '识图间隔（秒）',
+  normal_reply_count: '每批弹幕条数',
+};
+
+function aiButlerFieldLabel(key) {
+  return AI_BUTLER_FIELD_LABELS[key] || key;
+}
+
+function appendAiButlerMessage(role, text) {
+  const box = document.getElementById('aiButlerMessages');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.className =
+    role === 'user' ? 'ai-butler-msg ai-butler-msg-user' : 'ai-butler-msg ai-butler-msg-assistant';
+  const bubble = document.createElement('div');
+  bubble.className = 'ai-butler-msg-bubble';
+  bubble.textContent = text;
+  row.appendChild(bubble);
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+
+function showAiButlerThinking() {
+  removeAiButlerThinking();
+  const box = document.getElementById('aiButlerMessages');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.id = 'aiButlerThinkingRow';
+  row.className = 'ai-butler-msg ai-butler-msg-assistant ai-butler-msg-thinking';
+  row.setAttribute('aria-busy', 'true');
+  const bubble = document.createElement('div');
+  bubble.className = 'ai-butler-msg-bubble ai-butler-thinking-bubble';
+  bubble.textContent = '正在思考中…';
+  row.appendChild(bubble);
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+
+function removeAiButlerThinking() {
+  document.getElementById('aiButlerThinkingRow')?.remove();
+}
+
+function setAiButlerInputBusy(busy) {
+  const input = document.getElementById('aiButlerInput');
+  const sendBtn = document.getElementById('btnAiButlerSend');
+  if (input) input.disabled = busy;
+  if (sendBtn) {
+    sendBtn.disabled = busy;
+    sendBtn.textContent = busy ? '思考中…' : '发送';
+  }
+}
+
+function clearAiButlerSuggestionPanel() {
+  AI_BUTLER_STATE.pendingPatch = null;
+  AI_BUTLER_STATE.pendingReasons = null;
+  AI_BUTLER_STATE.pendingCurrent = null;
+  const panel = document.getElementById('aiButlerSuggestionPanel');
+  const body = document.getElementById('aiButlerPatchBody');
+  const hint = document.getElementById('aiButlerDiscardedHint');
+  if (body) body.replaceChildren();
+  if (hint) {
+    hint.textContent = '';
+    hint.classList.add('hidden');
+  }
+  panel?.classList.add('hidden');
+}
+
+function renderAiButlerSuggestion(data) {
+  const patch = data.patch || {};
+  const keys = Object.keys(patch);
+  if (!keys.length) {
+    clearAiButlerSuggestionPanel();
+    return;
+  }
+  AI_BUTLER_STATE.pendingPatch = { ...patch };
+  AI_BUTLER_STATE.pendingReasons = { ...(data.reasons || {}) };
+  AI_BUTLER_STATE.pendingCurrent = { ...(data.current_values || {}) };
+
+  const body = document.getElementById('aiButlerPatchBody');
+  if (!body) return;
+  body.replaceChildren();
+  keys.forEach((key) => {
+    const tr = document.createElement('tr');
+    const cells = [
+      aiButlerFieldLabel(key),
+      String(AI_BUTLER_STATE.pendingCurrent[key] ?? '—'),
+      String(patch[key] ?? ''),
+      String((data.reasons && data.reasons[key]) || '—'),
+    ];
+    cells.forEach((text) => {
+      const td = document.createElement('td');
+      td.className = 'py-2 pr-3 align-top';
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+
+  const discarded = data.discarded_fields || [];
+  const hint = document.getElementById('aiButlerDiscardedHint');
+  if (hint && discarded.length) {
+    hint.textContent = `已忽略不允许修改的字段：${discarded.join('、')}`;
+    hint.classList.remove('hidden');
+  } else if (hint) {
+    hint.classList.add('hidden');
+  }
+
+  document.getElementById('aiButlerSuggestionPanel')?.classList.remove('hidden');
+}
+
+async function updateAiButlerApiHint() {
+  const hint = document.getElementById('aiButlerApiHint');
+  if (!hint) return;
+  try {
+    const cfg = await apiFetch('/api/config');
+    const hasKey = cfg.api_key === MASKED_API_KEY || Boolean((cfg.api_key || '').trim());
+    const hasModel = Boolean((cfg.model || '').trim());
+    const hasEndpoint = Boolean((cfg.api_endpoint || '').trim());
+    if (hasKey && hasModel && hasEndpoint) {
+      hint.classList.add('hidden');
+    } else {
+      hint.classList.remove('hidden');
+    }
+  } catch {
+    hint.classList.remove('hidden');
+  }
+}
+
+async function sendAiButlerMessage() {
+  if (AI_BUTLER_STATE.sending) return;
+  const input = document.getElementById('aiButlerInput');
+  const text = (input?.value || '').trim();
+  if (!text) {
+    showToast('请输入消息', true);
+    return;
+  }
+
+  AI_BUTLER_STATE.sending = true;
+  setAiButlerInputBusy(true);
+  clearAiButlerSuggestionPanel();
+  appendAiButlerMessage('user', text);
+  AI_BUTLER_STATE.messages.push({ role: 'user', content: text });
+  if (input) input.value = '';
+  showAiButlerThinking();
+
+  try {
+    const history = AI_BUTLER_STATE.messages.slice(0, -1).slice(-20);
+    const data = await apiFetch('/api/ai-butler/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: text, history }),
+    });
+    removeAiButlerThinking();
+    const reply = data.reply || '（无回复）';
+    appendAiButlerMessage('assistant', reply);
+    AI_BUTLER_STATE.messages.push({ role: 'assistant', content: reply });
+    renderAiButlerSuggestion(data);
+    await updateAiButlerApiHint();
+  } catch (err) {
+    removeAiButlerThinking();
+    appendAiButlerMessage('assistant', err.message || '请求失败');
+    showToast(err.message || 'AI 管家请求失败', true);
+  } finally {
+    AI_BUTLER_STATE.sending = false;
+    setAiButlerInputBusy(false);
+  }
+}
+
+async function applyAiButlerPatch() {
+  const patch = AI_BUTLER_STATE.pendingPatch;
+  if (!patch || !Object.keys(patch).length) {
+    showToast('没有可应用的配置建议', true);
+    return;
+  }
+  const applyBtn = document.getElementById('btnAiButlerApply');
+  if (applyBtn) applyBtn.disabled = true;
+  try {
+    await apiFetch('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ data: patch }),
+    });
+    await reloadConfigFromServer();
+    clearAiButlerSuggestionPanel();
+    showToast('配置已应用并同步到助手设置~');
+  } catch (err) {
+    showToast(err.message || '保存配置失败', true);
+  } finally {
+    if (applyBtn) applyBtn.disabled = false;
+  }
+}
+
+function initAiButlerPage() {
+  updateAiButlerApiHint().catch(console.error);
+}
+
+function bindAiButlerControls() {
+  document.getElementById('btnAiButlerSend')?.addEventListener('click', () => {
+    sendAiButlerMessage().catch(console.error);
+  });
+  document.getElementById('aiButlerInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendAiButlerMessage().catch(console.error);
+    }
+  });
+  document.getElementById('btnAiButlerApply')?.addEventListener('click', () => {
+    applyAiButlerPatch().catch(console.error);
+  });
+  document.getElementById('btnAiButlerCancel')?.addEventListener('click', () => {
+    clearAiButlerSuggestionPanel();
+    showToast('已取消配置建议');
+  });
+  document.getElementById('btnAiButlerGoSettings')?.addEventListener('click', () => {
+    navigate('settings');
+  });
+}
+
 function navigate(page) {
   document.querySelectorAll('.page-panel').forEach((p) => p.classList.remove('active'));
   document.querySelectorAll('#nav .sidebar-item').forEach((n) => n.classList.remove('active'));
@@ -2507,12 +3496,14 @@ function navigate(page) {
   if (panel) panel.classList.add('active');
   const btn = document.querySelector(`#nav [data-page="${page}"]`);
   if (btn) btn.classList.add('active');
+  if (page === 'ai-butler') initAiButlerPage();
   if (page === 'settings') {
     loadScreens().catch(console.error);
     loadCustomModels().catch(console.error);
   }
   if (page === 'persona') loadPersonaEditor().catch(console.error);
   if (page === 'danmu-pool') loadDanmuPoolPage().catch((e) => showToast(e.message, true));
+  if (page === 'danmu-read') loadDanmuReadPage().catch((e) => showToast(e.message, true));
   if (page === 'announcements') {
     updateAnnouncementsNavBadge(false);
     loadAnnouncementsPage().catch((e) => showToast(e.message, true));
@@ -2956,6 +3947,7 @@ async function init() {
 
   await loadModelCatalog();
   await loadProviders();
+  await loadConfigDefaults();
   const cfg = await reloadConfigFromServer();
   await loadScreens();
   if (cfg.screen_index !== undefined) {
@@ -2972,7 +3964,10 @@ async function init() {
   initSidebarNavFloatingHints();
   initNormalBatchControls();
   initDanmuPoolPage();
+  initDanmuReadPage();
+  bindAiButlerControls();
   initCaptureRegionControls();
+  initRestoreDefaultsControls();
 
   document.querySelectorAll('.sidebar-nav-hint').forEach((btn) => {
     btn.addEventListener('click', (e) => e.stopPropagation());
@@ -3217,6 +4212,13 @@ async function init() {
   document.getElementById('rewardModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'rewardModal') closeRewardModal();
   });
+  document.getElementById('btnErrorReportDismiss')?.addEventListener('click', dismissErrorReportModal);
+  document.getElementById('btnErrorReportSubmit')?.addEventListener('click', () => {
+    submitErrorReportFromModal().catch((e) => showToast(e.message || '发送失败', true));
+  });
+  document.getElementById('errorReportModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'errorReportModal') dismissErrorReportModal();
+  });
   document.getElementById('modelModalForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const index = parseInt(document.getElementById('modelEditIndex').value, 10);
@@ -3288,6 +4290,31 @@ async function init() {
     const name = document.getElementById('personaSelect').value;
     if (name) await deletePersonaByName(name);
   });
+
+  document.getElementById('btnAppUpdateYes')?.addEventListener('click', () => {
+    const url = appVersionState.releaseUrl || DEFAULT_RELEASE_URL;
+    closeAppUpdateModal();
+    try {
+      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        navigator.clipboard?.writeText(url);
+        showToast('请手动打开下载页：已复制链接到剪贴板', false);
+      }
+    } catch {
+      showToast(`请前往下载：${url}`, false);
+    }
+  });
+  document.getElementById('btnAppUpdateNo')?.addEventListener('click', async () => {
+    const latest = appVersionState.latest;
+    closeAppUpdateModal();
+    if (latest) {
+      await persistAppUpdateDismiss(latest);
+    }
+  });
+  document.getElementById('appUpdateModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'appUpdateModal') closeAppUpdateModal();
+  });
+
   document.getElementById('btnSavePersonaActive')?.addEventListener('click', async () => {
     const active = [];
     document.querySelectorAll('#personaActiveList input:checked').forEach((cb) => active.push(cb.value));
@@ -3299,6 +4326,7 @@ async function init() {
     }
   });
 
+  await initAppVersionAndUpdateCheck();
 }
 
 document.addEventListener('visibilitychange', () => {

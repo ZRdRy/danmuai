@@ -1,4 +1,4 @@
-"""Static assets for Supabase-backed announcements and feedback."""
+"""Static assets for Supabase-backed announcements, feedback, and error reports."""
 
 import pytest
 from app.bundle_paths import project_root
@@ -11,6 +11,33 @@ def test_supabase_example_and_client_exist():
     example = (root / "web" / "static" / "supabase-config.example.js").read_text(encoding="utf-8")
     assert "DANMU_SUPABASE" in example
     assert "YOUR_PROJECT_REF" in example
+
+
+def test_error_reports_migration_exists():
+    root = project_root()
+    path = root / "supabase" / "migrations" / "002_error_reports.sql"
+    assert path.is_file()
+    sql = path.read_text(encoding="utf-8")
+    assert "error_reports" in sql
+    assert "error_reports_quota" in sql
+
+
+def test_app_updates_migration_exists():
+    root = project_root()
+    path = root / "supabase" / "migrations" / "003_app_updates.sql"
+    assert path.is_file()
+    sql = path.read_text(encoding="utf-8")
+    assert "app_updates" in sql
+    assert "anon_read_enabled_app_updates" in sql
+
+
+def test_supabase_client_exports_error_report_api():
+    text = (project_root() / "web" / "static" / "supabase-client.js").read_text(encoding="utf-8")
+    assert "submitErrorReport" in text
+    assert "getErrorReportQuota" in text
+    assert "/rest/v1/error_reports" in text
+    assert "fetchAppUpdate" in text
+    assert "/rest/v1/app_updates" in text
 
 
 def test_supabase_config_js_optional_local():

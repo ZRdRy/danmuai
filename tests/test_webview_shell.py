@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 from app.webview_shell import (
     WebViewShell,
+    _SIGNAL_CREATED,
+    _SIGNAL_LOADED,
     _webview_worker,
     notify_web_console_failure,
     preferred_webview_gui,
@@ -93,19 +95,29 @@ def test_webview_shell_open_uses_nav_queue_when_running():
     shell._nav_queue.put.assert_called_once_with("http://127.0.0.1:18765/#settings")
 
 
-def test_webview_worker_puts_true_before_start(monkeypatch):
+def test_webview_worker_puts_created_before_start(monkeypatch):
     ready_puts = []
+    loaded_handler = []
 
     class FakeReadyQueue:
         def put(self, value):
             ready_puts.append(value)
 
     class FakeEventSlot:
-        def __iadd__(self, _handler):
+        def __init__(self):
+            self._handlers = []
+
+        def __iadd__(self, handler):
+            self._handlers.append(handler)
+            if handler.__name__ == "on_loaded":
+                loaded_handler.append(handler)
             return self
 
     class FakeWindow:
         events = type("E", (), {"loaded": FakeEventSlot(), "closing": FakeEventSlot()})()
+
+        def show(self):
+            pass
 
     fake_webview = MagicMock()
     fake_webview.create_window.return_value = FakeWindow()
@@ -113,7 +125,8 @@ def test_webview_worker_puts_true_before_start(monkeypatch):
 
     def fake_start(**_kwargs):
         start_called.append(True)
-        assert ready_puts == [True]
+        assert ready_puts == [_SIGNAL_CREATED]
+        loaded_handler[0](FakeWindow())
 
     fake_webview.start.side_effect = fake_start
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
@@ -122,7 +135,7 @@ def test_webview_worker_puts_true_before_start(monkeypatch):
     nav_queue = MagicMock()
     _webview_worker("http://127.0.0.1:18765/", "DanmuAI", "edgechromium", FakeReadyQueue(), nav_queue)
 
-    assert ready_puts == [True]
+    assert ready_puts == [_SIGNAL_CREATED, _SIGNAL_LOADED]
     assert start_called
 
 
@@ -140,6 +153,9 @@ def test_webview_worker_start_error_puts_error(monkeypatch):
     class FakeWindow:
         events = type("E", (), {"loaded": FakeEventSlot(), "closing": FakeEventSlot()})()
 
+        def show(self):
+            pass
+
     fake_webview = MagicMock()
     fake_webview.create_window.return_value = FakeWindow()
     fake_webview.start.side_effect = RuntimeError("webview boom")
@@ -148,7 +164,100 @@ def test_webview_worker_start_error_puts_error(monkeypatch):
 
     _webview_worker("http://127.0.0.1:18765/", "DanmuAI", None, FakeReadyQueue(), MagicMock())
 
-    assert ready_puts == [True, "webview boom"]
+    assert ready_puts == [_SIGNAL_CREATED, "webview boom"]
+
+
+def test_webview_shell_poll_handshake_success(monkeypatch):
+    import time
+
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    shell._process = MagicMock()
+    shell._process.is_alive.return_value = True
+    shell._handshake_deadline = time.monotonic() + 10.0
+
+    signals = [_SIGNAL_CREATED, _SIGNAL_LOADED]
+
+    class FakeQueue:
+        def get_nowait(self):
+            return signals.pop(0)
+
+    shell._ready_queue = FakeQueue()
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell.poll_handshake("/") == "success"
+    assert shell._started is True
+
+
+def test_webview_shell_poll_handshake_error_after_created(monkeypatch):
+    import time
+
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    shell._process = MagicMock()
+    shell._process.is_alive.return_value = True
+    shell._handshake_deadline = time.monotonic() + 10.0
+
+    signals = [_SIGNAL_CREATED, "webview boom"]
+
+    class FakeQueue:
+        def get_nowait(self):
+            return signals.pop(0)
+
+    shell._ready_queue = FakeQueue()
+    fallbacks = []
+    monkeypatch.setattr(
+        "app.webview_shell._fallback_to_system_browser",
+        lambda s, p, r: fallbacks.append((p, r)),
+    )
+    monkeypatch.setattr(shell, "_terminate", lambda: None)
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell.poll_handshake("/#settings") == "failure"
+    assert shell._started is False
+    assert fallbacks == [("/#settings", "webview boom")]
+
+
+def test_webview_shell_poll_handshake_load_timeout(monkeypatch):
+    import queue
+    import time
+
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    shell._process = MagicMock()
+    shell._process.is_alive.return_value = True
+    shell._handshake_deadline = time.monotonic() + 10.0
+
+    class FakeQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def get_nowait(self):
+            self.calls += 1
+            if self.calls == 1:
+                return _SIGNAL_CREATED
+            raise queue.Empty()
+
+    shell._ready_queue = FakeQueue()
+    fallbacks = []
+    monkeypatch.setattr(
+        "app.webview_shell._fallback_to_system_browser",
+        lambda s, p, r: fallbacks.append(r),
+    )
+    monkeypatch.setattr(shell, "_terminate", lambda: None)
+    monkeypatch.setattr("app.webview_shell._load_timeout_sec", lambda: 0.01)
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell.poll_handshake("/") == "pending"
+    time.sleep(0.02)
+    assert shell.poll_handshake("/") == "failure"
+    assert fallbacks == []
 
 
 def test_notify_web_console_failure_schedules_ui(qtbot, monkeypatch):
@@ -173,11 +282,25 @@ def test_notify_web_console_failure_schedules_ui(qtbot, monkeypatch):
     assert warnings
 
 
+def test_ensure_server_ready_verifies_http_when_startup_ok(monkeypatch):
+    from app import webview_shell
+
+    server = MagicMock()
+    server.startup_ok = True
+    server.base_url = "http://127.0.0.1:18765"
+    server.wait_ready = MagicMock()
+    monkeypatch.setattr(webview_shell, "wait_for_http_server", lambda url, timeout: True)
+
+    assert webview_shell._ensure_server_ready(server) is True
+    server.wait_ready.assert_not_called()
+
+
 def test_ensure_server_ready_false_notifies_and_optional_browser(monkeypatch):
     from app import webview_shell
 
     server = MagicMock()
     server.base_url = "http://127.0.0.1:18765"
+    server.startup_ok = False
     server.wait_ready.return_value = False
     server.bridge.danmu_app.logger = MagicMock()
 
@@ -197,4 +320,4 @@ def test_ensure_server_ready_false_notifies_and_optional_browser(monkeypatch):
 
     assert webview_shell._ensure_server_ready(server) is False
     assert notified
-    assert fallbacks == [("/#settings", "web console slow start")]
+    assert fallbacks == []

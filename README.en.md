@@ -33,7 +33,7 @@ Platforms with a model picker catalog: Doubao, DashScope, SiliconFlow, MiMo (`GE
 
 **Thinking mode** is always sent as `disabled` on outbound requests (`app/ai_client.py`). Streaming parsers use `content` only, not `reasoning_content`.
 
-**Microphone mode** sends `input_audio` only on the Doubao Responses path. OpenAI-compatible presets (including MiMo) are screenshot + text only; use a Doubao multimodal model such as `doubao-seed-2-0-mini-260428` for mic.
+**Microphone mode** attaches audio on Doubao Responses (`input_audio` + `audio_url`) or on Xiaomi MiMo Chat Completions (`input_audio` + `input_audio.data`, **model `mimo-v2.5` only**). Other OpenAI-compatible presets remain screenshot + text only; for mic on Doubao use a multimodal model such as `doubao-seed-2-0-mini-260428`.
 
 ## Contributing
 

@@ -55,6 +55,7 @@ _register(
     image_before_text=True,
     stream_usage_in_final_chunk=False,
     max_tokens_field="max_completion_tokens",
+    mic_audio=True,
 )
 _register("custom_openai")
 _register("custom_doubao", transport="doubao", stream_usage_in_final_chunk=False, max_tokens_field="max_output_tokens")

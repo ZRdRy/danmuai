@@ -25,9 +25,10 @@
 | --- | --- | --- |
 | 截图状态 | `screenshot_timer`、`_latest_screenshot`、`_latest_screenshot_time`、`_latest_screenshot_id`、`_screenshot_backoff_level` | 管理截图触发、当前帧缓存、截图节流与退避。 |
 | 请求状态 | `ai_in_flight`、`mic_in_flight`、`_is_generating`、`screenshot_round`、`_pending_request_meta`、`_request_started_at_by_id`、`_inflight_*`、`MAX_*`、`_last_api_trigger_at` | 管理视觉/麦克风请求在途状态、请求编号、耗时统计与失败暂停。 |
-| 场景状态 | `_last_scene_hash`、`_active_scene_probe_size`、`_scene_generation`、`_scene_rhythm_pause_until`、`_scene_api_gate_active`、`_scene_memory`、`_activity_state`、`_last_activity_collect_at` | 管理场景探测、代际推进、场景 gate、活动观察和记忆清理。 |
+| 场景状态 | `_active_scene_probe_size`、`_scene_generation`、`_scene_generation_bumped_at`、`_scene_memory`、`_activity_state`、`_last_activity_collect_at` | 场景代际键、探测尺寸元数据、活动观察与记忆（W-019：已移除未接线的 hash/gate 死状态；场景探测恢复见 ISSUE-014）。 |
 | 队列状态 | `reply_buffer`、`danmu_queue`、`reply_timer`、`_current_batch`、`_batch_id`、`_queue_*`、`_reply_*`、`_latest_*_screenshot_id` | 管理回复入队、批次节奏与可见库存。 |
 | 麦克风状态 | `_mic_request_seq`、`_mic_batch_id`、`_mic_utterance_detector`、`_mic_poll_timer`、`_mic_poll_ms`、`_mic_service` | 管理语音端点检测、轮询窗口和麦克风插入请求。 |
+| 读弹幕 TTS | `_danmu_read_service` | MiMo TTS 定时朗读屏上弹幕（`QTimer` + 池线程 HTTP + 本地播放）；与视觉/麦克风独立。 |
 | UI 状态 | `web_server`、`web_bridge`、`webview_shell`、`web_runtime_state`、`_live_status_timer`、`_region_selector`、`_region_selection_state`、`_region_selection_screen_index` | 管理控制台桥接、Web 展示态对象、live status 定时器与识图区域框选 UI。 |
 | 服务对象 | `stats_state`、`_request_scheduler`、`_request_timing_service` | `StatsState`、调度与 timing 服务（非 `RuntimeState` 投影字段）。 |
 | 统计状态 | `danmu_count`、`_total_input_tokens`、`_total_output_tokens`、`_start_time`、`_rtt_history`、`session_run_log`、`lifetime_stats`、`_lifetime_flush_timer` | 管理会话统计、累计统计和延迟样本。 |
@@ -37,7 +38,7 @@
 | 字段名 | 当前定义位置 | 用途 | 主要写入位置 | 主要读取位置 | 是否可迁移到 `RuntimeState` | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `screenshot_timer` | `main.py:157` | 驱动主截图节奏的 `QTimer`。 | `main.py::start()`、`main.py::_on_config_changed()`、`main.py::_apply_screenshot_interval_backoff()`、`main.py::stop()` | `main.py::_on_screenshot_timer()`、`main.py::_on_ai_error()` | 否 | Qt 定时器对象，应保留在 `DanmuApp`。 |
-| `_latest_screenshot` | `main.py:175` | 缓存最新一帧 `QPixmap`，供视觉请求或麦克风插入复用。 | `main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_capture_frame_hash()`、`main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()` | 部分 | 元数据可迁移，但 `QPixmap` 对象本身不宜放入纯状态对象。 |
+| `_latest_screenshot` | `main.py:175` | 缓存最新一帧 `QPixmap`，供视觉请求或麦克风插入复用。 | `main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()` | 部分 | 元数据可迁移，但 `QPixmap` 对象本身不宜放入纯状态对象。 |
 | `_latest_screenshot_time` | `main.py:176` | 记录最新截图的 `monotonic` 时间。 | `main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_current_danmu_delay_sec()`、`main.py::_trigger_api_call()`、`main.py::_maybe_refill_after_scene_change()` | 是 | 纯时间戳。 |
 | `_latest_screenshot_id` | `main.py:212` | 当前缓存帧的单调递增编号（仅**有效** pixmap 接受后递增；无效帧 `reason=invalid_pixmap` 不递增）。 | `main.py::_capture_screenshot()`、`main.py::_on_scene_generation_advanced()` | `main.py::_trigger_api_call()`、`main.py::_trigger_mic_api_call()`、`main.py::_is_reply_stale()` | 是 | 是视觉链路的主键之一。 |
 | `_inflight_screenshot_id` | `main.py:236` | 当前在途视觉请求绑定的截图编号。 | `main.py::_trigger_api_call()`、`main.py::_release_inflight_for_source()`、`main.py::start()`、`main.py::stop()` | 日志/调试 | 是 | 纯请求元数据。 |
@@ -68,16 +69,11 @@
 
 | 字段名 | 当前定义位置 | 用途 | 主要写入位置 | 主要读取位置 | 是否可迁移到 `RuntimeState` | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `_last_scene_hash` | `main.py:206` | 缓存上一帧场景指纹。 | `main.py::_sync_scene_probe_size()`、`main.py::_probe_scene_change()`、`main.py::start()`、`main.py::stop()` | `main.py::_probe_scene_change()` | 是 | 纯场景检测状态。 |
-| `_active_scene_probe_size` | `main.py:207` | 当前生效的场景探测采样尺寸。 | `main.py::_sync_scene_probe_size()` | `main.py::_capture_screenshot()` 间接通过 `_scene_probe_size()` 使用 | 是 | 可与配置快照一起迁移。 |
-| `_scene_generation` | `main.py:208` | 当前场景代际（随请求/记忆携带；运行期通常不递增）。 | `main.py::start()`、`main.py::stop()` | `main.py::_trigger_api_call()`、`main.py::_on_ai_reply()`、`main.py::_is_reply_stale()`、`main.py::_append_scene_memory_to_user_pt()` | 是 | 视觉链路关键主键之一。 |
-| `_stale_scene_inflight_drop_count` | `main.py:210` | 因场景切换导致在途回复被丢弃的次数。 | `main.py::_log_reply_drop()`、`main.py::start()` | `main.py::_log_reply_drop()` | 是 | 统计性场景状态。 |
-| `_stale_scene_consume_drop_count` | `main.py:211` | 因场景切换导致消费队列时被丢弃的次数。 | `main.py::_log_reply_drop()`、`main.py::start()` | `main.py::_log_reply_drop()` | 是 | 与上一个字段成对出现。 |
-| `_scene_rhythm_pause_until` | `main.py:216` | 场景切换后 API 暂停截止时间（`SCENE_RHYTHM_PAUSE_SEC`；非已移除的 realtime 显示模式）。 | `main.py::_on_scene_generation_advanced()`、`main.py::start()` | `main.py::_scene_api_block_reason()`、`main.py::_rhythm_cooldown_left_ms()` | 是 | 可迁移为 gate 状态。 |
-| `_scene_captures_after_change` | `main.py:217` | 记录场景切换后已采集了多少帧。 | `main.py::_on_scene_generation_advanced()`、`main.py::_capture_screenshot()`、`main.py::start()` | `main.py::_scene_api_block_reason()` | 是 | 用于场景 gate。 |
-| `_scene_api_gate_active` | `main.py:218` | 场景切换后的 API gate 是否开启。 | `main.py::_on_scene_generation_advanced()`、`main.py::_scene_api_block_reason()`、`main.py::start()` | `main.py::_capture_screenshot()`、`main.py::_scene_api_block_reason()` | 是 | 纯布尔门控。 |
-| `_scene_gate_prev_hash` | `main.py:219` | 进入场景 gate 前的上一场景 hash。 | `main.py::_on_scene_generation_advanced()`、`main.py::start()` | `main.py::_scene_api_block_reason()` | 是 | 纯元数据。 |
-| `_scene_generation_bumped_at` | `main.py:220` | 最近一次场景代际推进时间。 | `main.py::_probe_scene_change()`、`main.py::start()` | `main.py::_probe_scene_change()` | 是 | 用于 debounce。 |
+| `_active_scene_probe_size` | `main.py` | 当前生效的场景探测采样尺寸（诊断/配置同步）。 | `main.py::_sync_scene_probe_size()` | `GenerationPipelineState`、`_scene_probe_size()` | 是 | W-019：无运行时 hash 比较。 |
+| `_scene_generation` | `main.py` | 当前场景代际（随请求/记忆携带；**运行期恒为 0**，截图不推进代际）。 | `main.py::start()`、`main.py::stop()` | `main.py::_trigger_api_call()`、`main.py::_on_ai_reply()`、`main.py::_append_scene_memory_to_user_pt()` | 是 | `_is_reply_stale` 恒不过期（W-001）。恢复探测见 ISSUE-014。 |
+| `_stale_scene_inflight_drop_count` | `main.py` | 因场景切换导致在途回复被丢弃的次数。 | `main.py::_log_reply_drop()`、`main.py::start()` | `main.py::_log_reply_drop()` | 是 | 统计性场景状态。 |
+| `_stale_scene_consume_drop_count` | `main.py` | 因场景切换导致消费队列时被丢弃的次数。 | `main.py::_log_reply_drop()`、`main.py::start()` | `main.py::_log_reply_drop()` | 是 | 与上一个字段成对出现。 |
+| `_scene_generation_bumped_at` | `main.py` | 最近一次场景代际推进时间（诊断投影；当前无写入方）。 | `main.py::start()` | `GenerationPipelineState` | 是 | ISSUE-014 / W-020。 |
 | `_scene_memory` | `main.py:222` | 当前场景记忆存储对象。 | `main.py::__init__()`、`main.py::_on_ai_reply()`、`main.py::_record_scene_memory_display()`、`main.py::_on_scene_generation_advanced()`、`main.py::start()` | `main.py::_append_scene_memory_to_user_pt()`、`main.py::_record_scene_memory_display()` | 部分 | 记忆对象引用建议保留在服务层，元数据可迁移。 |
 | `_activity_state` | `main.py:223` | 前台窗口/活动观察状态对象，用于把近期活动线索拼接进 prompt。 | `main.py::__init__()`、`main.py::_collect_activity_observation()`、`main.py::_on_scene_generation_advanced()`、`main.py::start()` | `main.py::_append_scene_memory_to_user_pt()`、`main.py::_collect_activity_observation()` | 部分 | 对象引用建议保留在编排层，投影元数据可后续迁移。 |
 | `_last_activity_collect_at` | `main.py:224` | 最近一次采集活动观察的 `monotonic` 时间。 | `main.py::_collect_activity_observation()`、`main.py::start()` | `main.py::_collect_activity_observation()` | 是 | 纯时间戳，可并入未来 `RuntimeState`。 |
@@ -112,6 +108,7 @@
 | `_mic_poll_timer` | `main.py:168` | 驱动麦克风 PCM 轮询的 `QTimer`。 | `main.py::_start_mic_utterance_detector()`、`main.py::_stop_mic_utterance_detector()` | `main.py::_poll_mic_utterance()` | 否 | Qt 定时器对象。 |
 | `_mic_poll_ms` | `main.py:169` | 麦克风轮询窗口长度，毫秒。 | `main.py::__init__()` | `main.py::_poll_mic_utterance()`、`main.py::_calibrate_mic_noise_floor()` | 是 | 可迁移为运行策略字段。 |
 | `_mic_service` | `main.py:223` | 麦克风采集服务对象。 | `main.py::__init__()`、`main.py::_sync_mic_service()`、`main.py::stop()` | `main.py::_poll_mic_utterance()`、`main.py::_on_mic_utterance_end()`、`main.py::_calibrate_mic_noise_floor()` | 部分 | 服务引用保留在编排层，运行元数据后续可拆。 |
+| `_danmu_read_service` | `main.py:277` | 读弹幕 TTS 服务（`DanmuReadService`：定时器、合成 in-flight、播放 busy）。 | `main.py::__init__()`、`main.py::apply_danmu_read_config()` | `main.py::start()` → `on_engine_started()`、`main.py::stop()` → `on_engine_stopped()`、`main.py::run_danmu_read_probe()` | 部分 | 配置键 `danmu_read_*` / `tts_*`；HTTP 在 `QThreadPool`。 |
 
 ## UI 状态
 
@@ -153,7 +150,6 @@
   - `_inflight_screenshot_id`
   - `_inflight_started_at`
   - `_scene_generation`
-  - `_scene_rhythm_pause_until`
   - `_queue_low_watermark`
   - `_reply_scene_count`
   - `_reply_filler_count`

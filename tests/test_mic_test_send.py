@@ -57,13 +57,13 @@ def test_send_mic_probe_unsupported_model():
     assert result.error == "unsupported_model"
 
 
-def test_send_mic_probe_non_doubao_mode():
+def test_send_mic_probe_unsupported_generic_openai():
     config = MagicMock()
     worker = MagicMock()
     worker._resolve_request_credentials.return_value = (
         "https://example.com/v1",
         "sk-test",
-        "model",
+        "gpt-4o",
         "openai",
     )
     result = send_mic_probe(
@@ -74,7 +74,42 @@ def test_send_mic_probe_non_doubao_mode():
         "data:audio/wav;base64,abc",
     )
     assert result.ok is False
-    assert result.error == "unsupported_api_mode"
+    assert result.error == "unsupported_model"
+
+
+def test_send_mic_probe_success_mimo_via_request():
+    worker = MagicMock()
+    worker._resolve_request_credentials.return_value = (
+        "https://api.xiaomimimo.com/v1",
+        "sk-test",
+        "mimo-v2.5",
+        "openai-compatible",
+    )
+
+    def fake_request(*args, **kwargs):
+        worker._emit_result(
+            "finished",
+            "听到了",
+            "mic_probe",
+            0,
+            0,
+            0.0,
+            0,
+            50,
+            8,
+        )
+
+    worker._request.side_effect = fake_request
+    result = send_mic_probe(
+        MagicMock(),
+        worker,
+        placeholder_image_data_uri(),
+        "test",
+        "data:audio/wav;base64,abc",
+    )
+    assert result.ok is True
+    worker._request.assert_called_once()
+    worker._request_doubao.assert_not_called()
 
 
 def test_send_mic_probe_success_via_worker():

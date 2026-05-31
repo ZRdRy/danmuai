@@ -6,7 +6,12 @@ from app.providers.capabilities import ProviderCapabilities
 
 
 class DefaultOpenAIAdapter:
-    def build_vision_user_content(self, user_pt: str, image_data_uri: str) -> list[dict]:
+    def build_vision_user_content(
+        self,
+        user_pt: str,
+        image_data_uri: str,
+        audio_data_uri: str | None = None,
+    ) -> list[dict]:
         image_part = {"type": "image_url", "image_url": {"url": image_data_uri}}
         text_part = {"type": "text", "text": user_pt}
         return [text_part, image_part]
@@ -20,7 +25,7 @@ class DefaultOpenAIAdapter:
     ) -> None:
         if max_tokens > 0:
             data[caps.max_tokens_field] = max_tokens
-        if caps.stream_usage_in_final_chunk:
+        if caps.stream_usage_in_final_chunk and data.get("stream"):
             data["stream_options"] = {"include_usage": True}
         else:
             data.pop("stream_options", None)

@@ -167,14 +167,6 @@ class FakeEngine:
         return 0
 
 
-class FakeHistory:
-    def __init__(self):
-        self.calls = []
-
-    def add(self, content, persona, round_num):
-        self.calls.append((content, persona, round_num))
-
-
 class FakeHistoryWriter:
     def __init__(self):
         self.calls = []

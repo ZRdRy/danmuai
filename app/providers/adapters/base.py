@@ -8,7 +8,12 @@ from app.providers.capabilities import ProviderCapabilities
 
 
 class ProviderAdapter(Protocol):
-    def build_vision_user_content(self, user_pt: str, image_data_uri: str) -> list[dict]:
+    def build_vision_user_content(
+        self,
+        user_pt: str,
+        image_data_uri: str,
+        audio_data_uri: str | None = None,
+    ) -> list[dict]:
         ...
 
     def patch_openai_chat_body(

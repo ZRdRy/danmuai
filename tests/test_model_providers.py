@@ -129,3 +129,22 @@ def test_model_likely_supports_mic_audio():
     assert model_likely_supports_mic_audio("doubao-seed-2-0-mini-260428")
     assert model_likely_supports_mic_audio("doubao-seed-1-6-vision-250615")
     assert not model_likely_supports_mic_audio("")
+
+
+def test_model_supports_mic_audio_mimo_v25_only():
+    from app.model_providers import model_supports_mic_audio
+
+    ep = "https://api.xiaomimimo.com/v1"
+    assert model_supports_mic_audio("mimo-v2.5", endpoint=ep, api_mode="openai-compatible")
+    assert not model_supports_mic_audio("mimo-v2-omni", endpoint=ep, api_mode="openai-compatible")
+    assert not model_supports_mic_audio(
+        "doubao-seed-1-6-flash-250828", endpoint=ep, api_mode="openai-compatible"
+    )
+
+
+def test_model_supports_mic_audio_doubao_endpoint():
+    from app.model_providers import model_supports_mic_audio
+
+    ep = "https://ark.cn-beijing.volces.com/api/v3"
+    assert model_supports_mic_audio("doubao-seed-2-0-mini-260428", endpoint=ep, api_mode="doubao")
+    assert not model_supports_mic_audio("doubao-seed-1-6-flash-250828", endpoint=ep, api_mode="doubao")

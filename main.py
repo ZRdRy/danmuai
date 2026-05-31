@@ -55,7 +55,6 @@ from app.danmu_engine import (
     normalize_danmu_display_text,
 )
 from app.danmu_pool import any_danmu_pool_source_enabled, sample_danmu_for_config
-from app.history import DanmuHistory
 from app.history_writer import HistoryWriter
 from app.hotkey import HotkeyManager
 from app.lifetime_stats import LifetimeStats
@@ -71,6 +70,7 @@ from app.memory.activity_prompt import append_activity_line_to_user_pt, format_a
 from app.memory.types import MEMORY_MODE_OFF, bullet_angle_from_index
 from app.mic_encode import pcm_to_wav_data_uri
 from app.mic_prompt import build_mic_insert_user_pt
+from app.danmu_read_service import DanmuReadService
 from app.mic_service import MicService, mic_mode_enabled, mic_window_sec_from_config
 from app.mic_test import pcm_metrics
 from app.mic_utterance import (
@@ -79,8 +79,7 @@ from app.mic_utterance import (
     mic_utterance_config_from_store,
 )
 from app.model_providers import (
-    is_doubao_mode,
-    model_likely_supports_mic_audio,
+    mic_audio_supported_for_config,
     resolve_active_model_id,
 )
 from app.overlay import DanmuOverlay
@@ -96,7 +95,6 @@ from app.reply_parser import (
 )
 from app.reply_queue import AIReplyFIFOBuffer, QueuedReply
 from app.scene_fingerprint import (
-    fingerprint_from_pixmap,
     scene_debug_enabled,
     scene_probe_size_from_config,
 )
@@ -166,6 +164,10 @@ class DanmuApp(QObject):
 
     def __init__(self, web_launch_mode: str = "webview"):
         super().__init__()
+        from app.startup_trace import log_startup
+
+        log_startup("danmu_app.init.begin")
+        init_started = time.perf_counter()
         # --- Web 桥接状态（FastAPI/uvicorn 在独立线程；改 Qt 对象须经 web_bridge 信号）---
         self.web_launch_mode = web_launch_mode
         self.web_server = None
@@ -176,14 +178,18 @@ class DanmuApp(QObject):
         self._region_selection_state = "idle"
         self._region_selection_screen_index: int | None = None
         # --- 核心子系统（配置、截图、弹幕引擎、叠加层、托盘、全局热键）---
+        config_started = time.perf_counter()
         self.config = ConfigStore()
+        log_startup(
+            "config_store.done",
+            ms=(time.perf_counter() - config_started) * 1000.0,
+        )
         Translator.set_language(
             Translator.resolve_language(self.config.get("language", ""))
         )
         self.logger = SanitizedLogger()
         self.personae = PersonaManager(self.config)
         self.templates = TemplateManager(self.config)
-        self.history = DanmuHistory(self.config)
         self.history_writer = HistoryWriter(self.config)
         self.capturer = ScreenCapturer(self.config)
         self.engine = DanmuEngine(self.config)
@@ -196,7 +202,9 @@ class DanmuApp(QObject):
             danmu_lines=self.config.get_int("danmu_lines", 0),
             layout_mode=self.config.get("layout_mode", "fullscreen"),
         )
+        tray_started = time.perf_counter()
         self.tray = TrayManager(self)
+        log_startup("tray.done", ms=(time.perf_counter() - tray_started) * 1000.0)
         self.hotkey = HotkeyManager(self)
 
         # --- 视觉 AI 请求与截图定时（MAX_IN_FLIGHT=1：并发会破坏过期与顺序判定）---
@@ -251,7 +259,6 @@ class DanmuApp(QObject):
         self._pending = False
         self._latest_displayed_round = 0
         self._request_timing_service = RequestTimingService()
-        self._last_scene_hash: int | None = None
         self._active_scene_probe_size: int = scene_probe_size_from_config(self.config)
         self._scene_generation: int = 0
         self._inflight_scene_generation: int = 0
@@ -261,10 +268,6 @@ class DanmuApp(QObject):
         self._latest_requested_screenshot_id: int = 0
         self._latest_queued_screenshot_id: int = 0
         self._latest_displayed_screenshot_id: int = 0
-        self._scene_rhythm_pause_until: float = 0.0
-        self._scene_captures_after_change: int = 0
-        self._scene_api_gate_active: bool = False
-        self._scene_gate_prev_hash: int | None = None
         self._scene_generation_bumped_at: float = 0.0
         # RequestScheduler / RequestTimingService：Phase 4 真实所有权；DanmuApp 仅保留 @property 兼容 façade
         self._request_scheduler = RequestScheduler()
@@ -272,6 +275,7 @@ class DanmuApp(QObject):
         self._activity_state = RecentActivityState()
         self._last_activity_collect_at: float = 0.0
         self._mic_service = MicService(log_fn=lambda msg: self.logger.info(msg))
+        self._danmu_read_service = DanmuReadService(self)
 
         # --- 会话统计（Token/弹幕计数；stop/quit 时并入 LifetimeStats）---
         self.stats_state = StatsState()
@@ -293,7 +297,15 @@ class DanmuApp(QObject):
         self._live_status_timer.timeout.connect(self._publish_live_status)
 
         self.tray.show()
+        qt_app = QApplication.instance()
+        if qt_app is not None:
+            qt_app.processEvents()
+        hotkey_started = time.perf_counter()
         self.hotkey.register()
+        log_startup(
+            "hotkey.register.done",
+            ms=(time.perf_counter() - hotkey_started) * 1000.0,
+        )
         self.config_changed.connect(self._on_config_changed)
         if self.config.get("danmu_display_mode", "").strip().lower() == "realtime":
             self.config.set("danmu_display_mode", "normal")
@@ -319,34 +331,29 @@ class DanmuApp(QObject):
             self.logger.info(
                 f"Web 控制台: {self.web_server.base_url} （托盘可再次打开）"
             )
-            if self.web_launch_mode == "browser":
-                QTimer.singleShot(
-                    900, lambda: open_web_console_browser(self.web_server, initial)
-                )
-            else:
-                from app.bundle_paths import is_frozen
-                from app.webview_shell import attach_webview_shell
-
-                webview_delay_ms = 2000 if is_frozen() else 600
-                QTimer.singleShot(
-                    webview_delay_ms,
-                    lambda: attach_webview_shell(
-                        self, self.web_server, initial_path=initial
-                    ),
-                )
-                self.logger.info(
-                    "桌面壳: pywebview（--web-browser 可改用系统浏览器）"
-                )
         else:
-            self.logger.error(
-                f"Web 控制台未能启动: {self.web_server.base_url} "
-                "（端口可能被占用，请关闭其它 DanmuAI 实例后重启）"
+            self.logger.warning(
+                f"Web 控制台仍在启动: {self.web_server.base_url} "
+                "（就绪后将打开桌面壳，请勿仅用浏览器替代）"
             )
-            from app.webview_shell import notify_web_console_failure
 
-            notify_web_console_failure(self, "web_console.startup_failed")
+        if self.web_launch_mode == "browser":
+            QTimer.singleShot(
+                900,
+                lambda: self._open_web_console_when_ready(initial, use_browser=True),
+            )
+        else:
+            self.logger.info(
+                "桌面壳: pywebview（--web-browser 可改用系统浏览器）"
+            )
+            self._schedule_webview_attach(initial)
 
         self._sync_reply_batch_config()
+        log_startup(
+            "danmu_app.init.end",
+            ms=(time.perf_counter() - init_started) * 1000.0,
+            startup_ok=bool(self.web_server and self.web_server.startup_ok),
+        )
 
     def _get_request_scheduler(self) -> RequestScheduler:
         try:
@@ -502,7 +509,6 @@ class DanmuApp(QObject):
     def _sync_scene_probe_size(self) -> None:
         probe = self._scene_probe_size()
         if probe != getattr(self, "_active_scene_probe_size", probe):
-            self._last_scene_hash = None
             self._active_scene_probe_size = probe
 
     def _on_config_changed(self):
@@ -537,16 +543,7 @@ class DanmuApp(QObject):
         self._sync_mic_service()
 
     def _mic_audio_supported(self) -> bool:
-        default_model_id = self.config.get_default_model_id()
-        if default_model_id:
-            for model in self.config.get_custom_models():
-                if model.get("modelId") == default_model_id:
-                    if not is_doubao_mode(model.get("mode", "")):
-                        return False
-                    return model_likely_supports_mic_audio(default_model_id)
-        if not is_doubao_mode(self.config.get("api_mode", "doubao")):
-            return False
-        return model_likely_supports_mic_audio(resolve_active_model_id(self.config))
+        return mic_audio_supported_for_config(self.config)
 
     def _sync_mic_service(self) -> None:
         """按配置与运行状态启停 MicService / 端点检测器，避免保存配置时反复开关默认录音设备。
@@ -1038,12 +1035,6 @@ class DanmuApp(QObject):
         if bridge:
             bridge.publish_status()
 
-    def _capture_frame_hash(self, pixmap: QPixmap | None = None) -> int | None:
-        target = pixmap if pixmap is not None else self._latest_screenshot
-        if target is None:
-            return None
-        return fingerprint_from_pixmap(target, probe_size=self._scene_probe_size())
-
     def _scene_api_block_reason(self) -> str:
         return ""
 
@@ -1063,10 +1054,6 @@ class DanmuApp(QObject):
             last_trigger_at=scheduler.last_api_trigger_at,
             min_interval_elapsed=min_api_interval_elapsed,
         )
-
-    def _rhythm_cooldown_left_ms(self) -> int:
-        left = self._scene_rhythm_pause_until - time.monotonic()
-        return max(0, int(left * 1000))
 
     def _log_api_schedule(
         self,
@@ -1092,7 +1079,7 @@ class DanmuApp(QObject):
                 in_flight=self._has_visual_request_in_flight(),
                 block_reason=block_reason,
                 scene_gen=self._scene_generation,
-                cooldown_left_ms=self._rhythm_cooldown_left_ms(),
+                cooldown_left_ms=0,
             )
         )
 
@@ -1155,17 +1142,9 @@ class DanmuApp(QObject):
                 f"consume_drops={self._stale_scene_consume_drop_count}"
             )
 
-    def _should_clear_batch_on_scene_change(self) -> bool:
-        if self.config.get("freshness", "medium") == "strict":
-            return True
-        return self.config.get("clear_batch_on_scene_change", "0") == "1"
-
     def _scene_debug_log(self, message: str) -> None:
         if scene_debug_enabled():
             self.logger.debug(message)
-
-    def _freshness_mode(self) -> str:
-        return self.config.get("freshness", "medium")
 
     def _memory_tone_hint(self, persona_id: str) -> str:
         if not persona_id:
@@ -1928,7 +1907,6 @@ class DanmuApp(QObject):
         self._latest_queued_screenshot_id = 0
         self._latest_displayed_screenshot_id = 0
         self._latest_requested_screenshot_id = 0
-        self._last_scene_hash = None
         self._scene_generation = 0
         self._inflight_scene_generation = 0
         self._stale_scene_inflight_drop_count = 0
@@ -1938,10 +1916,6 @@ class DanmuApp(QObject):
         self._screenshot_backoff_level = 0
         self._inflight_started_at = 0.0
         self._inflight_screenshot_id = 0
-        self._scene_rhythm_pause_until = 0.0
-        self._scene_captures_after_change = 0
-        self._scene_api_gate_active = False
-        self._scene_gate_prev_hash = None
         self._scene_generation_bumped_at = 0.0
         self._get_request_scheduler().reset_trigger_time()
         self._mic_request_seq = 0
@@ -1973,6 +1947,17 @@ class DanmuApp(QObject):
         self._set_error_status_safe("", is_error=False)
         self.logger.info(tr("app.started"))
         self._sync_mic_service()
+        read_svc = self.__dict__.get("_danmu_read_service")
+        if read_svc is not None:
+            read_svc.on_engine_started()
+
+    def apply_danmu_read_config(self, patch: dict) -> dict:
+        """读弹幕配置（Web PUT /api/danmu-read/config）；须在主线程调用。"""
+        return self._danmu_read_service.apply_config(patch)
+
+    def run_danmu_read_probe(self, api_key_override: str | None = None) -> dict:
+        """TTS 试听；须在主线程调用。"""
+        return self._danmu_read_service.run_probe(api_key_override=api_key_override)
 
     def _flush_session_runtime_to_lifetime(self) -> None:
         stats_state = self._ensure_stats_state()
@@ -2013,10 +1998,12 @@ class DanmuApp(QObject):
         self._latest_requested_screenshot_id = 0
         self._latest_queued_screenshot_id = 0
         self._latest_displayed_screenshot_id = 0
-        self._last_scene_hash = None
         self._scene_generation = 0
         self._inflight_scene_generation = 0
         self.engine.stop()
+        read_svc = self.__dict__.get("_danmu_read_service")
+        if read_svc is not None:
+            read_svc.on_engine_stopped()
         self._mic_service.stop()
         self.overlay.stop_render_loop()
         self.overlay.hide()
@@ -2030,10 +2017,73 @@ class DanmuApp(QObject):
         else:
             self.start()
 
+    def _open_web_console_when_ready(
+        self,
+        path: str = "/",
+        *,
+        use_browser: bool = False,
+        attempt: int = 0,
+    ) -> None:
+        server = self.web_server
+        if not server:
+            return
+        from app.webview_shell import wait_for_http_server
+
+        if not server.startup_ok and not wait_for_http_server(
+            server.base_url, timeout=1.0
+        ):
+            if attempt < 40:
+                QTimer.singleShot(
+                    500,
+                    lambda: self._open_web_console_when_ready(
+                        path, use_browser=use_browser, attempt=attempt + 1
+                    ),
+                )
+                return
+            from app.webview_shell import notify_web_console_failure
+
+            notify_web_console_failure(self, "web_console.startup_failed")
+            return
+        if use_browser:
+            from app.web_console import open_web_console_browser
+
+            open_web_console_browser(server, path)
+            return
+        from app.webview_shell import attach_webview_shell
+
+        shell = getattr(self, "webview_shell", None)
+        if shell and shell.is_running():
+            shell.open(path)
+            return
+        attach_webview_shell(self, server, initial_path=path)
+
+    def _schedule_webview_attach(self, initial_path: str, *, attempt: int = 0) -> None:
+        """Wait for local HTTP ready, then attach pywebview (non-blocking)."""
+        if self.web_launch_mode != "webview" or not self.web_server:
+            return
+        shell = getattr(self, "webview_shell", None)
+        if shell and shell.is_running():
+            return
+        if attempt == 0:
+            from app.bundle_paths import is_frozen
+            from app.startup_trace import log_startup
+
+            delay_ms = 400 if is_frozen() else 800
+            log_startup("webview_shell.scheduled", delay_ms=delay_ms)
+            QTimer.singleShot(
+                delay_ms,
+                lambda: self._schedule_webview_attach(initial_path, attempt=1),
+            )
+            return
+        self._open_web_console_when_ready(initial_path, use_browser=False, attempt=0)
+
     def _open_web_console(self, path: str = "/") -> None:
         shell = getattr(self, "webview_shell", None)
-        if shell:
+        if shell and shell.is_running():
             shell.open(path)
+            return
+        if self.web_launch_mode == "webview" and self.web_server:
+            self._open_web_console_when_ready(path, use_browser=False)
             return
         if self.web_server:
             from app.web_console import open_web_console_browser
@@ -2054,6 +2104,10 @@ class DanmuApp(QObject):
 
         # 1. 停止弹幕引擎和截图（清零在途与队列，避免线程池仍持有旧 runnable）
         self.stop()
+
+        read_svc = self.__dict__.get("_danmu_read_service")
+        if read_svc is not None:
+            read_svc.shutdown()
 
         # 2. 卸载快捷键（避免进程退出后 keyboard 钩子仍驻留）
         self.hotkey.unregister()
@@ -2144,17 +2198,24 @@ def _web_launch_mode_from_argv() -> str:
 
 
 def main():
+    from app.startup_trace import log_startup, mark_app_start
+
     multiprocessing.freeze_support()
+    mark_app_start()
+    log_startup("main.begin")
     _check_deprecated_launch_args()
     sys.excepthook = global_exception_hook
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    log_startup("qapplication.created")
 
     from app.single_instance import SingleInstanceGuard
 
     instance_guard = SingleInstanceGuard()
     if not instance_guard.try_acquire():
+        log_startup("single_instance.done", acquired=False)
         return sys.exit(0)
+    log_startup("single_instance.done", acquired=True)
 
     launch_mode = _web_launch_mode_from_argv()
     _danmu = DanmuApp(web_launch_mode=launch_mode)

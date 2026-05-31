@@ -25,7 +25,7 @@ python-mss 和 Danmaku 都对 DanmuAI 有参考价值，但当前不应直接替
 screenshot_timer（Qt 主线程）
   -> ScreenCapturer.grab()              app/snipper.py
   -> QPixmap（按 screen_index 全屏）
-  -> _probe_scene_change()              app/scene_fingerprint.py
+  -> _on_normal_capture_tick()          main.py（无 _probe_scene_change；见 ISSUE-014）
   -> _trigger_api_call()
   -> QThreadPool + AiRunnable
   -> compress_screenshot()              main.py（QPixmap -> PIL -> JPEG Base64）

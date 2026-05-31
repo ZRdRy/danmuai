@@ -14,6 +14,7 @@ class HotkeyManager(QObject):
         self.app = app
         self._hotkey_str = "ctrl+shift+b"
         self._registered = False
+        self._registered_hotkey_str = ""
         self._bridge = _ToggleBridge()
         self._bridge.toggle.connect(self.app.toggle)
 
@@ -24,18 +25,20 @@ class HotkeyManager(QObject):
         try:
             keyboard.add_hotkey(self._hotkey_str, self._bridge.toggle.emit)
             self._registered = True
+            self._registered_hotkey_str = self._hotkey_str
         except Exception as e:
             import traceback
             logger = SanitizedLogger()
             logger.warning(f"[Hotkey] registration failed: {e}\n{traceback.format_exc()}")
 
     def unregister(self):
-        if self._registered:
+        if self._registered and self._registered_hotkey_str:
             try:
-                keyboard.remove_hotkey(self._hotkey_str)
+                keyboard.remove_hotkey(self._registered_hotkey_str)
             except Exception:
                 pass
-            self._registered = False
+        self._registered = False
+        self._registered_hotkey_str = ""
 
     def set_keys(self, keys: str):
         hotkey = keys.lower().replace(" ", "")

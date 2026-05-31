@@ -236,7 +236,7 @@ class AiWorker(QObject):
     ):
         """双模式路由入口：根据 api_mode 分发到 _request_doubao 或 _request_openai。
 
-        audio_data_uri 仅豆包模式使用（麦克风插入）。
+        audio_data_uri 用于麦克风插入：豆包 Responses（audio_url）或 MiMo Chat Completions（input_audio）。
         仅通过 finished/error 信号回传结果，禁止在此读写 DanmuApp / Overlay / 回复队列。
         """
         if self._stopping:
@@ -279,6 +279,7 @@ class AiWorker(QObject):
                 screenshot_id,
                 captured_at,
                 scene_generation,
+                audio_data_uri=audio_data_uri,
                 resolved=resolved,
             )
 
@@ -444,13 +445,14 @@ class AiWorker(QObject):
         captured_at: float,
         scene_generation: int,
         *,
+        audio_data_uri: str | None = None,
         resolved: tuple[str, str, str, str] | None = None,
     ):
         """OpenAI Chat Completions SSE 流式请求。
 
         请求体结构：model / messages(system+user+image) / stream=True / stream_options(include_usage)。
         重试策略与 _request_doubao 一致：超时或未知异常最多 2 次，HTTP 状态错误不重试。
-        不支持 audio（OpenAI 模式无麦克风插入）。
+        麦克风插入仅 MiMo（mimo-v2.5）经 adapter 附加 input_audio。
         """
         if resolved is None:
             resolved = self._resolve_request_credentials()
@@ -476,6 +478,12 @@ class AiWorker(QObject):
             self._emit_result("error", tr("ai.error_api_key_missing"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
             return
 
+        from app.model_providers import model_supports_mic_audio
+
+        mic_audio = audio_data_uri
+        if mic_audio and not model_supports_mic_audio(model, endpoint=endpoint, api_mode=api_mode):
+            mic_audio = None
+
         http_client = self._get_http_client()
         adapter = get_openai_adapter(endpoint, api_mode)
         caps = get_capabilities_for_endpoint(endpoint, api_mode)
@@ -485,7 +493,9 @@ class AiWorker(QObject):
                 {"role": "system", "content": system_pt},
                 {
                     "role": "user",
-                    "content": adapter.build_vision_user_content(user_pt, image_data_uri),
+                    "content": adapter.build_vision_user_content(
+                        user_pt, image_data_uri, audio_data_uri=mic_audio
+                    ),
                 },
             ],
             "temperature": temperature,
@@ -498,7 +508,7 @@ class AiWorker(QObject):
             "Content-Type": "application/json",
         }
 
-        # 重试策略同 _request_doubao；OpenAI 模式不支持 audio_data_uri
+        # 重试策略同 _request_doubao
         for attempt in range(2):
             try:
                 text, input_tokens, output_tokens = self._stream_openai(

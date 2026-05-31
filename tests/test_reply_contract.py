@@ -1,4 +1,5 @@
 from app.personae import (
+    BUILTIN_PERSONAE,
     DEFAULT_REPLY_FILLER_COUNT,
     DEFAULT_REPLY_SCENE_COUNT,
     REPLY_CONTRACT,
@@ -10,7 +11,6 @@ from app.personae import (
     reply_counts_from_config,
     strip_reply_contract,
 )
-
 
 class FakeConfig:
     def __init__(self, data=None):
@@ -71,20 +71,20 @@ def test_build_reply_contract_en_uses_max_chars():
 def test_get_reply_contract_uses_danmu_max_chars_from_config():
     cfg = FakeConfig({"danmu_max_chars": "30"})
     contract = get_reply_contract(cfg)
-    assert "每条不超过 30 个字" in contract
+    assert "每条≤30字" in contract
 
 
 def test_get_reply_contract_clamps_danmu_max_chars():
     cfg = FakeConfig({"danmu_max_chars": "2"})
     contract = get_reply_contract(cfg)
-    assert "每条不超过 5 个字" in contract
+    assert "每条≤5字" in contract
 
 
 def test_normal_mode_contract_uses_single_reply_count():
     cfg = FakeConfig({"danmu_display_mode": "normal", "normal_reply_count": "8"})
     contract = get_reply_contract(cfg)
-    assert "固定返回 8 条弹幕" in contract
-    assert "必须与当前画面或直播氛围相关" in contract
+    assert "固定 8 条" in contract
+    assert "优先贴当前画面" in contract
     assert "前 " not in contract
     assert "后 " not in contract
     assert "泛用弹幕" not in contract
@@ -92,7 +92,8 @@ def test_normal_mode_contract_uses_single_reply_count():
 
 def test_build_normal_reply_contract_zh():
     text = build_normal_reply_contract_zh(6, 20)
-    assert "固定返回 6 条弹幕" in text
+    assert "固定 6 条" in text
+    assert "优先贴当前画面" in text
     assert '"弹幕6"' in text
 
 
@@ -115,7 +116,22 @@ def test_ensure_reply_contract_replaces_old_counts():
     old = build_reply_contract_zh(2, 3) + " 保留补充"
     cfg = FakeConfig({"normal_reply_count": "4"})
     merged = ensure_reply_contract(old, cfg)
-    assert "固定返回 4 条弹幕" in merged
-    assert "必须与当前画面或直播氛围相关" in merged
+    assert "固定 4 条" in merged
+    assert "优先贴当前画面" in merged
     assert "保留补充" in merged
     assert "前 2 条必须强相关当前画面" not in merged
+
+
+def test_strip_reply_contract_removes_new_normal_contract():
+    custom = build_normal_reply_contract_zh(5, 15) + " 嘴碎吐槽党"
+    assert strip_reply_contract(custom) == "嘴碎吐槽党"
+
+
+def test_test1_persona_strip_roundtrip():
+    body = BUILTIN_PERSONAE["测试1"]["system_zh"]
+    assert "【人格：真实直播间五人弹幕】" in body
+    cfg = FakeConfig({"normal_reply_count": "5"})
+    merged = ensure_reply_contract(body, cfg)
+    assert "固定 5 条" in merged
+    assert strip_reply_contract(merged) == body
+    assert "测试" not in BUILTIN_PERSONAE

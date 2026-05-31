@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 
 from app.application.config_service import (
     MASKED_API_KEY,
@@ -33,6 +33,7 @@ from app.application.config_service import (
     apply_web_config_patch,
 )
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen, resource_path
+from app.startup_trace import log_startup, web_console_ready_timeout
 from app.live_overlay_hub import LiveOverlayHub
 
 if TYPE_CHECKING:
@@ -159,7 +160,7 @@ def _mask_api_key(config) -> str:
 
 def export_config(config) -> dict[str, Any]:
     from app.config_defaults import config_value_with_default
-    from app.model_providers import model_likely_supports_mic_audio, resolve_active_model_id
+    from app.model_providers import mic_audio_supported_for_config, resolve_active_model_id
     from app.web_api.custom_models import _mask_model
 
     data = {key: config_value_with_default(config, key) for key in WEB_CONFIG_KEYS}
@@ -172,7 +173,7 @@ def export_config(config) -> dict[str, Any]:
     data["default_model_id"] = config.get_default_model_id()
     data["active_model_id"] = active_model_id
     data.update(model_status)
-    data["mic_audio_likely_supported"] = model_likely_supports_mic_audio(active_model_id)
+    data["mic_audio_likely_supported"] = mic_audio_supported_for_config(config)
     data["custom_models"] = [
         _mask_model(m) for m in config.get_custom_models() if isinstance(m, dict)
     ]
@@ -211,6 +212,8 @@ class WebConsoleBridge(QObject):
     """HTTP/WS 工作线程与 Qt 主线程之间的唯一写入口。
 
     模式：uvicorn 路由里只 bridge.xxx_requested.emit(...)；槽在主线程调 DanmuApp。
+    需同步返回的写操作（人格/弹幕库/麦克风测试等）用 invoke_on_main（BlockingQueuedConnection）。
+    勿在 uvicorn 线程对 invoke_on_main 使用 QTimer.singleShot（槽常不触发）。
     publish_status / _broadcast_* 从主线程经 call_soon_threadsafe 喂 asyncio 队列推 WS。
     日志环 _log_ring 供 /api/logs 与 /ws/logs 回放；状态 500ms 定时器在 attach 时挂到 danmu_app。
     """
@@ -218,6 +221,7 @@ class WebConsoleBridge(QObject):
     log_received = pyqtSignal(str, str)
     status_updated = pyqtSignal(object)
     status_refresh_requested = pyqtSignal()
+    sync_invoke_requested = pyqtSignal(object)
 
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
@@ -239,6 +243,10 @@ class WebConsoleBridge(QObject):
         self.cached_screens: list[dict[str, Any]] = []
 
         self.status_refresh_requested.connect(self.publish_status)
+        self.sync_invoke_requested.connect(
+            self._on_sync_invoke,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
         self.start_requested.connect(danmu_app.start)
         self.stop_requested.connect(danmu_app.stop)
         self.toggle_requested.connect(danmu_app.toggle)
@@ -252,6 +260,32 @@ class WebConsoleBridge(QObject):
 
         danmu_app.logger.log_emitted.connect(self._on_log)
         danmu_app.state_changed.connect(self._on_state_changed)
+
+    def invoke_on_main(self, fn, /, *args, **kwargs):
+        """在 bridge 所在线程（Qt 主线程）同步执行 fn；从 uvicorn 线程调用时阻塞直至完成。"""
+        if QThread.currentThread() is self.thread():
+            return fn(*args, **kwargs)
+
+        result_holder: dict[str, object] = {}
+        error_holder: list[BaseException] = []
+
+        def runner() -> None:
+            try:
+                result_holder["result"] = fn(*args, **kwargs)
+            except BaseException as exc:
+                error_holder.append(exc)
+
+        self.sync_invoke_requested.emit(runner)
+        if error_holder:
+            raise error_holder[0]
+        if "result" in result_holder:
+            return result_holder["result"]
+        return None
+
+    @pyqtSlot(object)
+    def _on_sync_invoke(self, runner: object) -> None:
+        if callable(runner):
+            runner()
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -431,6 +465,7 @@ class WebConsoleServer:
         self.bridge.danmu_app.logger.info(
             f"Web 控制台 HTTP/WS 已监听 {self.base_url}"
         )
+        log_startup("uvicorn.started", base_url=self.base_url)
         self._ready.set()
         self.startup_ok = True
 
@@ -475,6 +510,8 @@ class WebConsoleServer:
             bridge.danmu_app.logger.error(msg)
             append_frozen_log(msg)
             return
+
+        log_startup("uvicorn.import.done")
 
         ws_impl = "websockets"
         try:
@@ -532,6 +569,12 @@ class WebConsoleServer:
         @app.get("/api/config")
         def get_config():
             return export_config(bridge.danmu_app.config)
+
+        @app.get("/api/config/defaults")
+        def get_config_defaults():
+            from app.config_defaults import export_web_config_defaults
+
+            return export_web_config_defaults()
 
         @app.get("/api/personae")
         def list_personae():
@@ -773,14 +816,26 @@ class WebConsoleServer:
 
 def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebConsoleServer:
     """构造 bridge + 启动 WebConsoleServer；主线程挂 500ms 状态刷新定时器。"""
+    log_startup("attach_web_console.begin", port=port)
     bridge = WebConsoleBridge(danmu_app)
     danmu_app.web_bridge = bridge
     server = WebConsoleServer(bridge, port=port)
     danmu_app.web_server = server
+    log_startup("web_server.start")
     server.start()
 
-    ready_timeout = 30.0 if is_frozen() else 12.0
-    if not server.wait_ready(timeout=ready_timeout):
+    ready_timeout = web_console_ready_timeout()
+    wait_started = time.perf_counter()
+    ready = server.wait_ready(timeout=ready_timeout)
+    wait_ms = (time.perf_counter() - wait_started) * 1000.0
+    log_startup(
+        "web_server.wait_ready",
+        ok=ready,
+        wait_ms=wait_ms,
+        timeout_s=ready_timeout,
+        startup_ok=server.startup_ok,
+    )
+    if not ready:
         thread = server._thread
         thread_alive = bool(thread and thread.is_alive())
         append_frozen_log(
@@ -815,6 +870,7 @@ def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebCo
 
     QTimer.singleShot(0, _cache_screens)
 
+    log_startup("attach_web_console.end", startup_ok=server.startup_ok)
     return server
 
 

@@ -30,7 +30,9 @@ from app.translations import tr
 
 logger = logging.getLogger(__name__)
 
-_SENSITIVE_CONFIG_KEYS = frozenset({"api_key_encrypted", "custom_models", "api_key"})
+_SENSITIVE_CONFIG_KEYS = frozenset(
+    {"api_key_encrypted", "tts_api_key_encrypted", "custom_models", "api_key"}
+)
 
 
 def _redact_config_value_for_log(key: str, value: str) -> str:
@@ -227,6 +229,49 @@ class ConfigStore:
             logger.warning(tr("config.insecure_store"))
             encoded = b64encode(key.encode("utf-8")).decode("utf-8")
             self.set("api_key_encoded", encoded)
+
+    def get_tts_api_key(self) -> str:
+        """读弹幕专用 TTS API Key（tts_api_key_encrypted）。"""
+        encrypted = self.get("tts_api_key_encrypted", "")
+        if encrypted and _HAS_CRYPTO and self._fernet:
+            try:
+                return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+            except Exception:
+                logger.warning(tr("config.decrypt_failed"))
+                return ""
+        encoded = self.get("tts_api_key_encoded", "")
+        if not encoded:
+            return ""
+        try:
+            return b64decode(encoded).decode("utf-8")
+        except Exception:
+            return ""
+
+    def set_tts_api_key(self, key: str) -> None:
+        """写入 TTS API Key（加密存储）。"""
+        if _HAS_CRYPTO and self._fernet:
+            encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
+            with self._write_lock:
+                try:
+                    self.conn.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        ("tts_api_key_encrypted", encrypted),
+                    )
+                    if "tts_api_key_encoded" in self._cache:
+                        self.conn.execute(
+                            "DELETE FROM config WHERE key=?", ("tts_api_key_encoded",)
+                        )
+                        self._cache.pop("tts_api_key_encoded", None)
+                    self.conn.commit()
+                    self._cache["tts_api_key_encrypted"] = encrypted
+                except sqlite3.OperationalError as e:
+                    self.conn.rollback()
+                    logger.error(tr("config.api_key_write_failed").format(error=e))
+                    raise
+        else:
+            logger.warning(tr("config.insecure_store"))
+            encoded = b64encode(key.encode("utf-8")).decode("utf-8")
+            self.set("tts_api_key_encoded", encoded)
 
     # --- 选区持久化 ---
 

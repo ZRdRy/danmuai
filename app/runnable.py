@@ -105,14 +105,31 @@ class AiRunnable(QRunnable):
         if self.mic_pcm and self.mic_attach_audio:
             audio_data_uri = pcm_to_wav_data_uri(self.mic_pcm)
 
-        self.worker._request(
-            image_data_uri,
-            self.system_pt,
-            self.user_pt,
-            self.persona_id,
-            self.request_round,
-            self.screenshot_id,
-            self.captured_at,
-            self.scene_generation,
-            audio_data_uri=audio_data_uri,
-        )
+        try:
+            self.worker._request(
+                image_data_uri,
+                self.system_pt,
+                self.user_pt,
+                self.persona_id,
+                self.request_round,
+                self.screenshot_id,
+                self.captured_at,
+                self.scene_generation,
+                audio_data_uri=audio_data_uri,
+            )
+        except Exception as exc:
+            if not self.worker._stopping:
+                self.worker._emit_safe(
+                    "error",
+                    tr("ai.error_request_failed").format(error=exc),
+                    self.persona_id,
+                    self.request_round,
+                    self.screenshot_id,
+                    self.captured_at,
+                    self.scene_generation,
+                    0,
+                    0,
+                )
+                logger.debug(
+                    f"ai request failed in runnable: {type(exc).__name__}: {exc}"
+                )

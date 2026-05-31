@@ -94,6 +94,17 @@ See also [AGENTS.md](../AGENTS.md) and `DANMU_SCENE_DEBUG` / `DANMU_API_SCHEDULE
 - `WebConsoleBridge.refresh_status()` → `DanmuApp.build_status_snapshot()` → `StatusSnapshotBuilder`.
 - Does not participate in capture → overlay data path.
 
+## Bootstrap / UI shell (outside visual pipeline)
+
+| Entry | Thread / process | Role |
+|-------|------------------|------|
+| `app/web_console.py::WebConsoleServer.start()` | `threading.Thread` (`DanmuWebConsole`) | uvicorn FastAPI on `127.0.0.1:18765` |
+| `app/webview_shell.py::WebViewShell.begin_start()` | `multiprocessing.Process` (`DanmuWebView`, spawn) | pywebview desktop shell (child owns `webview.start()`) |
+| `app/webview_shell.py::_nav_poll_loop` | `threading.Thread` (`DanmuWebViewNav`, daemon, child process) | Cross-process `nav_queue` → `window.load_url` |
+| `attach_webview_shell` handshake | Qt `QTimer` 50 ms poll on main thread | Non-blocking `ready_queue` drain; does not block capture pipeline |
+
+Startup timing: `app/startup_trace.py` → `%APPDATA%/DanmuAI/startup.log` (frozen).
+
 ## Non-goals
 
 - Full `_on_ai_error()` backoff branches.

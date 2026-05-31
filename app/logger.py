@@ -12,18 +12,50 @@ AUTH_HEADER_PATTERN = re.compile(r"Authorization['\"]?\s*[:=]\s*['\"]?Bearer\s+[
 ENCRYPTED_KEY_PATTERN = re.compile(r"gAAAA[A-Za-z0-9_-]{50,}")
 GENERIC_API_KEY_PATTERN = re.compile(r"(?:api[_-]?key|apikey)\s*[:=]\s*['\"]?[A-Za-z0-9_-]{20,}", re.IGNORECASE)
 
+_log_bus: "LogEmitBus | None" = None
 
-class SanitizedLogger(QObject):
+
+class LogEmitBus(QObject):
+    """全局日志 UI 推送总线；所有 SanitizedLogger 实例经此发射 log_emitted。"""
+
     log_emitted = pyqtSignal(str, str)  # level, message
 
+
+def _log_bus_is_alive(bus: "LogEmitBus | None") -> bool:
+    if bus is None:
+        return False
+    try:
+        from PyQt6 import sip
+
+        return not sip.isdeleted(bus)
+    except Exception:
+        return True
+
+
+def get_log_bus() -> LogEmitBus:
+    global _log_bus
+    if not _log_bus_is_alive(_log_bus):
+        _log_bus = LogEmitBus()
+    return _log_bus
+
+
+def _ensure_stream_handler() -> logging.Logger:
+    logger = logging.getLogger("DanmuAI")
+    logger.setLevel(logging.DEBUG)
+    if not any(isinstance(handler, logging.StreamHandler) for handler in logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(handler)
+    return logger
+
+
+class SanitizedLogger:
     def __init__(self):
-        super().__init__()
-        self.logger = logging.getLogger("DanmuAI")
-        self.logger.setLevel(logging.DEBUG)
-        if not any(isinstance(handler, logging.StreamHandler) for handler in self.logger.handlers):
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-            self.logger.addHandler(handler)
+        self.logger = _ensure_stream_handler()
+
+    @property
+    def log_emitted(self):
+        return get_log_bus().log_emitted
 
     @staticmethod
     def _format_msg(msg: str, args: tuple) -> str:
@@ -46,7 +78,7 @@ class SanitizedLogger(QObject):
     def _emit(self, level: str, msg: str, *args) -> None:
         safe = self._sanitize(self._format_msg(msg, args))
         getattr(self.logger, level.lower())(safe)
-        self.log_emitted.emit(level.upper(), safe)
+        get_log_bus().log_emitted.emit(level.upper(), safe)
 
     def debug(self, msg: str, *args):
         self._emit("debug", msg, *args)

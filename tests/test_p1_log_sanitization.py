@@ -116,3 +116,18 @@ class TestP1007LogSanitization:
 
         assert "Authorization: Bearer (已隐藏)" in caplog.text
         assert "secret_token_1234567890abcdef" not in caplog.text
+
+    def test_multiple_instances_share_log_bus(self):
+        """临时 SanitizedLogger 实例的 UI 推送应走同一全局 bus。"""
+        from app.logger import get_log_bus
+
+        received: list[tuple[str, str]] = []
+        get_log_bus().log_emitted.connect(lambda level, msg: received.append((level, msg)))
+
+        logger_a = SanitizedLogger()
+        logger_b = SanitizedLogger()
+
+        logger_a.info("from instance a")
+        logger_b.warning("from instance b")
+
+        assert received == [("INFO", "from instance a"), ("WARNING", "from instance b")]

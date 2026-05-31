@@ -125,9 +125,11 @@ def test_build_local_fallback_batch_empty_when_pool_disabled(monkeypatch):
 
 def test_builtin_persona_prompt_contains_release_contract():
     manager = PersonaManager(FakeConfig())
-    system_pt, _ = manager.get_prompt("吐槽型")
-    assert "固定返回 5 条弹幕" in system_pt
-    assert "必须与当前画面或直播氛围相关" in system_pt
+    system_pt, user_pt = manager.get_prompt("吐槽型")
+    assert "固定 5 条" in system_pt
+    assert "优先贴当前画面" in system_pt
+    assert "嘴碎吐槽党" in system_pt
+    assert user_pt == "看图发弹幕："
     assert "前 2 条必须强相关当前画面" not in system_pt
     assert "泛用弹幕" not in system_pt
 
@@ -136,6 +138,6 @@ def test_builtin_persona_prompt_reflects_normal_reply_count():
     cfg = FakeConfig({"normal_reply_count": "9"})
     manager = PersonaManager(cfg)
     system_pt, _ = manager.get_prompt("吐槽型")
-    assert "固定返回 9 条弹幕" in system_pt
-    assert "必须与当前画面或直播氛围相关" in system_pt
+    assert "固定 9 条" in system_pt
+    assert "优先贴当前画面" in system_pt
     assert "前 4 条必须强相关当前画面" not in system_pt

@@ -16,12 +16,6 @@ MIC_INSERT_BLOCK = (
 )
 
 
-def build_mic_insert_block(scene_count: int = 3, filler_count: int = 3) -> str:
-    """Fixed mic-insert instruction (6 items: 3 voice + 3 screen atmosphere)."""
-    del scene_count, filler_count
-    return MIC_INSERT_BLOCK
-
-
 def build_mic_insert_user_pt(user_pt: str, config: "ConfigStore | None" = None) -> str:
     del config
     block = MIC_INSERT_BLOCK
@@ -29,8 +23,3 @@ def build_mic_insert_user_pt(user_pt: str, config: "ConfigStore | None" = None) 
     if not base:
         return block
     return f"{base}\n\n{block}"
-
-
-def append_mic_context_to_user_pt(user_pt: str, config: "ConfigStore | None" = None) -> str:
-    """Legacy alias used by mic test send probe."""
-    return build_mic_insert_user_pt(user_pt, config)

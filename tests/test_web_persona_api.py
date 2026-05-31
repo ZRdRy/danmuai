@@ -73,9 +73,9 @@ def test_builtin_save_system_and_user_prompt(persona_app):
 def test_builtin_restore_clears_saved_override(persona_app):
     persona_api.save_template(persona_app, "吐槽型", "临时覆盖", "自定义用户提示")
     restored = persona_api.restore_builtin_default(persona_app, "吐槽型")
-    assert "吐槽感更强" in restored["system_custom"]
+    assert "嘴碎吐槽党" in restored["system_custom"]
     detail = persona_api.get_template_detail(persona_app, "吐槽型")
-    assert "吐槽感更强" in detail["system_custom"]
+    assert "嘴碎吐槽党" in detail["system_custom"]
     assert "临时覆盖" not in detail["system_custom"]
 
 
@@ -83,15 +83,15 @@ def test_reply_contract_follows_normal_reply_count(persona_app):
     persona_app.config.set("normal_reply_count", "9")
     detail = persona_api.get_template_detail(persona_app, "吐槽型")
     contract = detail["reply_contract"]
-    assert "固定返回 9 条弹幕" in contract
-    assert "必须与当前画面或直播氛围相关" in contract
+    assert "固定 9 条" in contract
+    assert "优先贴当前画面" in contract
     assert "前 4 条必须强相关当前画面" not in contract
 
 
 def test_reply_contract_follows_danmu_max_chars(persona_app):
     persona_app.config.set("danmu_max_chars", "28")
     detail = persona_api.get_template_detail(persona_app, "吐槽型")
-    assert "每条不超过 28 个字" in detail["reply_contract"]
+    assert "每条≤28字" in detail["reply_contract"]
 
 
 def test_builtin_system_custom_differs_by_persona(persona_app):
@@ -127,3 +127,24 @@ def test_new_style_builtin_personae(persona_app):
         system_pt, user_pt = persona_app.personae.get_prompt(name)
         assert system_pt
         assert user_pt
+
+
+_TEST_PINNED = ("测试1", "测试2", "测试3", "测试4")
+
+
+def test_experimental_personae_pinned_first(persona_app):
+    names = persona_app.personae.list()
+    assert names[:4] == list(_TEST_PINNED)
+    assert "测试" not in names
+    assert "测试" not in BUILTIN_PERSONAE
+
+
+def test_experimental_personae_have_prompts(persona_app):
+    for name in _TEST_PINNED:
+        assert name in BUILTIN_PERSONAE
+        detail = persona_api.get_template_detail(persona_app, name)
+        assert detail["builtin"]
+        assert "【人格" in detail["system_custom"]
+        system_pt, user_pt = persona_app.personae.get_prompt(name)
+        assert system_pt
+        assert user_pt == "看图发弹幕："

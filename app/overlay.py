@@ -100,6 +100,8 @@ class DanmuOverlay(QWidget):
         self._last_tick_valid = False
         self.last_tick_dt_sec: float = _FRAME_DT
         self._profile_last_log_at: float = 0.0
+        self._last_layout_ratio: float = layout_height_ratio(config)
+        self._clear_drawable_on_next_paint: bool = False
 
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -482,6 +484,11 @@ class DanmuOverlay(QWidget):
             return
         painter = QPainter(self)
         painter.setClipRect(clip)
+        if self._clear_drawable_on_next_paint:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            painter.fillRect(clip, Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            self._clear_drawable_on_next_paint = False
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
@@ -530,9 +537,22 @@ class DanmuOverlay(QWidget):
             self._screen_width = float(geo.width())
             self.engine.set_screen_width(self._screen_width)
             self.engine.set_screen_height(float(geo.height()))
+            old_ratio = self._last_layout_ratio
+            new_ratio = layout_height_ratio(self.config)
+            shrink = new_ratio < old_ratio - 1e-9
             should_reload = reload_tracks if reload_tracks is not None else geo_changed
             if should_reload:
-                self.engine.reload_tracks(preserve_visible=True)
+                self.engine.reload_tracks(
+                    preserve_visible=True,
+                    clip_to_drawable=shrink,
+                )
+                if shrink:
+                    previous_h = int(round(float(geo.height()) * old_ratio))
+                    new_h = self._drawable_height_px()
+                    repaint_h = max(previous_h, new_h, 1)
+                    self._clear_drawable_on_next_paint = True
+                    self.update(QRect(0, 0, self.width(), repaint_h))
+            self._last_layout_ratio = new_ratio
         self._apply_font_from_config()
         self.show()
         self._apply_win32_click_through()

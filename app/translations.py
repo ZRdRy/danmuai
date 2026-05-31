@@ -132,7 +132,10 @@ TRANSLATIONS = {
         "persona.sharp": "毒舌型",
         "persona.genki": "元气型",
         "persona.shy": "社恐型",
-        "persona.test": "测试",
+        "persona.test1": "测试1",
+        "persona.test2": "测试2",
+        "persona.test3": "测试3",
+        "persona.test4": "测试4",
 
         "common.saved": "配置已保存。",
         "common.done": "完成",
@@ -446,7 +449,10 @@ TRANSLATIONS = {
         "persona.sharp": "Sharp Tongue",
         "persona.genki": "Genki",
         "persona.shy": "Shy",
-        "persona.test": "Test",
+        "persona.test1": "Test 1",
+        "persona.test2": "Test 2",
+        "persona.test3": "Test 3",
+        "persona.test4": "Test 4",
 
         "common.saved": "Configuration saved.",
         "common.done": "Done",

@@ -28,7 +28,6 @@ def test_doubao_supports_mic_from_audio_price():
     assert by_id["doubao-seed-2-0-lite-260428"]["supports_mic"] is True
     assert by_id["doubao-seed-2-0-mini-260428"]["supports_mic"] is True
     assert by_id["doubao-seed-1-6-flash-250828"]["supports_mic"] is False
-    assert by_id["doubao-seed-2-0-pro-260215"]["supports_mic"] is False
 
 
 def test_cheapest_tie_break_first_in_catalog_order():
@@ -53,11 +52,11 @@ def test_list_platform_catalogs_has_four_platforms():
     assert len(platforms) == 4
     doubao = _platform_by_id(platforms, "doubao")
     assert doubao["provider_id"] == "doubao"
-    assert len(doubao["models"]) == 6
+    assert len(doubao["models"]) == 5
     dashscope = _platform_by_id(platforms, "dashscope")
     assert dashscope["provider_id"] == "dashscope"
     assert dashscope["platform_label"] == "DashScope"
-    assert len(dashscope["models"]) == 8
+    assert len(dashscope["models"]) == 6
     siliconflow = _platform_by_id(platforms, "siliconflow")
     assert siliconflow["provider_id"] == "siliconflow"
     assert siliconflow["platform_label"] == "硅基流动"
@@ -83,13 +82,10 @@ def test_dashscope_cheapest_is_qwen3_vl_flash():
     assert cheapest[0]["price"]["input"] == 0.15
 
 
-def test_dashscope_supports_mic_omni_models():
+def test_dashscope_catalog_has_no_mic_flagged_models():
+    """Omni models removed from catalog (W-MODEL-CATALOG-PROBE-001); VL-only list."""
     enriched = enrich_platform_models(DASHSCOPE_MODELS)
-    by_id = {m["id"]: m for m in enriched}
-    assert by_id["qwen-omni-turbo"]["supports_mic"] is True
-    assert by_id["qwen2.5-omni-7b"]["supports_mic"] is True
-    assert by_id["qwen3-vl-flash"]["supports_mic"] is False
-    assert by_id["qwen-vl-max"]["supports_mic"] is False
+    assert all(not m["supports_mic"] for m in enriched)
 
 
 def test_get_catalog_for_provider_doubao():
@@ -102,7 +98,7 @@ def test_get_catalog_for_provider_dashscope():
     catalog = get_catalog_for_provider("dashscope")
     assert catalog is not None
     assert catalog["platform_label"] == "DashScope"
-    assert len(catalog["models"]) == 8
+    assert len(catalog["models"]) == 6
 
 
 def test_siliconflow_cheapest_is_qwen3_vl_8b_instruct():

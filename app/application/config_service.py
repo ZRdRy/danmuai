@@ -36,6 +36,9 @@ WEB_CONFIG_KEYS = (
     "normal_reply_count",
 )
 
+# 助手设置「恢复默认」可恢复的键（= WEB_CONFIG_KEYS；不含 api_key / custom_models / region_*）
+RESTORABLE_CONFIG_KEYS = WEB_CONFIG_KEYS
+
 
 def normalize_legacy_display_mode(items: dict[str, str]) -> None:
     """Map removed realtime display mode to normal on Web config patch."""

@@ -42,14 +42,6 @@ class FakeConfig:
             return default
 
 
-class FakeHistory:
-    def __init__(self):
-        self.calls = []
-
-    def add(self, content, persona, round_num):
-        self.calls.append((content, persona, round_num))
-
-
 class FakeHistoryWriter:
     def __init__(self):
         self.calls = []
@@ -125,7 +117,6 @@ class PipelineSimulator:
     def __init__(self, config_values=None):
         self.logger = FakeLogger()
         self.engine = FakeEngine(config_values)
-        self.history = FakeHistory()
         self.history_writer = FakeHistoryWriter()
         self.reply_buffer = AIReplyFIFOBuffer(max_items=8)
         self.reply_timer = FakeTimer()
@@ -183,7 +174,7 @@ class PipelineSimulator:
         item = self.engine.add_text(queued.content, queued.persona_id)
         if item:
             self._latest_displayed_round = max(self._latest_displayed_round, queued.screenshot_round)
-            self.history.add(queued.content, queued.persona_id, queued.batch_index)
+            self.history_writer.enqueue(queued.content, queued.persona_id, queued.batch_index)
 
         if not self.reply_buffer.is_empty():
             delay = 100 if item is None else self._estimated_reply_gap_ms()

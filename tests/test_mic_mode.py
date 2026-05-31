@@ -1,6 +1,6 @@
 from app.mic_buffer import MicRingBuffer, clamp_mic_window_sec
 from app.mic_encode import pcm_to_wav_data_uri
-from app.mic_prompt import append_mic_context_to_user_pt, build_mic_insert_user_pt
+from app.mic_prompt import build_mic_insert_user_pt
 
 
 def test_clamp_mic_window_sec():
@@ -29,14 +29,12 @@ def test_pcm_to_wav_data_uri_rejects_short():
     assert pcm_to_wav_data_uri(b"\x00\x01") is None
 
 
-def test_append_mic_context_to_user_pt():
-    out = append_mic_context_to_user_pt("请生成弹幕：")
+def test_build_mic_insert_user_pt():
+    out = build_mic_insert_user_pt("请生成弹幕：")
     assert "请生成弹幕：" in out
     assert "麦克风" in out
     assert "截图" in out
 
-
-def test_build_mic_insert_user_pt():
     out = build_mic_insert_user_pt("base")
     assert "麦克风插入" in out
     assert out.startswith("base")

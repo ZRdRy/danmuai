@@ -553,6 +553,31 @@ def test_web_config_keys_cover_core_settings():
     assert "normal_reply_count" in WEB_CONFIG_KEYS
 
 
+def test_export_web_config_defaults():
+    from app.application.config_service import RESTORABLE_CONFIG_KEYS, WEB_CONFIG_KEYS
+    from app.config_defaults import CONFIG_DEFAULTS, export_web_config_defaults
+    from app.model_catalog import default_catalog_model_id
+    from app.model_providers import get_provider
+
+    data = export_web_config_defaults()
+
+    assert set(data.keys()) == set(WEB_CONFIG_KEYS)
+    assert RESTORABLE_CONFIG_KEYS == WEB_CONFIG_KEYS
+    assert "api_key" not in data
+    assert "has_api_key" not in data
+    assert "custom_models" not in data
+
+    doubao = get_provider("doubao")
+    assert data["api_endpoint"] == doubao.default_endpoint
+    assert data["api_mode"] == "doubao"
+    assert data["model"] == default_catalog_model_id("doubao")
+
+    for key in WEB_CONFIG_KEYS:
+        if key in ("api_endpoint", "model"):
+            continue
+        assert data[key] == CONFIG_DEFAULTS.get(key, ""), key
+
+
 def test_model_catalog_api_payload():
     """Contract for GET /api/model-catalog (implemented via list_platform_catalogs)."""
     from app.model_catalog import list_platform_catalogs
@@ -563,7 +588,7 @@ def test_model_catalog_api_payload():
 
     doubao = by_id["doubao"]
     assert doubao["provider_id"] == "doubao"
-    assert len(doubao["models"]) == 6
+    assert len(doubao["models"]) == 5
     doubao_cheapest = [m for m in doubao["models"] if m["cheapest"]]
     assert len(doubao_cheapest) == 1
     assert doubao_cheapest[0]["id"] == "doubao-seed-1-6-flash-250828"
@@ -575,12 +600,12 @@ def test_model_catalog_api_payload():
 
     dashscope = by_id["dashscope"]
     assert dashscope["provider_id"] == "dashscope"
-    assert len(dashscope["models"]) == 8
+    assert len(dashscope["models"]) == 6
     dash_cheapest = [m for m in dashscope["models"] if m["cheapest"]]
     assert len(dash_cheapest) == 1
     assert dash_cheapest[0]["id"] == "qwen3-vl-flash"
     dash_mic = {m["id"] for m in dashscope["models"] if m["supports_mic"]}
-    assert dash_mic == {"qwen-omni-turbo", "qwen2.5-omni-7b"}
+    assert dash_mic == set()
 
     siliconflow = by_id["siliconflow"]
     assert siliconflow["platform_label"] == "硅基流动"
@@ -595,6 +620,7 @@ def test_model_catalog_api_payload():
     assert len(mimo["models"]) == 1
     mimo_ids = {m["id"] for m in mimo["models"]}
     assert mimo_ids == {"mimo-v2.5"}
+    assert mimo["models"][0]["supports_mic"] is True
 
 
 def test_providers_excludes_deepseek():
@@ -1165,6 +1191,7 @@ def test_mic_test_route_uses_public_app_entry():
         "pcm_bytes": 4096,
         "rms": 0.12,
     }
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
 
     def _check_token(_authorization: str | None = None) -> None:
         return None
@@ -1176,7 +1203,11 @@ def test_mic_test_route_uses_public_app_entry():
 
     assert res.status_code == 200
     assert res.json()["ok"] is True
-    bridge.danmu_app.run_mic_test.assert_called_once_with(2.5, send_to_ai=False)
+    bridge.invoke_on_main.assert_called_once_with(
+        bridge.danmu_app.run_mic_test,
+        2.5,
+        send_to_ai=False,
+    )
 
 
 def test_mic_test_send_route_uses_public_app_entry():
@@ -1192,6 +1223,7 @@ def test_mic_test_send_route_uses_public_app_entry():
         "pcm_bytes": 2048,
         "audio_attached": True,
     }
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
 
     def _check_token(_authorization: str | None = None) -> None:
         return None
@@ -1203,7 +1235,11 @@ def test_mic_test_send_route_uses_public_app_entry():
 
     assert res.status_code == 200
     assert res.json()["ok"] is True
-    bridge.danmu_app.run_mic_test.assert_called_once_with(3.0, send_to_ai=True)
+    bridge.invoke_on_main.assert_called_once_with(
+        bridge.danmu_app.run_mic_test,
+        3.0,
+        send_to_ai=True,
+    )
 
 
 def test_active_personae_route_uses_public_app_entry():
@@ -1213,6 +1249,7 @@ def test_active_personae_route_uses_public_app_entry():
 
     app = FastAPI()
     bridge = MagicMock()
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
 
     def _check_token(_authorization: str | None = None) -> None:
         return None
@@ -1224,7 +1261,10 @@ def test_active_personae_route_uses_public_app_entry():
 
     assert res.status_code == 200
     assert res.json() == {"ok": True}
-    bridge.danmu_app.set_active_personae.assert_called_once_with(["吐槽型"])
+    bridge.invoke_on_main.assert_called_once_with(
+        bridge.danmu_app.set_active_personae,
+        ["吐槽型"],
+    )
 
 
 def test_session_route_does_not_require_query_request():
@@ -1347,6 +1387,43 @@ def test_ws_status_websocket_rejects_missing_token_with_1008():
     bridge.register_status_consumer.assert_not_called()
 
 
+def test_invoke_on_main_runs_on_bridge_thread():
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtWidgets import QApplication
+
+    from app.web_console import WebConsoleBridge
+
+    qt_app = QApplication.instance() or QApplication([])
+    bridge = WebConsoleBridge(MagicMock())
+    observed: dict[str, object] = {}
+
+    class InvokeWorker(QThread):
+        def run(self) -> None:
+            def capture() -> int:
+                observed["thread"] = QThread.currentThread()
+                return 42
+
+            observed["result"] = bridge.invoke_on_main(capture)
+
+    worker = InvokeWorker()
+    worker.start()
+    while worker.isRunning():
+        qt_app.processEvents()
+        worker.wait(50)
+    assert observed["result"] == 42
+    assert observed["thread"] is bridge.thread()
+
+
+def test_invoke_on_main_fast_path_on_bridge_thread():
+    from PyQt6.QtWidgets import QApplication
+
+    from app.web_console import WebConsoleBridge
+
+    _ = QApplication.instance() or QApplication([])
+    bridge = WebConsoleBridge(MagicMock())
+    assert bridge.invoke_on_main(lambda: 7) == 7
+
+
 def test_announcements_read_state_get_default():
     from app.web_api.routes import register_web_routes
     from fastapi import FastAPI
@@ -1364,7 +1441,11 @@ def test_announcements_read_state_get_default():
 
     res = client.get("/api/announcements-read-state")
     assert res.status_code == 200
-    assert res.json() == {"readIds": [], "lastSeenMs": 0}
+    assert res.json() == {
+        "readIds": [],
+        "lastSeenMs": 0,
+        "overviewBannerDismissedId": "",
+    }
 
 
 def test_announcements_read_state_put_roundtrip():
@@ -1375,6 +1456,7 @@ def test_announcements_read_state_put_roundtrip():
     app = FastAPI()
     bridge = MagicMock()
     bridge.danmu_app.config = FakeConfig()
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
 
     def _check_token(_authorization: str | None = None) -> None:
         if _authorization != "Bearer test-token":
@@ -1391,6 +1473,7 @@ def test_announcements_read_state_put_roundtrip():
             "22222222-2222-4222-8222-222222222222",
         ],
         "lastSeenMs": 1716969600000,
+        "overviewBannerDismissedId": "33333333-3333-4333-8333-333333333333",
     }
     res = client.put(
         "/api/announcements-read-state",
@@ -1399,6 +1482,7 @@ def test_announcements_read_state_put_roundtrip():
     )
     assert res.status_code == 200
     assert res.json() == {"ok": True}
+    bridge.invoke_on_main.assert_called_once()
 
     res = client.get("/api/announcements-read-state")
     assert res.status_code == 200
@@ -1429,5 +1513,15 @@ def test_announcements_read_state_put_rejects_invalid_body():
     res = client.put(
         "/api/announcements-read-state",
         json={"readIds": [], "lastSeenMs": -1},
+    )
+    assert res.status_code == 400
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={
+            "readIds": [],
+            "lastSeenMs": 0,
+            "overviewBannerDismissedId": "not-a-uuid",
+        },
     )
     assert res.status_code == 400

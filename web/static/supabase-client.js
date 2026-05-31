@@ -1,8 +1,14 @@
-/** Thin PostgREST client for DanmuAI announcements and feedback. */
+/** Thin PostgREST client for DanmuAI announcements, feedback, and error reports. */
 (function initDanmuSupabase(global) {
   const STORAGE_CLIENT_ID = 'danmu_feedback_client_id';
   const FEEDBACK_RATE_LIMIT_MSG = '每 3 小时最多提交 2 条反馈，请稍后再试';
-  const APP_VERSION = '2026.05.27';
+  const ERROR_REPORT_RATE_LIMIT_MSG =
+    '每 3 小时最多自动提交 3 条错误报告，请稍后再试或使用侧栏「问题反馈」';
+  // 由 app.js 在 GET /api/version 后写入；反馈提交前可懒加载
+  function resolveAppVersion() {
+    const v = global.DANMU_APP_VERSION;
+    return typeof v === 'string' && v.trim() ? v.trim() : '';
+  }
 
   function config() {
     const cfg = global.DANMU_SUPABASE;
@@ -55,6 +61,9 @@
       /row-level security/i.test(text) ||
       /policy/i.test(text)
     ) {
+      if (/error_reports/i.test(text) || res.url?.includes('/error_reports')) {
+        return ERROR_REPORT_RATE_LIMIT_MSG;
+      }
       if (/feedback/i.test(text) || res.url?.includes('/feedback')) {
         return FEEDBACK_RATE_LIMIT_MSG;
       }
@@ -86,6 +95,22 @@
     const text = await res.text();
     if (!text) return null;
     return JSON.parse(text);
+  }
+
+  async function fetchAppUpdate() {
+    if (!isConfigured()) return null;
+    const query =
+      '/rest/v1/app_updates?select=latest_version,release_url,enabled,message,updated_at' +
+      '&enabled=eq.true&order=updated_at.desc&limit=1';
+    const rows = await supabaseFetch(query, { method: 'GET' });
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      latest_version: String(row.latest_version || '').trim(),
+      release_url: String(row.release_url || '').trim(),
+      message: row.message == null ? '' : String(row.message).trim(),
+      updated_at: row.updated_at,
+    };
   }
 
   async function listAnnouncements() {
@@ -120,7 +145,7 @@
           content: trimmed,
           contact: contactVal || null,
           client_id: clientId,
-          app_version: APP_VERSION,
+          app_version: resolveAppVersion() || null,
           platform: 'windows',
           locale: global.navigator?.language || 'zh-CN',
         }),
@@ -133,13 +158,68 @@
     }
   }
 
+  async function getErrorReportQuota() {
+    const clientId = getOrCreateClientId();
+    return supabaseFetch('/rest/v1/rpc/error_reports_quota', {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ p_client_id: clientId }),
+    });
+  }
+
+  async function submitErrorReport({
+    summary,
+    logsExcerpt,
+    diagnosticsJson,
+    errorFingerprint,
+  }) {
+    const summaryVal = String(summary || '').trim();
+    if (!summaryVal) throw new Error('错误摘要不能为空');
+    if (summaryVal.length > 500) throw new Error('错误摘要不能超过 500 字');
+
+    let logsVal = logsExcerpt == null ? null : String(logsExcerpt);
+    if (logsVal && logsVal.length > 8000) {
+      logsVal = `${logsVal.slice(0, 7990)}\n…[truncated]`;
+    }
+
+    const fingerprintVal = String(errorFingerprint || '').trim() || null;
+    const clientId = getOrCreateClientId();
+    const body = {
+      summary: summaryVal,
+      logs_excerpt: logsVal || null,
+      diagnostics_json: diagnosticsJson ?? null,
+      error_fingerprint: fingerprintVal,
+      client_id: clientId,
+      app_version: resolveAppVersion() || null,
+      platform: 'windows',
+      locale: global.navigator?.language || 'zh-CN',
+    };
+
+    try {
+      await supabaseFetch('/rest/v1/error_reports', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      if (err.status === 403 || err.status === 401) {
+        throw new Error(ERROR_REPORT_RATE_LIMIT_MSG);
+      }
+      throw err;
+    }
+  }
+
   global.DanmuSupabase = {
-    APP_VERSION,
+    resolveAppVersion,
     FEEDBACK_RATE_LIMIT_MSG,
+    ERROR_REPORT_RATE_LIMIT_MSG,
     isConfigured,
     getOrCreateClientId,
+    fetchAppUpdate,
     listAnnouncements,
     getFeedbackQuota,
     submitFeedback,
+    getErrorReportQuota,
+    submitErrorReport,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

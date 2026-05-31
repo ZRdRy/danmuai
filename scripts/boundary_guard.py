@@ -58,7 +58,6 @@ CONFIG_CONN_PATTERNS: tuple[str, ...] = (
 
 CONFIG_CONN_WHITELIST = {
     Path("app/config_store.py"),
-    Path("app/history.py"),
     Path("app/history_writer.py"),
     Path("app/session_run_log.py"),
     Path("app/templates.py"),

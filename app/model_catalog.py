@@ -53,11 +53,6 @@ class PlatformCatalog:
 
 DOUBAO_MODELS: tuple[CatalogModel, ...] = (
     CatalogModel(
-        "Doubao-Seed-2.0-pro",
-        "doubao-seed-2-0-pro-260215",
-        ModelPrice(input=3.2, audio=None, output=16),
-    ),
-    CatalogModel(
         "Doubao-Seed-2.0-lite",
         "doubao-seed-2-0-lite-260428",
         ModelPrice(input=0.6, audio=9, output=3.6),
@@ -96,16 +91,6 @@ DASHSCOPE_MODELS: tuple[CatalogModel, ...] = (
         ModelPrice(input=0.2, audio=None, output=2),
     ),
     CatalogModel(
-        "Qwen-Omni-Turbo",
-        "qwen-omni-turbo",
-        ModelPrice(input=0.4, audio=25, output=1.6),
-    ),
-    CatalogModel(
-        "Qwen2.5-Omni-7B",
-        "qwen2.5-omni-7b",
-        ModelPrice(input=0.6, audio=38, output=2.4),
-    ),
-    CatalogModel(
         "Qwen-VL-Plus",
         "qwen-vl-plus",
         ModelPrice(input=0.8, audio=None, output=2),
@@ -132,7 +117,7 @@ MIMO_MODELS: tuple[CatalogModel, ...] = (
     CatalogModel(
         "MiMo-V2.5",
         "mimo-v2.5",
-        ModelPrice(input=1.0, audio=None, output=2.0),
+        ModelPrice(input=1.0, audio=1.0, output=2.0),
     ),
 )
 
@@ -243,11 +228,6 @@ def list_platform_catalogs() -> list[dict[str, Any]]:
 
 def get_catalog_for_provider(provider_id: str) -> dict[str, Any] | None:
     platform = _CATALOG_BY_PROVIDER.get((provider_id or "").strip())
-    return platform.to_dict() if platform else None
-
-
-def get_catalog_for_platform(platform_id: str) -> dict[str, Any] | None:
-    platform = _CATALOG_BY_PLATFORM.get((platform_id or "").strip())
     return platform.to_dict() if platform else None
 
 

@@ -291,6 +291,39 @@ def test_request_doubao_includes_input_audio_when_provided():
     worker.close()
 
 
+def test_request_openai_mimo_includes_input_audio_when_provided():
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_endpoint": "https://api.xiaomimimo.com/v1",
+                "api_mode": "openai-compatible",
+                "model": "mimo-v2.5",
+            }
+        )
+    )
+    audio = "data:audio/wav;base64,QUJD"
+    with patch.object(worker, "_stream_openai", return_value=("test", 100, 50)) as mock_stream:
+        with patch.object(worker, "_emit_safe"):
+            worker._request_openai(
+                "data:image/jpeg;base64,abc",
+                "sys",
+                "user",
+                "p1",
+                1,
+                1,
+                1.0,
+                0,
+                audio_data_uri=audio,
+            )
+    payload = mock_stream.call_args[0][3]
+    content = payload["messages"][1]["content"]
+    assert any(
+        part.get("type") == "input_audio" and part.get("input_audio", {}).get("data") == audio
+        for part in content
+    )
+    worker.close()
+
+
 def test_request_doubao_always_disables_thinking():
     worker = AiWorker(FakeConfig(data={"max_tokens": "200", "use_thinking": "1"}))
     with patch.object(worker, "_stream_doubao", return_value=("test", 100, 50, "")) as mock_stream:

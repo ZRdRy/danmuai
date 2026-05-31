@@ -31,12 +31,6 @@ STALE_DROP_BURST_THRESHOLD = 4  # 窗口内丢弃次数达到此值则 should_ba
 MAX_SCREENSHOT_BACKOFF_LEVEL = 4  # 退避等级上限（0=无退避）
 MAX_SCREENSHOT_INTERVAL_MS = 12_000  # 退避后截图间隔硬顶 12s
 
-# --- 场景切换 UX（medium/strict gate；SCENE_RHYTHM_PAUSE_SEC，main 场景探测用）---
-SCENE_RHYTHM_PAUSE_SEC = 0.5  # 代际升高后暂停 0.5s 再调度 API，避免模糊过渡帧误触发
-SCENE_CHANGE_DEBOUNCE_SEC = 2.0  # 2s 内重复 hash 变化忽略（Alt-Tab/叠层闪烁）
-SCENE_CHANGE_FORCE_DIST = 15  # 汉明距离 ≥ 15 时强制认定场景变化，绕过防抖
-
-
 @dataclass(frozen=True)
 class LiveStatusSnapshot:
     """Web 控制台「直播状态」区展示用的不可变快照（由 main._build_live_status_snapshot 组装）。"""

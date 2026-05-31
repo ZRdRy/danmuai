@@ -66,8 +66,4 @@ def test_consume_does_not_drop_older_scene_generation():
 
 def test_scene_api_never_blocked():
     app = _make_minimal_app()
-    app._scene_rhythm_pause_until = time.monotonic() + 10.0
-    app._scene_api_gate_active = True
-    app._scene_captures_after_change = 0
-
     assert app._scene_api_blocked() is False

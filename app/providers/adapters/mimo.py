@@ -8,10 +8,23 @@ from app.providers.constants import THINKING_DISABLED
 
 
 class MimoOpenAIAdapter(DefaultOpenAIAdapter):
-    def build_vision_user_content(self, user_pt: str, image_data_uri: str) -> list[dict]:
+    def build_vision_user_content(
+        self,
+        user_pt: str,
+        image_data_uri: str,
+        audio_data_uri: str | None = None,
+    ) -> list[dict]:
         image_part = {"type": "image_url", "image_url": {"url": image_data_uri}}
         text_part = {"type": "text", "text": user_pt}
-        return [image_part, text_part]
+        parts = [image_part, text_part]
+        if audio_data_uri:
+            parts.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": audio_data_uri},
+                }
+            )
+        return parts
 
     def patch_openai_chat_body(
         self,

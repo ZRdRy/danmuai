@@ -61,6 +61,21 @@ def test_overview_announcement_banner_in_app_js():
     assert "function updateOverviewAnnouncementBanner" in js
 
 
+def test_error_report_modal_in_index_html():
+    html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="errorReportModal"' in html
+    assert 'id="btnErrorReportSubmit"' in html
+    assert 'id="btnErrorReportDismiss"' in html
+
+
+def test_error_report_flow_in_app_js():
+    js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function maybePromptErrorReport" in js
+    assert "function collectErrorReportContext" in js
+    assert "submitErrorReport" in js
+    assert "statusHadError" in js
+
+
 def test_api_settings_visible_in_simplified_mode():
     """记忆与温度控件不得带 settings-full-only，否则简化模式下会被 CSS 隐藏。"""
     html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
