@@ -108,7 +108,8 @@ def test_request_openai_includes_thinking_for_mimo():
 
     data = captured["data"]
     assert data["thinking"] == {"type": "disabled"}
-    assert data["max_completion_tokens"] == DANMU_MIN_OUTPUT_TOKENS
+    # MiMo caps.thinking_param → 更大输出下限（PR #10 与空响应缓解）
+    assert data["max_completion_tokens"] == DANMU_MIN_OUTPUT_TOKENS_THINKING
     assert "max_tokens" not in data
     assert "stream_options" not in data
     user_content = data["messages"][1]["content"]
@@ -243,7 +244,9 @@ def test_stream_openai_logs_mimo_reasoning_only(caplog):
             {},
             endpoint="https://api.xiaomimimo.com/v1",
         )
-    assert any("reason=mimo_reasoning_only" in r.message for r in caplog.records)
+    assert any(
+        "只有 reasoning_content 没有 content" in r.message for r in caplog.records
+    )
     worker.close()
 
 
