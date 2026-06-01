@@ -22,14 +22,6 @@ import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from app.config_store import ConfigStore
-from app.model_providers import (
-    guess_provider_from_endpoint,
-    normalize_endpoint,
-    normalize_mode,
-    resolve_api_transport,
-)
-from app.providers import get_capabilities_for_endpoint, get_openai_adapter
-from app.providers.constants import THINKING_DISABLED
 from app.logger import (
     API_KEY_PATTERN,
     AUTH_HEADER_PATTERN,
@@ -38,6 +30,14 @@ from app.logger import (
     ENCRYPTED_KEY_PATTERN,
     GENERIC_API_KEY_PATTERN,
 )
+from app.model_providers import (
+    guess_provider_from_endpoint,
+    normalize_endpoint,
+    normalize_mode,
+    resolve_api_transport,
+)
+from app.providers import get_capabilities_for_endpoint, get_openai_adapter
+from app.providers.constants import THINKING_DISABLED
 from app.translations import tr
 
 HTTP_ERROR_MESSAGE_DISPLAY_MAX = 240
