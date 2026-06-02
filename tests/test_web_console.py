@@ -11,14 +11,19 @@ from app.application.generation_pipeline_state import GenerationPipelineState
 from app.application.stats_state import StatsState
 from app.application.web_runtime_state import WebRuntimeState
 from app.web_console import (
+    _SAVE_DONE_EVENT_KEY,
+    _SAVE_RESULT_KEY,
     WEB_CONFIG_KEYS,
     WebConsoleBridge,
+    _write_config_save_result,
     apply_config_patch,
     export_config,
     extract_config_payload,
     save_config_via_bridge,
 )
 from main import DanmuApp
+
+from tests.fakes import FakeTimer
 
 
 class FakeConfig:
@@ -308,7 +313,7 @@ def test_build_status_snapshot_omits_dedup_profile_when_disabled(monkeypatch):
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock(return_value={"enabled": True})),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         _total_input_tokens=0,
         _total_output_tokens=0,
         _start_time=0.0,
@@ -319,7 +324,7 @@ def test_build_status_snapshot_omits_dedup_profile_when_disabled(monkeypatch):
         config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
     )
 
     monkeypatch.delenv("DANMU_DEDUP_PROFILE", raising=False)
@@ -342,7 +347,7 @@ def test_build_status_snapshot_includes_dedup_profile_when_enabled(monkeypatch):
             ),
         ),
         reply_buffer=SimpleNamespace(size=lambda: 2),
-        _visible_display_count=lambda: 1,
+        visible_display_count=lambda: 1,
         _total_input_tokens=7,
         _total_output_tokens=5,
         _start_time=time.monotonic() - 3.0,
@@ -353,7 +358,7 @@ def test_build_status_snapshot_includes_dedup_profile_when_enabled(monkeypatch):
         config=FakeConfig({"screen_index": "1", "_api_key": "sk-test"}),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {"lifetime_total_tokens": 12}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: SimpleNamespace(
+        build_live_status_snapshot=lambda: SimpleNamespace(
             analyzing=True,
             local_fallback=False,
             delay_sec=1.2,
@@ -372,11 +377,38 @@ def test_build_status_snapshot_includes_dedup_profile_when_enabled(monkeypatch):
     app.engine.get_dedup_profile_snapshot.assert_called_once()
 
 
+def test_build_status_snapshot_uses_stopped_live_message_when_not_running():
+    from app.translations import tr
+
+    app = SimpleNamespace(
+        engine=SimpleNamespace(running=False),
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        visible_display_count=lambda: 0,
+        stats_state=StatsState(),
+        web_runtime_state=WebRuntimeState(),
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        build_live_status_snapshot=lambda: SimpleNamespace(
+            analyzing=False,
+            local_fallback=False,
+            delay_sec=0.0,
+            stale_drops=0,
+            primary_message=lambda: "should-not-leak-running-copy",
+        ),
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["live_message"] == tr("control.status_stopped_desc")
+
+
 def test_build_status_snapshot_prefers_web_runtime_state_cache_and_keeps_output_compatible():
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         stats_state=StatsState(danmu_count=2, total_input_tokens=5, total_output_tokens=4),
         web_runtime_state=WebRuntimeState(
             error_message="warn",
@@ -388,7 +420,7 @@ def test_build_status_snapshot_prefers_web_runtime_state_cache_and_keeps_output_
         config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
     )
 
     status = DanmuApp.build_status_snapshot(app)
@@ -404,7 +436,7 @@ def test_build_status_snapshot_collects_generation_projection_without_exposing_n
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         stats_state=StatsState(),
         web_runtime_state=WebRuntimeState(),
         _active_scene_probe_size=24,
@@ -418,7 +450,7 @@ def test_build_status_snapshot_collects_generation_projection_without_exposing_n
         config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
     )
 
     runtime_state = GenerationPipelineState.from_app(app)
@@ -439,11 +471,34 @@ def test_build_status_snapshot_collects_generation_projection_without_exposing_n
     assert "latest_displayed_screenshot_id" not in status
 
 
+def test_build_status_snapshot_display_count_when_engine_visible():
+    """BUG-003: display_count in status must reflect engine visible_display_count."""
+    engine = SimpleNamespace(running=True)
+
+    app = SimpleNamespace(
+        engine=engine,
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        visible_display_count=lambda: 2,
+        stats_state=StatsState(danmu_count=0, start_time=time.monotonic()),
+        web_runtime_state=WebRuntimeState(),
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=FakeConfig({"screen_index": "0", "_api_key": "sk-test"}),
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        build_live_status_snapshot=lambda: None,
+        _region_selection_state="idle",
+    )
+
+    status = DanmuApp.build_status_snapshot(app)
+
+    assert status["display_count"] == 2
+
+
 def test_build_status_snapshot_prefers_state_objects_when_present():
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         stats_state=StatsState(
             danmu_count=9,
             total_input_tokens=13,
@@ -455,7 +510,7 @@ def test_build_status_snapshot_prefers_state_objects_when_present():
         config=FakeConfig({"screen_index": "2", "_api_key": "sk-test"}),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
     )
 
     status = DanmuApp.build_status_snapshot(app)
@@ -488,6 +543,34 @@ def test_save_config_via_bridge_returns_success_after_main_thread_ack():
     app.apply_web_config_payload.assert_called_once_with(
         {"api_endpoint": "https://new.example/v1"}
     )
+
+
+def test_save_config_via_bridge_returns_success_under_main_thread_load():
+    import threading
+
+    logger = MagicMock()
+
+    def _emit(payload):
+        def _ack():
+            time.sleep(0.02)
+            _write_config_save_result(payload[_SAVE_RESULT_KEY], ok=True)
+            payload[_SAVE_DONE_EVENT_KEY].set()
+
+        threading.Thread(target=_ack, daemon=True).start()
+
+    bridge = SimpleNamespace(
+        save_config_requested=SimpleNamespace(emit=_emit),
+        danmu_app=SimpleNamespace(logger=logger),
+    )
+
+    result = save_config_via_bridge(
+        bridge,
+        {"api_endpoint": "https://loaded.example/v1"},
+        timeout_sec=0.2,
+    )
+
+    assert result == {"ok": True}
+    logger.error.assert_not_called()
 
 
 def test_save_config_via_bridge_returns_timeout_when_main_thread_does_not_ack():
@@ -523,6 +606,29 @@ def test_save_config_via_bridge_returns_failure_when_main_thread_save_raises():
     )
 
 
+def test_save_config_via_bridge_returns_truncated_detail_on_error():
+    app = _make_status_app()
+    secret = "sk-abc1234567890abcdef1234567890abcdef"
+    app.apply_web_config_payload.side_effect = RuntimeError(
+        "db broken "
+        + secret
+        + " "
+        + ("x" * 400)
+    )
+    bridge = WebConsoleBridge(app)
+
+    result = save_config_via_bridge(bridge, {"api_endpoint": "https://broken.example/v1"})
+
+    assert result["ok"] is False
+    assert result["error"] == "save_failed"
+    assert secret not in result["detail"]
+    assert "sk-****" in result["detail"]
+    assert result["detail"].endswith("…")
+    assert len(result["detail"]) <= 201
+    app.set_web_error_status.assert_called_once()
+    assert secret not in app.set_web_error_status.call_args.args[0]
+
+
 def test_apply_config_patch_syncs_default_model_id_to_legacy_model():
     config = FakeConfig({"model": "old-model"})
     app = MagicMock()
@@ -554,12 +660,12 @@ def test_web_status_timer_lifecycle_public_api():
 
 def test_resolve_request_credentials_public_wrapper():
     app = SimpleNamespace(ai_worker=MagicMock())
-    app.ai_worker._resolve_request_credentials.return_value = ("https://x", "sk", "model", "doubao")
+    app.ai_worker.resolve_request_credentials.return_value = ("https://x", "sk", "model", "doubao")
 
     resolved = DanmuApp.resolve_request_credentials(app)
 
     assert resolved == ("https://x", "sk", "model", "doubao")
-    app.ai_worker._resolve_request_credentials.assert_called_once_with()
+    app.ai_worker.resolve_request_credentials.assert_called_once_with()
 
 
 def test_extract_config_payload_accepts_wrapped_and_flat():
@@ -687,29 +793,33 @@ def test_web_settings_ui_uses_custom_wording_not_manual_fill():
 
     root = project_root()
     html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    settings_js = (root / "web" / "static" / "modules" / "settings.js").read_text(
+        encoding="utf-8"
+    )
     assert "手动填写" not in html
     assert "手动输入" not in html
-    assert "手动填写" not in app_js
-    assert "手动输入" not in app_js
+    assert "手动填写" not in settings_js
+    assert "手动输入" not in settings_js
     assert 'value="">自定义</option>' in html or ">自定义</option>" in html
-    assert "自定义模型" in app_js
-    assert '选「自定义」则需自己逐项设置' in app_js
+    assert "自定义模型" in settings_js
+    assert '选「自定义」则需自己逐项设置' in settings_js
 
 
 def test_web_app_js_provider_switch_resets_vision_model():
     from app.bundle_paths import project_root
 
-    app_js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "function pickDefaultCatalogModelId" in app_js
-    assert "platform.default_model_id" in app_js
-    assert "providerSwitch: true" in app_js
-    assert "function syncProviderPresetFromEndpoint" in app_js
-    assert "function resolveProviderIdForPicker" in app_js
-    assert "renderVisionModelPicker(resolveProviderIdForPicker()" in app_js
-    assert "syncProviderPresetAfterEndpointEdit" in app_js
-    assert "renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true })" in app_js
-    assert "apiKeyEl.value = ''" in app_js
+    settings_js = (
+        project_root() / "web" / "static" / "modules" / "settings.js"
+    ).read_text(encoding="utf-8")
+    assert "function pickDefaultCatalogModelId" in settings_js
+    assert "platform.default_model_id" in settings_js
+    assert "providerSwitch: true" in settings_js
+    assert "function syncProviderPresetFromEndpoint" in settings_js
+    assert "function resolveProviderIdForPicker" in settings_js
+    assert "renderVisionModelPicker(resolveProviderIdForPicker()" in settings_js
+    assert "syncProviderPresetAfterEndpointEdit" in settings_js
+    assert "renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true })" in settings_js
+    assert "apiKeyEl.value = ''" in settings_js
 
 
 def test_apply_config_patch_dashscope_model_syncs_default_model_id():
@@ -785,7 +895,7 @@ def test_build_status_snapshot_includes_model_projection():
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock()),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         stats_state=StatsState(),
         _start_time=0.0,
         _web_error_message="",
@@ -803,7 +913,7 @@ def test_build_status_snapshot_includes_model_projection():
         ),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
     )
 
     status = DanmuApp.build_status_snapshot(app)
@@ -818,7 +928,7 @@ def test_build_status_snapshot_includes_capture_region():
     app = SimpleNamespace(
         engine=SimpleNamespace(running=False, get_dedup_profile_snapshot=MagicMock()),
         reply_buffer=SimpleNamespace(size=lambda: 0),
-        _visible_display_count=lambda: 0,
+        visible_display_count=lambda: 0,
         stats_state=StatsState(),
         _start_time=0.0,
         _web_error_message="",
@@ -837,7 +947,7 @@ def test_build_status_snapshot_includes_capture_region():
         ),
         lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
         session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
-        _build_live_status_snapshot=lambda: None,
+        build_live_status_snapshot=lambda: None,
         _region_selection_state="idle",
     )
 
@@ -1098,6 +1208,142 @@ def test_notify_wait_ready_timeout_errors_when_thread_dead():
         danmu_app.logger.error.call_args[0][0],
         is_error=True,
     )
+    assert server._startup_error_from_attach is True
+
+
+def test_classify_web_console_startup_ready():
+    from app.web_console import WebConsoleBridge, WebConsoleServer, classify_web_console_startup
+
+    server = WebConsoleServer(WebConsoleBridge(MagicMock()))
+    server.startup_ok = True
+    assert classify_web_console_startup(server) == "ready"
+
+
+def test_classify_web_console_startup_failed_bind():
+    from app.web_console import WebConsoleBridge, WebConsoleServer, classify_web_console_startup
+
+    server = WebConsoleServer(WebConsoleBridge(MagicMock()))
+    server._bind_failed.set()
+    assert classify_web_console_startup(server) == "failed"
+
+
+def test_classify_web_console_startup_failed_dead_thread():
+    from app.web_console import WebConsoleBridge, WebConsoleServer, classify_web_console_startup
+
+    server = WebConsoleServer(WebConsoleBridge(MagicMock()))
+    server._thread = None
+    assert classify_web_console_startup(server) == "failed"
+
+
+def test_classify_web_console_startup_slow():
+    import threading
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer, classify_web_console_startup
+
+    server = WebConsoleServer(WebConsoleBridge(MagicMock()))
+
+    def _sleep() -> None:
+        time.sleep(5.0)
+
+    server._thread = threading.Thread(target=_sleep, daemon=True)
+    server._thread.start()
+    try:
+        assert classify_web_console_startup(server) == "slow"
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+def test_startup_error_clears_when_uvicorn_started():
+    from app.application.web_runtime_state import WebRuntimeState
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+    )
+
+    danmu_app = MagicMock()
+    danmu_app.web_runtime_state = WebRuntimeState()
+    danmu_app.set_web_error_status = lambda msg, *, is_error: danmu_app.web_runtime_state.set_error_status(
+        msg, is_error=is_error
+    )
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._startup_error_from_attach = True
+    danmu_app.web_runtime_state.set_error_status("startup failed", is_error=True)
+
+    server._on_uvicorn_started()
+
+    assert server._startup_error_from_attach is False
+    assert danmu_app.web_runtime_state.is_error is False
+    assert danmu_app.web_runtime_state.error_message == ""
+
+
+def test_startup_warning_does_not_persist_after_server_ready():
+    from app.application.web_runtime_state import WebRuntimeState
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        classify_web_console_startup,
+        clear_startup_attach_error_if_needed,
+    )
+
+    danmu_app = MagicMock()
+    danmu_app.web_runtime_state = WebRuntimeState()
+    danmu_app.set_web_error_status = lambda msg, *, is_error: danmu_app.web_runtime_state.set_error_status(
+        msg, is_error=is_error
+    )
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._startup_error_from_attach = True
+    danmu_app.web_runtime_state.set_error_status("未就绪", is_error=True)
+
+    server.startup_ok = True
+    server._ready.set()
+    clear_startup_attach_error_if_needed(server)
+
+    assert classify_web_console_startup(server) == "ready"
+    assert danmu_app.web_runtime_state.is_error is False
+    assert server._startup_error_from_attach is False
+
+
+def test_attach_status_timer_clears_error_when_server_becomes_ready():
+    """attach_web_console status tick: slow → ready clears transient attach error."""
+    import threading
+
+    from app.application.web_runtime_state import WebRuntimeState
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        classify_web_console_startup,
+        clear_startup_attach_error_if_needed,
+    )
+
+    danmu_app = MagicMock()
+    danmu_app.web_runtime_state = WebRuntimeState()
+    danmu_app.set_web_error_status = lambda msg, *, is_error: danmu_app.web_runtime_state.set_error_status(
+        msg, is_error=is_error
+    )
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._thread = threading.Thread(target=time.sleep, args=(5.0,), daemon=True)
+    server._thread.start()
+    server._startup_error_from_attach = True
+    danmu_app.web_runtime_state.set_error_status("未就绪", is_error=True)
+
+    try:
+        assert classify_web_console_startup(server) == "slow"
+
+        server.startup_ok = True
+        server._ready.set()
+        if classify_web_console_startup(server) == "ready":
+            clear_startup_attach_error_if_needed(server)
+
+        assert classify_web_console_startup(server) == "ready"
+        assert danmu_app.web_runtime_state.is_error is False
+        assert server._startup_error_from_attach is False
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
 
 
 def test_web_console_server_stop_schedules_shutdown_callback():
@@ -1152,6 +1398,7 @@ def test_quit_stops_web_status_timer_before_server_shutdown(monkeypatch):
         webview_shell=None,
         web_server=MagicMock(),
         stop_web_status_timer=MagicMock(),
+        _pool_topup_timer=FakeTimer(),
     )
     app.ai_worker.close.side_effect = lambda: order.append("close")
     app.history_writer.stop.side_effect = lambda: order.append("history_stop")
@@ -1193,6 +1440,7 @@ def test_quit_logs_warning_when_thread_pool_does_not_finish(monkeypatch):
         webview_shell=None,
         web_server=MagicMock(),
         stop_web_status_timer=MagicMock(),
+        _pool_topup_timer=FakeTimer(),
     )
 
     DanmuApp.quit(app)
@@ -1202,31 +1450,23 @@ def test_quit_logs_warning_when_thread_pool_does_not_finish(monkeypatch):
     )
 
 
-def test_probe_route_accepts_json_body(monkeypatch):
+def test_probe_route_accepts_json_body():
     """Regression: /api/probe in web_console._run nested scope caused query: Field required 422."""
-    from app.api_probe import ProbeResult
     from app.web_api.routes import register_web_routes
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     app = FastAPI()
     bridge = MagicMock()
-    bridge.danmu_app.config = FakeConfig(
-        {
-            "api_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
-            "model": "doubao-test",
-            "api_mode": "doubao",
-            "_api_key": "sk-test",
-        }
-    )
+    bridge.danmu_app.probe_api_connection.return_value = {
+        "ok": True,
+        "message": "连接成功",
+        "status_code": 200,
+    }
 
     def _check_token(_authorization: str | None = None) -> None:
         return None
 
-    monkeypatch.setattr(
-        "app.api_probe.probe_connection",
-        lambda endpoint, api_key, model_id, mode: ProbeResult(True, "连接成功"),
-    )
     register_web_routes(app, bridge, _check_token)
 
     client = TestClient(app)
@@ -1243,6 +1483,45 @@ def test_probe_route_accepts_json_body(monkeypatch):
     body = res.json()
     assert body["ok"] is True
     assert body["message"] == "连接成功"
+
+
+def test_test_danmu_route_uses_public_app_entry():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.inject_test_danmu_batch.return_value = {
+        "ok": True,
+        "queued": 1,
+        "screenshot_id": 1,
+    }
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+    def _check_token(authorization: str | None = None) -> None:
+        if authorization != "Bearer secret":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401)
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    denied = client.post("/api/test/danmu", json={"items": ["测试弹幕"]})
+    assert denied.status_code == 401
+
+    ok = client.post(
+        "/api/test/danmu",
+        json={"items": ["一二三四五六七八九十"], "persona": "验收"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["ok"] is True
+    bridge.danmu_app.inject_test_danmu_batch.assert_called_once_with(
+        ["一二三四五六七八九十"],
+        persona_id="验收",
+    )
 
 
 def test_capture_region_get_route():
@@ -1686,3 +1965,25 @@ def test_announcements_read_state_put_rejects_invalid_body():
         },
     )
     assert res.status_code == 400
+
+
+def test_announcements_state_normalize_drops_invalid_overview_id():
+    from app.web_api.announcements_state import normalize_state
+
+    state = normalize_state(
+        {
+            "readIds": [],
+            "lastSeenMs": 0,
+            "overviewBannerDismissedId": "not-a-uuid",
+        }
+    )
+    assert state["overviewBannerDismissedId"] == ""
+
+
+def test_announcements_state_validate_payload_rejects_bad_uuid():
+    from app.web_api.announcements_state import validate_payload
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        validate_payload({"readIds": ["not-a-uuid"], "lastSeenMs": 0})
+    assert exc.value.status_code == 400

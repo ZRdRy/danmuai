@@ -4,6 +4,10 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from app.logger import SanitizedLogger
 
 
+def _normalize_hotkey(keys: str) -> str:
+    return keys.lower().replace(" ", "")
+
+
 class _ToggleBridge(QObject):
     toggle = pyqtSignal()
 
@@ -21,7 +25,7 @@ class HotkeyManager(QObject):
     def register(self, keys: str = ""):
         self.unregister()
         if keys:
-            self._hotkey_str = keys.lower().replace("ctrl+shift+", "ctrl+shift+")
+            self._hotkey_str = _normalize_hotkey(keys)
         try:
             keyboard.add_hotkey(self._hotkey_str, self._bridge.toggle.emit)
             self._registered = True
@@ -41,7 +45,7 @@ class HotkeyManager(QObject):
         self._registered_hotkey_str = ""
 
     def set_keys(self, keys: str):
-        hotkey = keys.lower().replace(" ", "")
+        hotkey = _normalize_hotkey(keys)
         if hotkey == self._hotkey_str:
             return
         self._hotkey_str = hotkey

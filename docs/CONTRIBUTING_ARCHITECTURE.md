@@ -33,7 +33,9 @@ If you touch scheduling or RTT: [archive/architecture-phases/phase4-freeze.md](a
 
 **Do** use public facades:
 
-- `build_status_snapshot()`, `build_diagnostic_snapshot()`
+- `build_status_snapshot()`, `build_diagnostic_snapshot()`, `build_live_status_snapshot()`
+- `get_request_scheduler()`, `get_request_timing_service()`, `api_schedule_block_reason()`
+- `visible_display_count()`, `probe_api_connection()`
 - `apply_web_config_payload()`, `set_active_personae()`, `resolve_request_credentials()`
 - `run_mic_test()`, `set_web_error_status()`, `start()`, `stop()`, `toggle()`
 - `request_capture_region_selection()`, `reset_capture_region()`, `get_capture_region_status()`

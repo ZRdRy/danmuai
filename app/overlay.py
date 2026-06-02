@@ -26,7 +26,9 @@ from app.danmu_engine import (
     DanmuEngine,
     DanmuItem,
     layout_height_ratio,
+    normalize_danmu_display_text,
     normalize_layout_mode,
+    resolve_danmu_max_chars,
 )
 
 if sys.platform == "win32":
@@ -93,6 +95,7 @@ class DanmuOverlay(QWidget):
         self.setStyleSheet("background: transparent;")
 
         self._apply_font_from_config()
+        self._sync_applied_display_settings_markers()
 
         self._screen_width: float = 0.0
         self._timer_interval_ms = _INTERVAL_MS
@@ -107,11 +110,45 @@ class DanmuOverlay(QWidget):
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self._tick)
 
-    def _apply_font_from_config(self) -> None:
+    def _config_font_size(self) -> int:
         from app.config_defaults import DEFAULT_FONT_SIZE
 
         size = self.config.get_int("font_size", DEFAULT_FONT_SIZE)
-        size = max(12, min(72, size))
+        return max(12, min(72, size))
+
+    def _sync_applied_display_settings_markers(self) -> None:
+        self._applied_font_size = self._config_font_size()
+        self._applied_danmu_max_chars = resolve_danmu_max_chars(self.config)
+
+    def display_settings_dirty(self) -> bool:
+        """True when font_size or danmu_max_chars in config differs from last apply."""
+        if self._config_font_size() != getattr(self, "_applied_font_size", -1):
+            return True
+        return resolve_danmu_max_chars(self.config) != getattr(
+            self, "_applied_danmu_max_chars", -1
+        )
+
+    def apply_display_settings(self) -> None:
+        """Re-read font_size / danmu_max_chars and rebuild on-screen item metrics and pixmaps."""
+        self._apply_font_from_config()
+        for track in self.engine.tracks:
+            for item in track.items:
+                item.content = normalize_danmu_display_text(item.content, self.config)
+                item._pixmap = None
+                item._opacity_cache_bucket = None
+                item._cached_opacity = None
+                self.measure_item_width(item)
+                self.prepare_item_pixmap(item)
+                self.engine._refresh_item_visibility(item)
+        self._sync_applied_display_settings_markers()
+        if self.isVisible():
+            dirty = self._union_dirty_rect(self._motion_margin_px())
+            if dirty is not None:
+                self.update(dirty)
+            self.ensure_render_loop()
+
+    def _apply_font_from_config(self) -> None:
+        size = self._config_font_size()
         self.font = QFont("Microsoft YaHei", size)
         self.font.setBold(True)
         self.font_metrics = QFontMetrics(self.font)

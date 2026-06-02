@@ -1,8 +1,10 @@
 """Tests for persisted lifetime counters."""
 
+import sqlite3
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from app.lifetime_stats import (
     STATS_LIFETIME_DANMU,
     STATS_LIFETIME_INPUT_TOKENS,
@@ -119,6 +121,29 @@ def test_refresh_status_includes_lifetime_fields():
     assert status.lifetime_runtime_sec == 0.0
 
 
+def test_refresh_status_preserves_legacy_lifetime_extra_alongside_split_fields():
+    from app.web_console import WebConsoleBridge
+
+    app = _make_bridge_status_app(
+        lifetime_stats=LifetimeStats(
+            FakeConfig(
+                {
+                    STATS_LIFETIME_TOKENS: "420",
+                    STATS_LIFETIME_INPUT_TOKENS: "100",
+                    STATS_LIFETIME_OUTPUT_TOKENS: "40",
+                }
+            )
+        ),
+        _start_time=0,
+    )
+    bridge = WebConsoleBridge(app)
+    status = bridge.refresh_status()
+
+    assert status.lifetime_total_tokens == 420
+    assert status.lifetime_input_tokens == 100
+    assert status.lifetime_output_tokens == 40
+
+
 def test_refresh_status_exposes_session_input_output_tokens():
     from app.web_console import WebConsoleBridge
 
@@ -131,3 +156,37 @@ def test_refresh_status_exposes_session_input_output_tokens():
     assert status.input_tokens == 120
     assert status.output_tokens == 30
     assert status.total_tokens == 150
+
+
+def test_flush_runtime_preserves_session_when_set_batch_fails():
+    cfg = FakeConfig({STATS_LIFETIME_RUNTIME_SEC: "10.0"})
+    stats = LifetimeStats(cfg)
+    assert stats._runtime_sec == 10.0
+
+    with patch.object(cfg, "set_batch", side_effect=sqlite3.OperationalError("database is locked")):
+        with pytest.raises(sqlite3.OperationalError):
+            stats.flush_runtime(25.0)
+
+    assert stats._runtime_sec == 10.0
+    assert cfg.get(STATS_LIFETIME_RUNTIME_SEC) == "10.0"
+
+
+def test_flush_runtime_persists_before_mutating_memory():
+    cfg = FakeConfig({STATS_LIFETIME_RUNTIME_SEC: "5.0"})
+    stats = LifetimeStats(cfg)
+    observed: list[float] = []
+
+    original_set_batch = cfg.set_batch
+
+    def track_set_batch(items):
+        observed.append(stats._runtime_sec)
+        original_set_batch(items)
+
+    cfg.set_batch = track_set_batch
+    assert stats.flush_runtime(12.5) is True
+    assert observed == [5.0]
+    assert stats._runtime_sec == 17.5
+    assert float(cfg.get(STATS_LIFETIME_RUNTIME_SEC)) == 17.5
+
+    stats2 = LifetimeStats(cfg)
+    assert stats2.snapshot()["lifetime_runtime_sec"] == 17.5

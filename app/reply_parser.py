@@ -125,7 +125,10 @@ def parse_ai_reply_with_memory(
 
 
 def parse_ai_reply_payload(text: str) -> list[str]:
-    """仅解析弹幕列表，忽略 scene_memory（测试与无记忆路径用）。"""
+    """仅解析弹幕列表，忽略 scene_memory（测试与无记忆路径用）。
+
+    生产 mic / 视觉回复路径应使用 parse_ai_reply_with_memory 以合并 scene_memory 信封。
+    """
     items, _ = parse_ai_reply_with_memory(text)
     return items
 

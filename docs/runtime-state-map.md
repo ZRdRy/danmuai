@@ -116,7 +116,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `web_server` | `main.py:126` | 本地 FastAPI/WS 控制台 server 引用。 | `main.py::__init__()` | `main.py::start()`、`main.py::_open_web_console()`、`main.py::quit()` | 否 | UI/集成对象。 |
 | `web_bridge` | `main.py:127` | Web 控制台 Qt bridge 引用。 | `main.py::__init__()` | `main.py::_set_error_status_safe()`、`main.py::_publish_live_status()` | 否 | UI bridge 对象。 |
-| `webview_shell` | `main.py:128` | pywebview 壳对象引用。 | `main.py::__init__()`、`app/webview_shell.py::attach_webview_shell()` | `main.py::_open_web_console()`、`main.py::quit()` | 否 | 桌面壳对象。 |
+| `webview_shell` | `main.py:128` | pywebview 壳对象引用。 | `main.py::__init__()`、`app/webview_shell.py::attach_webview_shell()` | `main.py::_open_web_console()`、`main.py::quit()` | 否 | 桌面壳对象；`WebViewShell` 内 `_spawn_attempt`、`_defer_browser_fallback` 为壳内启动重试状态（非 `DanmuApp` 字段）。 |
 | `_web_error_message` | `main.py:129` | Web 控制台上一次错误/状态消息。 | `main.py::_set_error_status_safe()` | `app/web_console.py::WebConsoleBridge.refresh_status()` | 是 | 纯字符串 UI 状态。 |
 | `_web_error_is_error` | `main.py:130` | Web 错误消息的严重级别标记。 | `main.py::_set_error_status_safe()` | `app/web_console.py::WebConsoleBridge.refresh_status()` | 是 | 纯布尔 UI 状态。 |
 | `_cached_danmu_lines` | `main.py:147` | 缓存上一次 `danmu_lines` 配置，便于决定是否重建轨道。 | `main.py::__init__()`、`main.py::_on_config_changed()` | `main.py::_on_config_changed()` | 是 | UI/布局缓存值。 |

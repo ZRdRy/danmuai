@@ -166,6 +166,31 @@ def test_record_scene_memory_display_tolerates_invalid_memory_window():
     assert app._scene_memory.dedup.recent_bullets[0].text == "有效弹幕"
 
 
+def test_record_scene_memory_display_accepts_mic_source():
+    cfg = FakeConfig()
+    cfg.get = lambda key, default="": {"memory_mode": "scene_card"}.get(key, default)
+    cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
+
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app, config=cfg, _scene_generation=0)
+    app._scene_memory = SceneMemoryStore()
+    app._record_scene_memory_display = DanmuApp._record_scene_memory_display.__get__(app, DanmuApp)
+    app._memory_tone_hint = DanmuApp._memory_tone_hint.__get__(app, DanmuApp)
+    app._memory_mode = DanmuApp._memory_mode.__get__(app, DanmuApp)
+    app._memory_enabled = DanmuApp._memory_enabled.__get__(app, DanmuApp)
+
+    queued = QueuedReply(
+        "p1", 1, 0, "mic 弹幕",
+        scene_generation=0,
+        memory_eligible=True,
+        is_fallback=False,
+        source="mic",
+    )
+    app._record_scene_memory_display(queued)
+    assert len(app._scene_memory.dedup.recent_bullets) == 1
+    assert app._scene_memory.dedup.recent_bullets[0].text == "mic 弹幕"
+
+
 def test_consume_reply_queue_records_ai_display():
     cfg = FakeConfig()
     cfg.get = lambda key, default="": {
@@ -200,6 +225,42 @@ def test_consume_reply_queue_records_ai_display():
 
     assert len(app._scene_memory.dedup.recent_bullets) == 1
     assert app._scene_memory.dedup.recent_bullets[0].text == "真实 AI 弹幕"
+
+
+def test_consume_reply_queue_records_mic_display():
+    cfg = FakeConfig()
+    cfg.get = lambda key, default="": {
+        "memory_mode": "scene_card",
+        "drop_stale": "0",
+    }.get(key, default)
+    cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
+
+    app = _make_minimal_app()
+    app.config = cfg
+    app._scene_memory = SceneMemoryStore()
+    app._record_scene_memory_display = DanmuApp._record_scene_memory_display.__get__(app, DanmuApp)
+    app._memory_tone_hint = DanmuApp._memory_tone_hint.__get__(app, DanmuApp)
+    app._memory_mode = DanmuApp._memory_mode.__get__(app, DanmuApp)
+    app._memory_enabled = DanmuApp._memory_enabled.__get__(app, DanmuApp)
+    app._scene_generation = 0
+    app._latest_screenshot_id = 5
+    app._latest_requested_screenshot_id = 5
+    app._latest_queued_screenshot_id = 5
+    app.reply_buffer.push(
+        QueuedReply(
+            "p1", 1, 0, "mic 上屏弹幕",
+            screenshot_id=5,
+            captured_at=time.monotonic(),
+            scene_generation=0,
+            memory_eligible=True,
+            source="mic",
+        )
+    )
+
+    app._consume_reply_queue()
+
+    assert len(app._scene_memory.dedup.recent_bullets) == 1
+    assert app._scene_memory.dedup.recent_bullets[0].text == "mic 上屏弹幕"
 
 
 def test_consume_reply_queue_stale_does_not_record():

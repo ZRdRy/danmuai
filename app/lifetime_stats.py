@@ -62,15 +62,18 @@ class LifetimeStats:
         self._config.set_batch(self._persist_token_keys())
         self._dirty = False
 
-    def flush_runtime(self, session_sec: float) -> None:
+    def flush_runtime(self, session_sec: float) -> bool:
+        """Persist session runtime into lifetime counters; return True on success."""
         if session_sec <= 0:
             self.flush_pending()
-            return
-        self._runtime_sec += session_sec
+            return True
+        new_runtime = self._runtime_sec + session_sec
         payload = self._persist_token_keys()
-        payload[STATS_LIFETIME_RUNTIME_SEC] = str(self._runtime_sec)
+        payload[STATS_LIFETIME_RUNTIME_SEC] = str(new_runtime)
         self._config.set_batch(payload)
+        self._runtime_sec = new_runtime
         self._dirty = False
+        return True
 
     def display_runtime_sec(self, session_sec: float = 0.0) -> float:
         return self._runtime_sec + max(0.0, session_sec)

@@ -438,6 +438,17 @@ def test_reload_tracks_preserves_visible_items(config_store):
     assert engine.needs_render_tick()
 
 
+def test_reload_tracks_visible_display_count_after_preserve(config_store):
+    """BUG-003: preserved on-screen items must seed visible count immediately."""
+    engine = DanmuEngine(config_store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks(preserve_visible=False)
+    engine.tracks[0].add(DanmuItem(content="stay", x=500.0, width=100.0))
+    engine.reload_tracks(preserve_visible=True)
+    assert engine.visible_display_count() == 1
+
+
 def test_reload_tracks_drops_offscreen_items(config_store):
     engine = DanmuEngine(config_store)
     engine.set_screen_width(1920.0)

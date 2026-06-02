@@ -49,7 +49,12 @@ class RuntimeState:
 
         running = bool(getattr(app.engine, "running", False))
         queue_count = app.reply_buffer.size() if hasattr(app.reply_buffer, "size") else 0
-        display_count = app._visible_display_count() if hasattr(app, "_visible_display_count") else 0
+        if hasattr(app, "visible_display_count"):
+            display_count = app.visible_display_count()
+        elif hasattr(app, "_visible_display_count"):
+            display_count = app._visible_display_count()
+        else:
+            display_count = 0
         input_tokens = int(
             getattr(stats_state, "total_input_tokens", getattr(app, "_total_input_tokens", 0)) or 0
         )
@@ -61,7 +66,15 @@ class RuntimeState:
         )
         runtime_sec = time.monotonic() - start_time if start_time > 0 else 0.0
 
-        live_snapshot = app._build_live_status_snapshot() if running else None
+        if running:
+            if hasattr(app, "build_live_status_snapshot"):
+                live_snapshot = app.build_live_status_snapshot()
+            elif hasattr(app, "_build_live_status_snapshot"):
+                live_snapshot = app._build_live_status_snapshot()
+            else:
+                live_snapshot = None
+        else:
+            live_snapshot = None
 
         dedup_profile = None
         if dedup_profile_enabled() and hasattr(app.engine, "get_dedup_profile_snapshot"):

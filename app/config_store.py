@@ -80,8 +80,10 @@ class ConfigStore:
             seed_config_defaults(self)
             self._load_cache()
         self._fernet = self._init_fernet()
+        self._repair_stale_region_if_needed()
 
     def get_startup_notice(self) -> str:
+        """首装会话返回本地化引导文案；config.db 已存在时恒为空（二次启动不误弹）。"""
         if self.is_first_run:
             return tr("config.startup_notice")
         return ""
@@ -194,7 +196,6 @@ class ConfigStore:
                 return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
             except Exception:
                 logger.warning(tr("config.decrypt_failed"))
-                return ""
         # Legacy base64 fallback (not secure - only encoded, not encrypted)
         encoded = self.get("api_key_encoded", "")
         if not encoded:
@@ -238,7 +239,6 @@ class ConfigStore:
                 return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
             except Exception:
                 logger.warning(tr("config.decrypt_failed"))
-                return ""
         encoded = self.get("tts_api_key_encoded", "")
         if not encoded:
             return ""
@@ -275,14 +275,30 @@ class ConfigStore:
 
     # --- 选区持久化 ---
 
+    @staticmethod
+    def _normalize_region(x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
+        """无有效尺寸时四键一致归零（全屏 / 未选区）。"""
+        if w <= 0 or h <= 0:
+            return 0, 0, 0, 0
+        return x, y, w, h
+
+    def _repair_stale_region_if_needed(self) -> None:
+        x = self.get_int("region_x", 0)
+        y = self.get_int("region_y", 0)
+        w = self.get_int("region_w", 0)
+        h = self.get_int("region_h", 0)
+        if (w <= 0 or h <= 0) and (x, y, w, h) != (0, 0, 0, 0):
+            self.set_region(0, 0, 0, 0)
+
     def get_region(self) -> tuple[int, int, int, int]:
         x = self.get_int("region_x", 0)
         y = self.get_int("region_y", 0)
         w = self.get_int("region_w", 0)
         h = self.get_int("region_h", 0)
-        return x, y, w, h
+        return self._normalize_region(x, y, w, h)
 
     def set_region(self, x: int, y: int, w: int, h: int):
+        x, y, w, h = self._normalize_region(x, y, w, h)
         self.set_batch({
             "region_x": str(x),
             "region_y": str(y),

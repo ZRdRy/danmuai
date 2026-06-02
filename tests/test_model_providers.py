@@ -1,15 +1,18 @@
 from app.model_providers import (
     DEFAULT_PROVIDER_ID,
     apply_provider_to_form,
+    get_openai_adapter_for_model,
     guess_provider_from_endpoint,
     is_doubao_mode,
     is_model_config_complete,
     is_valid_endpoint,
+    mic_audio_supported_for_config,
     model_likely_supports_mic_audio,
     normalize_endpoint,
     normalize_mode,
     resolve_active_model_id,
     resolve_api_transport,
+    resolve_openai_provider_id,
     validate_model_config,
 )
 
@@ -148,3 +151,52 @@ def test_model_supports_mic_audio_doubao_endpoint():
     ep = "https://ark.cn-beijing.volces.com/api/v3"
     assert model_supports_mic_audio("doubao-seed-2-0-mini-260428", endpoint=ep, api_mode="doubao")
     assert not model_supports_mic_audio("doubao-seed-1-6-flash-250828", endpoint=ep, api_mode="doubao")
+
+
+def test_model_supports_mic_audio_mimo_v25_custom_proxy_endpoint():
+    from app.model_providers import model_supports_mic_audio
+
+    ep = "https://my-mimo-proxy.com/v1"
+    assert model_supports_mic_audio("mimo-v2.5", endpoint=ep, api_mode="openai-compatible")
+    assert not model_supports_mic_audio("mimo-v2-omni", endpoint=ep, api_mode="openai-compatible")
+
+
+def test_model_supports_mic_audio_rejects_non_mimo_on_custom_openai():
+    from app.model_providers import model_supports_mic_audio
+
+    ep = "https://example.com/v1"
+    assert not model_supports_mic_audio("gpt-4o", endpoint=ep, api_mode="openai")
+    assert not model_supports_mic_audio("deepseek-chat", endpoint=ep, api_mode="openai-compatible")
+
+
+def test_resolve_openai_provider_id_mimo_v25_custom_endpoint():
+    ep = "https://my-mimo-proxy.com/v1"
+    assert resolve_openai_provider_id("mimo-v2.5", ep, "openai-compatible") == "mimo"
+    assert resolve_openai_provider_id("gpt-4o", ep, "openai-compatible") == DEFAULT_PROVIDER_ID
+
+
+def test_mic_audio_supported_for_config_custom_mimo_proxy():
+    cfg = _Cfg(
+        model="mimo-v2.5",
+        api_endpoint="https://my-mimo-proxy.com/v1",
+        api_mode="openai-compatible",
+    )
+    assert mic_audio_supported_for_config(cfg) is True
+
+    cfg_unsupported = _Cfg(
+        model="gpt-4o",
+        api_endpoint="https://example.com/v1",
+        api_mode="openai-compatible",
+    )
+    assert mic_audio_supported_for_config(cfg_unsupported) is False
+
+
+def test_get_openai_adapter_for_model_mimo_v25_custom_endpoint():
+    from app.providers.adapters.mimo import MimoOpenAIAdapter
+
+    adapter = get_openai_adapter_for_model(
+        "mimo-v2.5",
+        "https://my-mimo-proxy.com/v1",
+        "openai-compatible",
+    )
+    assert isinstance(adapter, MimoOpenAIAdapter)

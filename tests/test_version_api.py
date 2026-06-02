@@ -87,3 +87,10 @@ def test_app_update_state_put_rejects_invalid_version():
         json={"dismissedLatestVersion": "not-a-version"},
     )
     assert res.status_code == 400
+
+
+def test_app_update_state_validate_payload_normalizes_semver():
+    from app.web_api.app_update_state import validate_payload
+
+    result = validate_payload({"dismissedLatestVersion": "0.3.0"})
+    assert result == {"dismissedLatestVersion": "0.3.0"}

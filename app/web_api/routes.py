@@ -3,210 +3,29 @@
 - /api/status 在 web_console 内注册，本文件不重复
 - /api/diagnostics 必须 build_diagnostic_snapshot()，与 status 分离
 - 写操作需 Bearer；须经 bridge.invoke_on_main（勿在 HTTP 线程直接写 Config / emit config_changed）
-
-社区站生产 URL：环境变量 ``DANMU_COMMUNITY_SITE_URL``（勿写入 Web 静态资源）。
 """
 
-import os
-import re
 from typing import TYPE_CHECKING, Callable
 from urllib.parse import unquote
 
-from fastapi import File, Form, Header, HTTPException, UploadFile
+from fastapi import Header, HTTPException
 from pydantic import BaseModel
 
-from app.image_compress import compress_image_bytes
 from app.web_api import ai_butler as butler_api
+from app.web_api import announcements_state
+from app.web_api import app_update_state as app_update_state_api
 from app.web_api import custom_models as cm_api
 from app.web_api import danmu_pool as pool_api
 from app.web_api import danmu_read as read_api
 from app.web_api import persona as persona_api
-
-# 桌面控制台「社区」外链默认地址；部署时请设 DANMU_COMMUNITY_SITE_URL 或改此常量。
-DEFAULT_COMMUNITY_SITE_URL = "https://community-site-two.vercel.app"
-
-ANNOUNCEMENTS_READ_STATE_KEY = "announcements_read_state"
-ANNOUNCEMENTS_READ_IDS_MAX = 200
-APP_UPDATE_STATE_KEY = "app_update_state"
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
-
-
-def _empty_announcements_read_state() -> dict[str, object]:
-    return {"readIds": [], "lastSeenMs": 0, "overviewBannerDismissedId": ""}
-
-
-def _normalize_overview_banner_dismissed_id(raw: object) -> str:
-    if not isinstance(raw, str):
-        return ""
-    item = raw.strip()
-    if not item:
-        return ""
-    if not _UUID_RE.match(item):
-        return ""
-    return item
-
-
-def _normalize_announcements_read_state(raw: object) -> dict[str, object]:
-    if not isinstance(raw, dict):
-        return _empty_announcements_read_state()
-    read_ids = raw.get("readIds")
-    if not isinstance(read_ids, list):
-        read_ids = []
-    cleaned: list[str] = []
-    for item in read_ids:
-        if not isinstance(item, str):
-            continue
-        item = item.strip()
-        if item and item not in cleaned:
-            cleaned.append(item)
-    last_seen_ms = raw.get("lastSeenMs", 0)
-    try:
-        last_seen_ms = int(last_seen_ms)
-    except (TypeError, ValueError):
-        last_seen_ms = 0
-    if last_seen_ms < 0:
-        last_seen_ms = 0
-    overview_banner_dismissed_id = _normalize_overview_banner_dismissed_id(
-        raw.get("overviewBannerDismissedId", "")
-    )
-    return {
-        "readIds": cleaned[:ANNOUNCEMENTS_READ_IDS_MAX],
-        "lastSeenMs": last_seen_ms,
-        "overviewBannerDismissedId": overview_banner_dismissed_id,
-    }
-
-
-def _get_announcements_read_state_from_config(config) -> dict[str, object]:
-    raw = config.get_json(ANNOUNCEMENTS_READ_STATE_KEY, default=_empty_announcements_read_state())
-    return _normalize_announcements_read_state(raw)
-
-
-def _save_announcements_read_state(config, state: dict[str, object]) -> None:
-    config.set_json(ANNOUNCEMENTS_READ_STATE_KEY, state)
-
-
-def _empty_app_update_state() -> dict[str, str]:
-    return {"dismissedLatestVersion": ""}
-
-
-def _get_app_update_state_from_config(config) -> dict[str, str]:
-    raw = config.get_json(APP_UPDATE_STATE_KEY, default=_empty_app_update_state())
-    if not isinstance(raw, dict):
-        return _empty_app_update_state()
-    dismissed = raw.get("dismissedLatestVersion", "")
-    if not isinstance(dismissed, str):
-        dismissed = ""
-    return {"dismissedLatestVersion": dismissed.strip()}
-
-
-def _save_app_update_state(config, state: dict[str, str]) -> None:
-    config.set_json(APP_UPDATE_STATE_KEY, state)
-
-
-def _validate_app_update_state_payload(body: dict) -> dict[str, str]:
-    dismissed = body.get("dismissedLatestVersion", "")
-    if dismissed is None:
-        dismissed = ""
-    if not isinstance(dismissed, str):
-        raise HTTPException(
-            status_code=400, detail="dismissedLatestVersion 必须为字符串"
-        )
-    dismissed = dismissed.strip()
-    if dismissed:
-        from app.version_compare import normalize_version, parse_version
-
-        try:
-            parse_version(dismissed)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail="dismissedLatestVersion 版本格式无效"
-            ) from exc
-        dismissed = normalize_version(dismissed)
-    return {"dismissedLatestVersion": dismissed}
-
-
-def _validate_announcements_read_state_payload(body: dict) -> dict[str, object]:
-    read_ids = body.get("readIds")
-    if read_ids is None:
-        read_ids = []
-    if not isinstance(read_ids, list):
-        raise HTTPException(status_code=400, detail="readIds 必须为数组")
-    cleaned: list[str] = []
-    for item in read_ids:
-        if not isinstance(item, str):
-            raise HTTPException(status_code=400, detail="readIds 元素必须为字符串")
-        item = item.strip()
-        if not item:
-            continue
-        if not _UUID_RE.match(item):
-            raise HTTPException(status_code=400, detail="readIds 包含无效的公告 ID")
-        if item not in cleaned:
-            cleaned.append(item)
-    if len(cleaned) > ANNOUNCEMENTS_READ_IDS_MAX:
-        cleaned = cleaned[-ANNOUNCEMENTS_READ_IDS_MAX:]
-    last_seen_ms = body.get("lastSeenMs", 0)
-    try:
-        last_seen_ms = int(last_seen_ms)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="lastSeenMs 必须为整数") from exc
-    if last_seen_ms < 0:
-        raise HTTPException(status_code=400, detail="lastSeenMs 不能为负数")
-    overview_banner_dismissed_id = body.get("overviewBannerDismissedId", "")
-    if overview_banner_dismissed_id is None:
-        overview_banner_dismissed_id = ""
-    if not isinstance(overview_banner_dismissed_id, str):
-        raise HTTPException(
-            status_code=400, detail="overviewBannerDismissedId 必须为字符串"
-        )
-    overview_banner_dismissed_id = overview_banner_dismissed_id.strip()
-    if overview_banner_dismissed_id and not _UUID_RE.match(overview_banner_dismissed_id):
-        raise HTTPException(
-            status_code=400, detail="overviewBannerDismissedId 无效的公告 ID"
-        )
-    return {
-        "readIds": cleaned,
-        "lastSeenMs": last_seen_ms,
-        "overviewBannerDismissedId": overview_banner_dismissed_id,
-    }
-
+from app.web_api.preview_compress import register_preview_compress_route
 
 if TYPE_CHECKING:
     from app.web_console import WebConsoleBridge
 
 
-def register_preview_compress_route(app, check_token: Callable) -> None:
-    """Module-level registration so UploadFile resolves under Python 3.14 + Pydantic v2."""
-
-    @app.post("/api/preview/compress")
-    async def preview_compress(
-        file: UploadFile = File(...),
-        max_width: int = Form(768),
-        quality: int = Form(85),
-        authorization: str | None = Header(default=None),
-    ):
-        check_token(authorization)
-        data = await file.read()
-        if len(data) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="图片太大了，请换一张小一点的~")
-        try:
-            return compress_image_bytes(data, max_width=max_width, quality=quality)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"小助手读不懂这张图：{exc}") from exc
-
-
 def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) -> None:
     register_preview_compress_route(app, check_token)
-
-    @app.get("/api/community-site")
-    def get_community_site():
-        """社区 Vercel 地址（只读）；供 Web 控制台侧栏打开外链，不含密钥。"""
-        raw = os.environ.get("DANMU_COMMUNITY_SITE_URL", DEFAULT_COMMUNITY_SITE_URL).strip()
-        if not raw.startswith(("http://", "https://")):
-            raw = DEFAULT_COMMUNITY_SITE_URL
-        return {"url": raw.rstrip("/")}
 
     class PersonaCreatePayload(BaseModel):
         name: str
@@ -251,6 +70,10 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
 
     class DanmuPoolCustomDeletePayload(BaseModel):
         texts: list[str]
+
+    class TestDanmuPayload(BaseModel):
+        items: list[str]
+        persona: str = "测试"
 
     class DanmuReadConfigPayload(BaseModel):
         enabled: bool | None = None
@@ -314,7 +137,7 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
 
     @app.get("/api/announcements-read-state")
     def get_announcements_read_state():
-        return _get_announcements_read_state_from_config(_danmu().config)
+        return announcements_state.get_from_config(_danmu().config)
 
     @app.put("/api/announcements-read-state")
     def put_announcements_read_state(
@@ -322,8 +145,8 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         authorization: str | None = Header(default=None),
     ):
         check_token(authorization)
-        state = _validate_announcements_read_state_payload(body.model_dump())
-        _invoke_main(_save_announcements_read_state, _danmu().config, state)
+        state = announcements_state.validate_payload(body.model_dump())
+        _invoke_main(announcements_state.save_to_config, _danmu().config, state)
         return {"ok": True}
 
     @app.get("/api/version")
@@ -334,7 +157,7 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
 
     @app.get("/api/app-update-state")
     def get_app_update_state():
-        return _get_app_update_state_from_config(_danmu().config)
+        return app_update_state_api.get_from_config(_danmu().config)
 
     @app.put("/api/app-update-state")
     def put_app_update_state(
@@ -342,8 +165,8 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         authorization: str | None = Header(default=None),
     ):
         check_token(authorization)
-        state = _validate_app_update_state_payload(body.model_dump())
-        _invoke_main(_save_app_update_state, _danmu().config, state)
+        state = app_update_state_api.validate_payload(body.model_dump())
+        _invoke_main(app_update_state_api.save_to_config, _danmu().config, state)
         return {"ok": True}
 
     @app.get("/api/personae/{name}/template")
@@ -439,6 +262,14 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         return _invoke_main(pool_api.delete_custom, _danmu(), body.model_dump())
 
+    @app.post("/api/test/danmu")
+    def post_test_danmu(
+        body: TestDanmuPayload,
+        authorization: str | None = Header(default=None),
+    ):
+        check_token(authorization)
+        return _invoke_main(_danmu().inject_test_danmu_batch, body.items, persona_id=body.persona)
+
     @app.get("/api/danmu-read/config")
     def get_danmu_read_config():
         return read_api.get_config(_danmu())
@@ -500,28 +331,17 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         return _invoke_main(cm_api.set_default_custom_model, _danmu(), index)
 
     @app.post("/api/probe")
-    def probe_api_connection(
+    def probe_api_connection_route(
         body: ProbePayload,
         authorization: str | None = Header(default=None),
     ):
         check_token(authorization)
-        from app.api_probe import probe_connection
-
-        config = _danmu().config
-        api_key = body.api_key or ""
-        if api_key == cm_api.MASKED_KEY:
-            api_key = config.get_api_key()
-        result = probe_connection(
-            body.api_endpoint or config.get("api_endpoint", ""),
-            api_key,
-            body.model or config.get("model", ""),
-            body.api_mode or config.get("api_mode", "doubao"),
+        return _danmu().probe_api_connection(
+            api_endpoint=body.api_endpoint or "",
+            api_key=body.api_key or "",
+            model=body.model or "",
+            api_mode=body.api_mode or "",
         )
-        return {
-            "ok": result.ok,
-            "message": result.message,
-            "status_code": result.status_code,
-        }
 
     @app.post("/api/custom-models/probe")
     def probe_custom_model(
@@ -529,24 +349,13 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         authorization: str | None = Header(default=None),
     ):
         check_token(authorization)
-        from app.api_probe import probe_connection
-
-        config = _danmu().config
         payload = body.model_dump()
-        api_key = payload.get("apiKey") or ""
-        if api_key == cm_api.MASKED_KEY:
-            api_key = config.get_api_key()
-        result = probe_connection(
-            payload.get("endpoint") or config.get("api_endpoint", ""),
-            api_key,
-            payload.get("modelId") or config.get("model", ""),
-            payload.get("mode") or config.get("api_mode", "doubao"),
+        return _danmu().probe_api_connection(
+            api_endpoint=str(payload.get("endpoint") or ""),
+            api_key=str(payload.get("apiKey") or ""),
+            model=str(payload.get("modelId") or ""),
+            api_mode=str(payload.get("mode") or ""),
         )
-        return {
-            "ok": result.ok,
-            "message": result.message,
-            "status_code": result.status_code,
-        }
 
     def _mic_test_response(body: MicTestPayload):
         return _invoke_main(
@@ -594,3 +403,54 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         bridge.region_reset_requested.emit()
         return {"ok": True}
+
+
+def register_diagnostics_sse_route(app, diagnostics_hub, bridge, check_token) -> None:
+    """注册 /api/diagnostics/events SSE 端点。
+
+    推送初始 hello 事件、初始诊断快照，随后每 2.5 秒推送更新快照。
+    与 /api/diagnostics GET 一致，无需鉴权。
+    """
+    import asyncio
+    import json
+    import time
+
+    from fastapi.responses import StreamingResponse
+
+    @app.get("/api/diagnostics/events")
+    async def diagnostics_events():
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        diagnostics_hub.register(queue)
+
+        async def event_stream():
+            try:
+                # 推送初始 hello 事件
+                hello = json.dumps(
+                    {"event": "hello", "ts": time.time()},
+                    ensure_ascii=False,
+                )
+                yield f"event: hello\ndata: {hello}\n\n"
+
+                # 推送初始诊断快照
+                snapshot = bridge.danmu_app.build_diagnostic_snapshot()
+                snapshot_data = json.dumps(snapshot, ensure_ascii=False)
+                yield f"event: diagnostic_snapshot\ndata: {snapshot_data}\n\n"
+
+                # 每 2.5 秒推送更新快照
+                while True:
+                    await asyncio.sleep(2.5)
+                    snapshot = bridge.danmu_app.build_diagnostic_snapshot()
+                    snapshot_data = json.dumps(snapshot, ensure_ascii=False)
+                    yield f"event: diagnostic_snapshot\ndata: {snapshot_data}\n\n"
+            finally:
+                diagnostics_hub.unregister(queue)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )

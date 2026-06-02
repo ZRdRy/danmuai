@@ -30,8 +30,8 @@ def _make_diagnostic_app(**overrides):
         object.__setattr__(app.config, "get_api_key", lambda: "")
 
     for name in (
-        "_get_request_scheduler",
-        "_get_request_timing_service",
+        "get_request_scheduler",
+        "get_request_timing_service",
         "_api_schedule_block_reason",
         "_rtt_avg",
         "_smart_cooldown_ms",
@@ -335,9 +335,14 @@ def test_diagnostics_panel_files_use_independent_endpoint_and_render_targets():
 
     root = project_root()
     app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    diagnostics_js = (root / "web" / "static" / "modules" / "diagnostics.js").read_text(
+        encoding="utf-8",
+    )
     index_html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
-    assert "/api/diagnostics" in app_js
-    assert "btnCopyDiagnosticsReport" in app_js
+    assert "/api/diagnostics" in diagnostics_js
+    assert "buildDiagnosticReportText" in diagnostics_js
+    assert "initDiagnosticsPanel" in app_js
+    assert "btnCopyDiagnosticsReport" in diagnostics_js
     assert "诊断面板" in index_html
     assert "diagnosticReportPreview" in index_html

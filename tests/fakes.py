@@ -86,8 +86,8 @@ class FakeLifetimeStats:
     def flush_pending(self) -> None:
         pass
 
-    def flush_runtime(self, session_sec: float) -> None:
-        pass
+    def flush_runtime(self, session_sec: float) -> bool:
+        return True
 
     def snapshot(self, *, session_runtime_sec: float = 0.0) -> dict:
         return {

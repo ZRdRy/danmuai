@@ -14,6 +14,7 @@ DEFAULT_DANMU_SPEED = 2.0
 DEFAULT_FONT_SIZE = 24
 DEFAULT_DEDUP_THRESHOLD = 0.5
 DEFAULT_IMAGE_MAX_WIDTH = 768
+DEFAULT_LANGUAGE = "zh"
 
 # String values aligned with runtime fallbacks in main.py / danmu_engine / ai_client.
 CONFIG_DEFAULTS: dict[str, str] = {
@@ -37,6 +38,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "image_max_width": "768",
     "image_quality": "85",
     "hotkey": "Ctrl+Shift+B",
+    "language": DEFAULT_LANGUAGE,
     "memory_mode": "off",
     "memory_window": "10",
     "mic_mode_enabled": "0",

@@ -73,3 +73,28 @@ def test_set_keys_noop_when_unchanged(add_hotkey, remove_hotkey):
 
     add_hotkey.assert_not_called()
     remove_hotkey.assert_not_called()
+
+
+@patch("app.hotkey.keyboard.remove_hotkey")
+@patch("app.hotkey.keyboard.add_hotkey")
+def test_register_strips_spaces_from_keys(add_hotkey, remove_hotkey):
+    manager = _make_manager()
+
+    manager.register("Ctrl + Shift + X")
+
+    add_hotkey.assert_called_once()
+    assert add_hotkey.call_args.args[0] == "ctrl+shift+x"
+    assert manager._registered_hotkey_str == "ctrl+shift+x"
+    assert manager.hotkey_str == "ctrl+shift+x"
+
+
+@patch("app.hotkey.keyboard.remove_hotkey")
+@patch("app.hotkey.keyboard.add_hotkey")
+def test_set_keys_and_register_normalize_same(add_hotkey, remove_hotkey):
+    via_set_keys = _make_manager()
+    via_set_keys.set_keys("Ctrl + Shift + X")
+
+    via_register = _make_manager()
+    via_register.register("Ctrl + Shift + X")
+
+    assert via_set_keys.hotkey_str == via_register.hotkey_str == "ctrl+shift+x"

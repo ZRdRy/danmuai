@@ -21,9 +21,9 @@ class DiagnosticSnapshotBuilder:
         self._app = app
 
     def build(self) -> dict[str, object]:
-        """通过 DanmuApp 的 _get_* 访问已迁移服务；Web 不得直接读 _last_api_trigger_at 等私有字段。"""
-        scheduler = self._app._get_request_scheduler()
-        timing = self._app._get_request_timing_service()
+        """经 DanmuApp 公开 façade 只读调度/timing；Web 不得直接读 _last_api_trigger_at 等私有字段。"""
+        scheduler = self._app.get_request_scheduler()
+        timing = self._app.get_request_timing_service()
         stats_state = getattr(self._app, "stats_state", None)
         web_runtime_state = getattr(self._app, "web_runtime_state", None)
         generation_pipeline = GenerationPipelineState.from_app(self._app)
@@ -33,7 +33,7 @@ class DiagnosticSnapshotBuilder:
         recent_rtt_samples = [float(sample) for sample in timing.rtt_history[-5:]]
         request_started_count = len(timing.request_started_at_by_id)
         avg_rtt = float(timing.avg_rtt())
-        block_reason = self._app._api_schedule_block_reason(enforce_min_interval=True)
+        block_reason = self._app.api_schedule_block_reason(enforce_min_interval=True)
         smart_cooldown_ms = int(
             timing.smart_cooldown_ms(
                 fallback_interval_sec=self._app.config.get_int("screenshot_interval", 3)

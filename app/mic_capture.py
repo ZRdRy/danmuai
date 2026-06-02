@@ -5,7 +5,12 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
-from app.mic_buffer import DEFAULT_MIC_SAMPLE_RATE, MicRingBuffer, clamp_mic_window_sec
+from app.mic_buffer import (
+    BYTES_PER_SAMPLE,
+    DEFAULT_MIC_SAMPLE_RATE,
+    MicRingBuffer,
+    clamp_mic_window_sec,
+)
 
 try:
     import numpy as np
@@ -153,6 +158,23 @@ class MicCaptureService:
 
     def snapshot_pcm_ms(self, ms: int) -> bytes:
         return self._buffer.take_recent_ms(ms)
+
+    def try_snapshot_pcm_ms(self, ms: int) -> bytes | None:
+        """Non-blocking PCM snapshot for utterance poll; None if ring buffer lock is busy."""
+        ms = max(1, min(int(ms), 30_000))
+        buf = self._buffer
+        if not buf._lock.acquire(blocking=False):
+            return None
+        try:
+            want = min(
+                len(buf._data),
+                ms * buf.sample_rate * BYTES_PER_SAMPLE // 1000,
+            )
+            if want <= 0:
+                return b""
+            return bytes(buf._data[-want:])
+        finally:
+            buf._lock.release()
 
     def _on_audio(self, indata, frames, time_info, status) -> None:  # pragma: no cover
         if status:

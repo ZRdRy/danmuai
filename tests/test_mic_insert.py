@@ -2,9 +2,11 @@ import time
 from unittest.mock import Mock
 
 import pytest
+from app.scene_memory import SceneMemoryStore
 from main import BatchTracker, DanmuApp
 
 from tests.conftest import bind_minimal_danmu_app
+from tests.fakes import FakeConfig
 
 
 def _bind_main_methods(app):
@@ -23,6 +25,8 @@ def _bind_main_methods(app):
         "_consume_request_timing",
         "_publish_live_status",
         "_consume_reply_queue",
+        "_memory_enabled",
+        "_memory_mode",
     ):
         setattr(app, name, getattr(DanmuApp, name).__get__(app, DanmuApp))
     app.logger = Mock()
@@ -111,3 +115,36 @@ def test_visual_on_ai_reply_still_decrements_ai_inflight(app):
     app._on_ai_reply('["v1","v2","v3","v4","v5"]', "persona-1", 5, 10, time.monotonic(), 0)
     assert app.ai_in_flight == 0
     assert app._is_generating is False
+
+
+def test_mic_ai_reply_updates_scene_memory(app):
+    cfg = FakeConfig({"memory_mode": "scene_card"})
+    app.config = cfg
+    app._scene_memory = SceneMemoryStore()
+    app._consume_reply_queue = lambda: None
+
+    raw = (
+        '{"comments": ["mic1", "mic2", "mic3", "mic4", "mic5"], '
+        '"scene_memory": {"scene_type": "voice", "scene_summary": "用户在说话", "confidence": 0.9}}'
+    )
+    app._handle_mic_ai_reply(raw, "persona-1", -1, 10, time.monotonic(), 0)
+
+    assert app._scene_memory.context.scene_summary == "用户在说话"
+    assert app._scene_memory.context.scene_type == "voice"
+    assert app.reply_buffer.size() == 5
+
+
+def test_mic_ai_reply_skips_memory_when_off(app):
+    cfg = FakeConfig({"memory_mode": "off"})
+    app.config = cfg
+    app._scene_memory = SceneMemoryStore()
+    app._consume_reply_queue = lambda: None
+
+    raw = (
+        '{"comments": ["mic1", "mic2", "mic3", "mic4", "mic5"], '
+        '"scene_memory": {"scene_summary": "不应写入", "confidence": 0.9}}'
+    )
+    app._handle_mic_ai_reply(raw, "persona-1", -1, 10, time.monotonic(), 0)
+
+    assert app._scene_memory.context.scene_summary == ""
+    assert app.reply_buffer.size() == 5

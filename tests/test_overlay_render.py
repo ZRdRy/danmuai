@@ -43,6 +43,18 @@ def test_overlay_timer_not_started_on_init(overlay_stack):
     assert not overlay.timer.isActive()
 
 
+def test_start_render_loop_noop_when_overlay_hidden(overlay_stack):
+    _, engine, overlay = overlay_stack
+    overlay.setGeometry(0, 0, 800, 600)
+    engine.running = True
+    _seed_visible_item(engine)
+
+    overlay.start_render_loop()
+
+    assert not overlay.isVisible()
+    assert not overlay.timer.isActive()
+
+
 def test_stop_render_loop_halts_timer(overlay_stack, qapp):
     _, engine, overlay = overlay_stack
     overlay.setGeometry(0, 0, 800, 600)
@@ -118,8 +130,11 @@ def test_target_interval_fade_zone_forces_60fps(overlay_stack, qapp):
     overlay.setGeometry(0, 0, 1920, 1080)
     _show_overlay(overlay, qapp)
     overlay._screen_width = 1920.0
-    engine.tracks[0].add(DanmuItem(content="fade", x=1900.0, width=100.0))
+    item = DanmuItem(content="fade", x=1900.0, width=100.0)
+    engine.tracks[0].add(item)
+    engine._refresh_item_visibility(item)
     assert engine.items_in_fade_zone()
+    assert engine.needs_render_tick()
     assert overlay._target_interval_ms() == _INTERVAL_MAX_MS
 
 
@@ -180,6 +195,36 @@ def test_global_opacity_factor_clamps(overlay_stack):
     assert overlay._global_opacity_factor() == 1.0
     store.set("opacity", "")
     assert overlay._global_opacity_factor() == 1.0
+
+
+def test_apply_display_settings_refreshes_pixmap_on_font_change(overlay_stack):
+    store, engine, overlay = overlay_stack
+    item = DanmuItem(content="resize_me", width=0.0)
+    engine.tracks[0].add(item)
+    overlay.prepare_item_pixmap(item)
+    old_width = item.width
+
+    store.set("font_size", "48")
+    overlay.apply_display_settings()
+
+    assert overlay.font.pointSize() == 48
+    assert item.width > old_width
+    assert item._pixmap is not None
+
+
+def test_apply_display_settings_retruncates_on_max_chars_change(overlay_stack):
+    store, engine, overlay = overlay_stack
+    long_text = "这是一段超过八个字的中文测试文案"
+    store.set("danmu_max_chars", "80")
+    item = DanmuItem(content=long_text, width=0.0)
+    engine.tracks[0].add(item)
+    overlay.prepare_item_pixmap(item)
+
+    store.set("danmu_max_chars", "8")
+    overlay.apply_display_settings()
+
+    assert len(item.content) <= 11
+    assert item.content.endswith("...")
 
 
 def test_item_paint_opacity_includes_global(overlay_stack):

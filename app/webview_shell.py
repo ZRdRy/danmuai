@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen
@@ -25,6 +26,7 @@ _FROZEN_SERVER_POLL_SEC = 5.0
 _NAV_POLL_SEC = 0.25
 _BROWSER_PROBE_SEC = 3.0
 _HANDSHAKE_POLL_MS = 50
+_SPAWN_MAX_ATTEMPTS = 3
 _SIGNAL_CREATED = "created"
 _SIGNAL_LOADED = "loaded"
 _PHASE_SIGNALS = frozenset({_SIGNAL_CREATED, _SIGNAL_LOADED})
@@ -52,6 +54,22 @@ def wait_for_http_server(base_url: str, timeout: float = _SERVER_POLL_SEC) -> bo
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
             time.sleep(0.15)
     return False
+
+
+def _tray_icon_for_notify(danmu_app) -> object | None:
+    """Return QSystemTrayIcon if available; tolerate partial DanmuApp (tests / early startup)."""
+    try:
+        tray_mgr = getattr(danmu_app, "tray", None)
+    except RuntimeError:
+        return None
+    if tray_mgr is None:
+        return None
+    try:
+        return getattr(tray_mgr, "tray", None)
+    except RuntimeError:
+        return None
+
+
 def notify_web_console_failure(danmu_app, reason_key: str, *, detail: str = "") -> None:
     """主线程弹窗 + 托盘气泡；HTTP 线程请经 QTimer.singleShot 调用本函数。"""
     from PyQt6.QtCore import QTimer
@@ -67,7 +85,7 @@ def notify_web_console_failure(danmu_app, reason_key: str, *, detail: str = "") 
         detail=detail,
     )
     def _show() -> None:
-        tray = getattr(getattr(danmu_app, "tray", None), "tray", None)
+        tray = _tray_icon_for_notify(danmu_app)
         if tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             tray.showMessage(
                 "DanmuAI",
@@ -104,7 +122,12 @@ def _ensure_server_ready(server: WebConsoleServer) -> bool:
     )
     return False
 def _fallback_to_system_browser(server: WebConsoleServer, path: str, reason: str) -> None:
+    if getattr(server, "_browser_launch_opened", False):
+        log_startup("webview.fallback_browser.skipped", reason=reason)
+        return
     from app.web_console import open_web_console_browser
+
+    server._browser_launch_opened = True
     server.bridge.danmu_app.logger.warning(
         f"pywebview 不可用，改用系统浏览器: {reason}"
     )
@@ -207,6 +230,10 @@ class WebViewShell:
         self._load_deadline: float = 0.0
         self._pending_path: str = ""
         self._handshake_failed: bool = False
+        self._spawn_attempt: int = 0
+        self._last_launch_url: str = ""
+        self._last_launch_gui: str | None = None
+        self._defer_browser_fallback: bool = False
 
     def is_running(self) -> bool:
         return self._started and self._process is not None and self._process.is_alive()
@@ -243,16 +270,7 @@ class WebViewShell:
         if path.startswith("/"):
             return f"{base}{path}"
         return f"{base}/{path}"
-    def begin_start(self, initial_path: str = "/") -> bool:
-        """Start pywebview child process; complete handshake via poll_handshake()."""
-        if self.is_running():
-            self.open(initial_path)
-            return True
-        if not _ensure_server_ready(self.server):
-            return False
-        self._pending_path = initial_path
-        url = self._url(initial_path)
-        gui = preferred_webview_gui()
+    def _launch_child_process(self, url: str, gui: str | None) -> None:
         ctx = multiprocessing.get_context("spawn")
         self._ready_queue = ctx.Queue()
         self._nav_queue = ctx.Queue()
@@ -268,12 +286,64 @@ class WebViewShell:
             "webview.process.start",
             ms=(time.perf_counter() - proc_started) * 1000.0,
             url=url,
+            spawn_attempt=self._spawn_attempt,
         )
+
+    def _retry_spawn(self, initial_path: str, reason: str) -> bool:
+        """Relaunch child after early exit; returns True if another attempt was started."""
+        if self._spawn_attempt >= _SPAWN_MAX_ATTEMPTS:
+            return False
+        self._spawn_attempt += 1
+        log_startup(
+            "webview.process.retry",
+            attempt=self._spawn_attempt,
+            reason=reason,
+        )
+        self._terminate()
+        self._got_created = False
+        self._load_deadline = 0.0
         self._handshake_deadline = time.monotonic() + _START_TIMEOUT_SEC
+        try:
+            self._launch_child_process(self._last_launch_url, self._last_launch_gui)
+        except OSError as exc:
+            if self._spawn_attempt >= _SPAWN_MAX_ATTEMPTS:
+                self._fail_start(f"pywebview spawn failed: {exc}", self._resolve_path(initial_path))
+                return False
+            return self._retry_spawn(initial_path, f"spawn OSError: {exc}")
+        return True
+
+    def begin_start(self, initial_path: str = "/") -> bool:
+        """Start pywebview child process; complete handshake via poll_handshake()."""
+        if self.is_running():
+            self.open(initial_path)
+            return True
+        if not _ensure_server_ready(self.server):
+            return False
+        self._pending_path = initial_path
+        url = self._url(initial_path)
+        gui = preferred_webview_gui()
+        self._last_launch_url = url
+        self._last_launch_gui = gui
+        self._spawn_attempt = 1
         self._got_created = False
         self._load_deadline = 0.0
         self._handshake_failed = False
-        return True
+        self._handshake_deadline = time.monotonic() + _START_TIMEOUT_SEC
+        while self._spawn_attempt <= _SPAWN_MAX_ATTEMPTS:
+            try:
+                self._launch_child_process(url, gui)
+                return True
+            except OSError as exc:
+                if self._spawn_attempt >= _SPAWN_MAX_ATTEMPTS:
+                    self._fail_start(f"pywebview spawn failed: {exc}", initial_path)
+                    return False
+                log_startup(
+                    "webview.process.retry",
+                    attempt=self._spawn_attempt + 1,
+                    reason=f"spawn OSError: {exc}",
+                )
+                self._spawn_attempt += 1
+        return False
     def _drain_ready_queue(self, initial_path: str) -> HandshakeResult:
         queue_ref = self._ready_queue
         if queue_ref is None:
@@ -296,13 +366,20 @@ class WebViewShell:
             self._fail_start(str(signal), self._resolve_path(initial_path))
             return "failure"
         return "pending"
+
     def poll_handshake(self, initial_path: str) -> HandshakeResult:
         """Non-blocking handshake step; call from QTimer until not pending."""
         if self._started:
             return "success"
         proc = self._process
-        if self._got_created and proc is not None and not proc.is_alive():
-            self._fail_start("pywebview process exited early", self._resolve_path(initial_path))
+        if proc is not None and not proc.is_alive():
+            resolved = self._resolve_path(initial_path)
+            if not self._got_created:
+                if self._retry_spawn(initial_path, "pywebview process exited early"):
+                    return "pending"
+                self._fail_start("pywebview process exited early", resolved)
+                return "failure"
+            self._fail_start("pywebview process exited early", resolved)
             return "failure"
         now = time.monotonic()
         resolved = self._resolve_path(initial_path)
@@ -337,15 +414,36 @@ class WebViewShell:
         if not self._got_created:
             return self._fail_start("timeout waiting for pywebview created", initial_path)
         return self._fail_start("timeout waiting for pywebview loaded", initial_path)
-    def _fail_start(self, error: str, initial_path: str) -> bool:
+    def _abort_handshake(
+        self,
+        error: str,
+        initial_path: str,
+        *,
+        fallback_browser: bool = True,
+    ) -> bool:
+        if self._handshake_failed and not fallback_browser:
+            return False
+        if self._handshake_failed and fallback_browser:
+            return False
         danmu_app = self.server.bridge.danmu_app
         danmu_app.logger.error(f"pywebview 启动失败: {error}")
         append_frozen_log(f"pywebview start failed: {error}")
         log_startup("webview.handshake.failed", error=error)
         self._handshake_failed = True
         self._terminate()
-        _fallback_to_system_browser(self.server, initial_path, error)
+        use_browser = fallback_browser and not self._defer_browser_fallback
+        if use_browser:
+            _fallback_to_system_browser(self.server, initial_path, error)
         return False
+
+    def _fail_start(self, error: str, initial_path: str) -> bool:
+        fallback = not self._defer_browser_fallback
+        return self._abort_handshake(error, initial_path, fallback_browser=fallback)
+
+    def finalize_handshake_failure(self, error: str, initial_path: str) -> bool:
+        """Final attach failure: always allow browser fallback (BUG-014 dedupe)."""
+        self._defer_browser_fallback = False
+        return self._abort_handshake(error, initial_path, fallback_browser=True)
 
     def _succeed_start(self, initial_path: str) -> bool:
         self._started = True
@@ -399,6 +497,7 @@ def attach_webview_shell(
     server: WebConsoleServer,
     *,
     initial_path: str = "/",
+    on_handshake_failed: Callable[[], None] | None = None,
 ) -> WebViewShell:
     """Attach shell and start pywebview without blocking the Qt event loop."""
     from PyQt6.QtCore import QTimer
@@ -419,6 +518,7 @@ def attach_webview_shell(
             existing.destroy()
 
     shell = WebViewShell(server)
+    shell._defer_browser_fallback = on_handshake_failed is not None
     danmu_app.webview_shell = shell
     log_startup("attach_webview_shell.begin", path=initial_path)
     def _poll() -> None:
@@ -426,6 +526,16 @@ def attach_webview_shell(
         if result == "pending":
             QTimer.singleShot(_HANDSHAKE_POLL_MS, _poll)
             return
+        if result == "failure" and on_handshake_failed is not None:
+            if not getattr(server, "_browser_launch_opened", False):
+                on_handshake_failed()
+                log_startup("attach_webview_shell.end", ok=False, deferred_retry=True)
+                return
+            if not shell.handshake_failed:
+                shell.finalize_handshake_failure(
+                    "pywebview handshake failed after browser fallback skipped",
+                    initial_path,
+                )
         log_startup("attach_webview_shell.end", ok=(result == "success"))
     def _begin() -> None:
         if shell.begin_start(initial_path):

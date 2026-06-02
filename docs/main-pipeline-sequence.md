@@ -49,10 +49,10 @@ app/overlay.py::DanmuOverlay.start_render_loop()
 | `screenshot_timer` | `normal_recognition_interval_ms` | `_on_screenshot_timer` | Normal-mode capture + API trigger |
 | `reply_timer` | adaptive (single-shot) | `_consume_reply_queue` | Dequeue to engine |
 | `_pool_topup_timer` | 500 ms | `_maybe_pool_topup` | Formula pool top-up |
-| `_mic_poll_timer` | 400 ms | `_poll_mic_utterance` | Mic RMS endpoint (if enabled) |
+| `_mic_poll_timer` | 600 ms single-shot; 250 ms initial phase (`MIC_POLL_PHASE_MS`); rescheduled in `_schedule_next_mic_poll` | `_poll_mic_utterance` | Mic RMS utterance endpoint (if enabled; `MIC_POLL_MS`) |
 | `_live_status_timer` | 500 ms | `_publish_live_status` | Web status push |
 | `_lifetime_flush_timer` | (config) | lifetime flush | Stats persistence |
-| `QThreadPool` | on demand | `AiRunnable.run` | AI HTTP (visual + mic) |
+| `QThreadPool` | on demand | `AiRunnable.run` / `_MicProbeRunnable.run` | AI HTTP (visual + mic insert + mic test-send probe) |
 
 Removed from product: `_rhythm_check_timer`, `_check_rhythm_trigger()`, realtime display mode branch, inventory prefetch (`_schedule_next_screenshot` / `_should_request_new_batch`, W-002).
 
@@ -99,9 +99,10 @@ See also [AGENTS.md](../AGENTS.md) and `DANMU_SCENE_DEBUG` / `DANMU_API_SCHEDULE
 | Entry | Thread / process | Role |
 |-------|------------------|------|
 | `app/web_console.py::WebConsoleServer.start()` | `threading.Thread` (`DanmuWebConsole`) | uvicorn FastAPI on `127.0.0.1:18765` |
-| `app/webview_shell.py::WebViewShell.begin_start()` | `multiprocessing.Process` (`DanmuWebView`, spawn) | pywebview desktop shell (child owns `webview.start()`) |
+| `app/webview_shell.py::WebViewShell.begin_start()` | `multiprocessing.Process` (`DanmuWebView`, spawn) | pywebview desktop shell (child owns `webview.start()`); up to 3 spawn retries on early child exit / `Process.start()` OSError before handshake failure |
 | `app/webview_shell.py::_nav_poll_loop` | `threading.Thread` (`DanmuWebViewNav`, daemon, child process) | Cross-process `nav_queue` → `window.load_url` |
 | `attach_webview_shell` handshake | Qt `QTimer` 50 ms poll on main thread | Non-blocking `ready_queue` drain; does not block capture pipeline |
+| `main.py::_schedule_webview_attach` / `_retry_webview_attach` | Qt `QTimer` (800/400 ms initial delay, 1200 ms attach retry) | After deferred handshake failure: destroy shell and re-attach (max 2 schedule attempts) before single browser fallback |
 
 Startup timing: `app/startup_trace.py` → `%APPDATA%/DanmuAI/startup.log` (frozen).
 

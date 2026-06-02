@@ -100,3 +100,13 @@ class TrayManager:
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )
+
+    def show_api_key_missing_hint(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray.showMessage(
+            "DanmuAI",
+            tr("app.api_key_missing_warning"),
+            QSystemTrayIcon.MessageIcon.Warning,
+            3000,
+        )

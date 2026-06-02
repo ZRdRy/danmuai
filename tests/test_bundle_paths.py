@@ -54,11 +54,16 @@ def test_announcements_page_in_index_html():
     assert "/static/supabase-client.js" in html
 
 
-def test_overview_announcement_banner_in_app_js():
-    js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "danmu_announcements_overview_banner_dismissed_id" in js
-    assert "function buildAnnouncementSnippet" in js
-    assert "function updateOverviewAnnouncementBanner" in js
+def test_overview_announcement_banner_in_content_pages_js():
+    root = project_root()
+    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    content_js = (root / "web" / "static" / "modules" / "content-pages.js").read_text(
+        encoding="utf-8"
+    )
+    assert "danmu_announcements_overview_banner_dismissed_id" in content_js
+    assert "function buildAnnouncementSnippet" in content_js
+    assert "function updateOverviewAnnouncementBanner" in content_js
+    assert "function buildAnnouncementSnippet" not in app_js
 
 
 def test_error_report_modal_in_index_html():
@@ -68,15 +73,58 @@ def test_error_report_modal_in_index_html():
     assert 'id="btnErrorReportDismiss"' in html
 
 
+def test_app_js_imports_transport_module():
+    root = project_root()
+    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "from './modules/transport.js'" in app_js
+    assert "apiFetch" in app_js
+    assert "startRealtimeTransport" in app_js
+    transport_js = (root / "web" / "static" / "modules" / "transport.js").read_text(
+        encoding="utf-8"
+    )
+    assert "export async function apiFetch" in transport_js
+    assert "export function startRealtimeTransport" in transport_js
+
+
+def test_web_console_modules_exist():
+    root = project_root()
+    modules = root / "web" / "static" / "modules"
+    for name in (
+        "transport.js",
+        "status.js",
+        "logs.js",
+        "diagnostics.js",
+        "settings.js",
+        "content-pages.js",
+    ):
+        path = modules / name
+        assert path.is_file(), f"missing {path}"
+        assert path.stat().st_size > 0
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'type="module"' in html
+    assert "/static/app.js" in html
+
+
+def test_status_js_renders_legacy_lifetime_token_note():
+    root = project_root()
+    status_js = (root / "web" / "static" / "modules" / "status.js").read_text(encoding="utf-8")
+    assert "statLifetimeTokenNote" in status_js
+    assert "const legacyExtra = lifetimeTotal - lifetimeIn - lifetimeOut;" in status_js
+    assert "另有升级前累计" in status_js
+    assert "formatTokenCount(legacyExtra)" in status_js
+
+
 def test_error_report_flow_in_app_js():
-    js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    root = project_root()
+    js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    status_js = (root / "web" / "static" / "modules" / "status.js").read_text(encoding="utf-8")
     assert "function maybePromptErrorReport" in js
     assert "function collectErrorReportContext" in js
     assert "function extractErrorReportSearchTerms" in js
     assert "function findErrorLogAnchorIndex" in js
     assert "localStorage.setItem(ERROR_REPORT_DISMISS_STORAGE" in js
     assert "submitErrorReport" in js
-    assert "statusHadError" in js
+    assert "statusHadError" in status_js
 
 
 def test_api_settings_visible_in_simplified_mode():

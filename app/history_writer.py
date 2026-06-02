@@ -17,6 +17,7 @@ class HistoryWriter:
         self._thread.start()
 
     def enqueue(self, content: str, persona: str, round_num: int, image_bytes: bytes | None = None):
+        """Buffer one history row. ``content`` must already match on-screen display (truncated)."""
         now = datetime.now().isoformat()
         with self._lock:
             self._buffer.append((now, persona, content, image_bytes, round_num))

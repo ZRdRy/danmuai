@@ -1,0 +1,499 @@
+/** HTTP session, API fetch, WebSocket status/logs transport and degraded polling. */
+
+export const API = { token: null, base: '' };
+
+/** @typedef {'connecting'|'connected'|'reconnecting'|'polling'|'failed'} RealtimeConnMode */
+
+export const REALTIME = {
+  statusWs: null,
+  logsWs: null,
+  statusReconnectTimer: null,
+  logsReconnectTimer: null,
+  pollingTimer: null,
+  pollingGraceTimer: null,
+  logsPollingTimer: null,
+  logsPollingGraceTimer: null,
+  statusAttempt: 0,
+  logsAttempt: 0,
+  statusOpen: false,
+  logsOpen: false,
+  degradedPolling: false,
+  degradedLogsPolling: false,
+  statusWsDownAt: 0,
+  logsWsDownAt: 0,
+  lastStatusPollToastAt: 0,
+  lastLogsPollTs: 0,
+  baseBackoffMs: 1000,
+  maxBackoffMs: 16000,
+  pollIntervalMs: 1500,
+  pollToastCooldownMs: 30000,
+  wsGraceMs: 2500,
+  logsWsGraceMs: 800,
+};
+
+const defaultHandlers = {
+  onStatus: () => {},
+  onLog: () => {},
+  onLogBatch: () => {},
+  updateLogPanelState: () => {},
+  showToast: () => {},
+  bootstrapLogs: async () => {},
+};
+
+let handlers = { ...defaultHandlers };
+
+export function setRealtimeHandlers(patch) {
+  handlers = { ...handlers, ...patch };
+}
+
+export function authHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (API.token) headers.Authorization = `Bearer ${API.token}`;
+  return headers;
+}
+
+export function formatApiError(detail, fallback = '请求失败') {
+  if (!detail) return fallback;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        const loc = Array.isArray(d.loc) ? d.loc.filter((x) => x !== 'body').join('.') : '';
+        const msg = d.msg || d.message || JSON.stringify(d);
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .join('；');
+  }
+  return String(detail);
+}
+
+/** Re-fetch session token (required after each `python main.py` restart). */
+export async function refreshSession() {
+  const sessionUrl = new URL('/api/session', window.location.origin).href;
+  const res = await fetch(sessionUrl, { cache: 'no-store' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    const detail = formatApiError(err.detail, res.statusText);
+    throw new Error(
+      `无法获取控制台会话（HTTP ${res.status}）: ${detail}。`
+      + '请确认终端有「Web 控制台 HTTP/WS 已监听」，且地址栏为 http://127.0.0.1:18765 后刷新页面。',
+    );
+  }
+  const session = await res.json();
+  if (!session?.token) {
+    throw new Error('会话接口未返回 token，请重启 python main.py 并刷新页面');
+  }
+  API.token = session.token;
+  API.base = (session.base_url || window.location.origin).replace(/\/$/, '');
+  REALTIME.lastLogsPollTs = 0;
+  return session;
+}
+
+export async function apiFetch(path, options = {}, retried = false) {
+  if (!API.base) await refreshSession();
+  const res = await fetch(`${API.base}${path}`, {
+    ...options,
+    headers: { ...authHeaders(), ...(options.headers || {}) },
+  });
+  if ((res.status === 401 || res.status === 403) && !retried) {
+    await refreshSession();
+    return apiFetch(path, options, true);
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    const fallback =
+      res.status === 404
+        ? '接口不存在，请完全退出并重新运行 python main.py 后再试'
+        : res.statusText;
+    throw new Error(formatApiError(err.detail, fallback));
+  }
+  return res.json();
+}
+
+export async function apiFormFetch(path, formData) {
+  const res = await fetch(`${API.base}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${API.token}` },
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(formatApiError(err.detail, res.statusText));
+  }
+  return res.json();
+}
+
+function wsUrl(path) {
+  const pageOrigin = `${location.protocol}//${location.host}`;
+  const base = API.base && new URL(API.base).host === location.host ? API.base : pageOrigin;
+  const parsed = new URL(base);
+  const proto = parsed.protocol === 'https:' ? 'wss' : 'ws';
+  const url = new URL(`${proto}://${parsed.host}${path}`);
+  if (API.token) {
+    url.searchParams.set('ws_token', API.token);
+  }
+  return url.toString();
+}
+
+/** @param {RealtimeConnMode} mode */
+function setRealtimeConnUI(mode) {
+  const labels = {
+    connecting: '连接中',
+    connected: '已连接',
+    reconnecting: '重连中',
+    polling: '已降级轮询',
+    failed: '连接失败',
+  };
+  const text = labels[mode] || labels.connecting;
+  document.querySelectorAll('[data-realtime-conn]').forEach((el) => {
+    el.textContent = text;
+    el.className = `text-xs font-normal border-l border-gray-200 pl-2 ml-0.5 conn-${mode}`;
+    el.setAttribute('data-conn', mode);
+  });
+}
+
+function setLogsConnUI(mode) {
+  const labels = {
+    connecting: '连接中',
+    connected: '实时',
+    reconnecting: '重连中',
+    polling: 'HTTP 同步',
+    failed: '连接失败',
+  };
+  const el = document.querySelector('#page-logs [data-realtime-conn]');
+  if (!el) return;
+  const text = labels[mode] || labels.connecting;
+  el.textContent = text;
+  el.className = `text-xs font-normal border-l border-gray-200 pl-2 conn-${mode}`;
+  el.setAttribute('data-conn', mode);
+}
+
+function statusBackoffMs() {
+  const exp = Math.min(REALTIME.statusAttempt, 5);
+  return Math.min(REALTIME.baseBackoffMs * 2 ** exp, REALTIME.maxBackoffMs);
+}
+
+function logsBackoffMs() {
+  const exp = Math.min(REALTIME.logsAttempt, 5);
+  return Math.min(REALTIME.baseBackoffMs * 2 ** exp, REALTIME.maxBackoffMs);
+}
+
+function clearStatusReconnect() {
+  if (REALTIME.statusReconnectTimer) {
+    clearTimeout(REALTIME.statusReconnectTimer);
+    REALTIME.statusReconnectTimer = null;
+  }
+}
+
+function clearLogsReconnect() {
+  if (REALTIME.logsReconnectTimer) {
+    clearTimeout(REALTIME.logsReconnectTimer);
+    REALTIME.logsReconnectTimer = null;
+  }
+}
+
+function updateRealtimeConnUI() {
+  handlers.updateLogPanelState();
+  if (REALTIME.logsOpen) {
+    setLogsConnUI('connected');
+  } else if (REALTIME.degradedLogsPolling) {
+    setLogsConnUI('polling');
+  } else if (
+    REALTIME.logsReconnectTimer
+    || (REALTIME.logsWs && REALTIME.logsWs.readyState === WebSocket.CONNECTING)
+  ) {
+    setLogsConnUI('reconnecting');
+  } else if (REALTIME.logsAttempt >= 6) {
+    setLogsConnUI('failed');
+  } else {
+    setLogsConnUI('connecting');
+  }
+
+  if (REALTIME.statusOpen && (REALTIME.logsOpen || REALTIME.degradedLogsPolling)) {
+    setRealtimeConnUI('connected');
+    return;
+  }
+  if (REALTIME.degradedPolling) {
+    setRealtimeConnUI('polling');
+    return;
+  }
+  if (
+    REALTIME.statusReconnectTimer
+    || REALTIME.logsReconnectTimer
+    || (REALTIME.statusWs && REALTIME.statusWs.readyState === WebSocket.CONNECTING)
+    || (REALTIME.logsWs && REALTIME.logsWs.readyState === WebSocket.CONNECTING)
+  ) {
+    setRealtimeConnUI('reconnecting');
+    return;
+  }
+  if (!REALTIME.statusOpen && REALTIME.statusAttempt >= 6) {
+    setRealtimeConnUI('failed');
+    return;
+  }
+  setRealtimeConnUI('connecting');
+}
+
+function detachWebSocket(ws) {
+  if (!ws) return;
+  ws.onopen = null;
+  ws.onclose = null;
+  ws.onerror = null;
+  ws.onmessage = null;
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    try {
+      ws.close();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
+async function pollStatusOnce() {
+  const res = await fetch(`${API.base}/api/status`);
+  if (!res.ok) throw new Error(res.statusText);
+  handlers.onStatus(await res.json());
+}
+
+function startStatusPolling() {
+  if (REALTIME.pollingTimer) return;
+  REALTIME.degradedPolling = true;
+  updateRealtimeConnUI();
+  const tick = () => {
+    pollStatusOnce()
+      .then(() => {
+        if (REALTIME.statusOpen) stopStatusPolling();
+      })
+      .catch((e) => {
+        console.warn('[realtime] status poll failed', e);
+        const now = Date.now();
+        if (now - REALTIME.lastStatusPollToastAt >= REALTIME.pollToastCooldownMs) {
+          REALTIME.lastStatusPollToastAt = now;
+          handlers.showToast('状态轮询失败，界面可能不是最新', true);
+        }
+      });
+  };
+  tick();
+  REALTIME.pollingTimer = setInterval(tick, REALTIME.pollIntervalMs);
+}
+
+function stopStatusPolling() {
+  if (REALTIME.pollingTimer) {
+    clearInterval(REALTIME.pollingTimer);
+    REALTIME.pollingTimer = null;
+  }
+  if (REALTIME.pollingGraceTimer) {
+    clearTimeout(REALTIME.pollingGraceTimer);
+    REALTIME.pollingGraceTimer = null;
+  }
+  REALTIME.degradedPolling = false;
+}
+
+function schedulePollingGraceCheck() {
+  if (REALTIME.statusOpen || REALTIME.pollingTimer) return;
+  if (!REALTIME.statusWsDownAt) REALTIME.statusWsDownAt = Date.now();
+  const elapsed = Date.now() - REALTIME.statusWsDownAt;
+  const wait = Math.max(0, REALTIME.wsGraceMs - elapsed);
+  if (REALTIME.pollingGraceTimer) clearTimeout(REALTIME.pollingGraceTimer);
+  REALTIME.pollingGraceTimer = setTimeout(() => {
+    REALTIME.pollingGraceTimer = null;
+    if (!REALTIME.statusOpen) startStatusPolling();
+    updateRealtimeConnUI();
+  }, wait);
+}
+
+async function pollLogsOnce() {
+  const res = await fetch(
+    `${API.base}/api/logs/recent?since_ts=${encodeURIComponent(REALTIME.lastLogsPollTs)}`,
+    { cache: 'no-store' },
+  );
+  if (!res.ok) throw new Error(res.statusText);
+  const data = await res.json();
+  handlers.onLogBatch(data.items || []);
+}
+
+function startLogsPolling() {
+  if (REALTIME.logsPollingTimer || REALTIME.logsOpen) return;
+  REALTIME.degradedLogsPolling = true;
+  updateRealtimeConnUI();
+  const tick = () => {
+    pollLogsOnce()
+      .then(() => {
+        if (REALTIME.logsOpen) stopLogsPolling();
+      })
+      .catch((e) => console.warn('[realtime] logs poll failed', e));
+  };
+  tick();
+  REALTIME.logsPollingTimer = setInterval(tick, REALTIME.pollIntervalMs);
+}
+
+function stopLogsPolling() {
+  if (REALTIME.logsPollingTimer) {
+    clearInterval(REALTIME.logsPollingTimer);
+    REALTIME.logsPollingTimer = null;
+  }
+  if (REALTIME.logsPollingGraceTimer) {
+    clearTimeout(REALTIME.logsPollingGraceTimer);
+    REALTIME.logsPollingGraceTimer = null;
+  }
+  REALTIME.degradedLogsPolling = false;
+}
+
+function scheduleLogsPollingGraceCheck() {
+  if (REALTIME.logsOpen || REALTIME.logsPollingTimer) return;
+  if (!REALTIME.logsWsDownAt) REALTIME.logsWsDownAt = Date.now();
+  const elapsed = Date.now() - REALTIME.logsWsDownAt;
+  const wait = Math.max(0, REALTIME.logsWsGraceMs - elapsed);
+  if (REALTIME.logsPollingGraceTimer) clearTimeout(REALTIME.logsPollingGraceTimer);
+  REALTIME.logsPollingGraceTimer = setTimeout(() => {
+    REALTIME.logsPollingGraceTimer = null;
+    if (!REALTIME.logsOpen) startLogsPolling();
+    updateRealtimeConnUI();
+  }, wait);
+}
+
+function scheduleStatusReconnect() {
+  clearStatusReconnect();
+  REALTIME.statusAttempt += 1;
+  const delay = statusBackoffMs();
+  console.debug(
+    `[realtime] status WS reconnect in ${delay}ms (attempt ${REALTIME.statusAttempt})`,
+  );
+  REALTIME.statusReconnectTimer = setTimeout(() => {
+    REALTIME.statusReconnectTimer = null;
+    connectStatusWebSocket();
+  }, delay);
+  schedulePollingGraceCheck();
+  updateRealtimeConnUI();
+}
+
+function scheduleLogsReconnect() {
+  clearLogsReconnect();
+  REALTIME.logsAttempt += 1;
+  const delay = logsBackoffMs();
+  console.debug(
+    `[realtime] logs WS reconnect in ${delay}ms (attempt ${REALTIME.logsAttempt})`,
+  );
+  REALTIME.logsReconnectTimer = setTimeout(() => {
+    REALTIME.logsReconnectTimer = null;
+    connectLogsWebSocket();
+  }, delay);
+  scheduleLogsPollingGraceCheck();
+  updateRealtimeConnUI();
+}
+
+function connectStatusWebSocket() {
+  clearStatusReconnect();
+  detachWebSocket(REALTIME.statusWs);
+  const url = wsUrl('/ws/status');
+  console.debug('[realtime] status WS connecting', url);
+  updateRealtimeConnUI();
+  const ws = new WebSocket(url);
+  REALTIME.statusWs = ws;
+
+  ws.onopen = () => {
+    console.debug('[realtime] status WS open');
+    REALTIME.statusAttempt = 0;
+    REALTIME.statusOpen = true;
+    REALTIME.statusWsDownAt = 0;
+    stopStatusPolling();
+    updateRealtimeConnUI();
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      handlers.onStatus(JSON.parse(ev.data));
+    } catch (e) {
+      console.error('[realtime] status message parse error', e);
+    }
+  };
+
+  ws.onerror = () => {
+    console.warn('[realtime] status WS error');
+    if (REALTIME.statusAttempt >= 3) {
+      console.warn(
+        '[realtime] 无法连接后端 WebSocket。请确认已运行 python main.py，'
+        + '终端有「Web 控制台 HTTP/WS 已监听」，且已安装 uvicorn[standard]（含 websockets）。'
+        + ' 可刷新页面或重启 DanmuAI。',
+      );
+    }
+  };
+
+  ws.onclose = (ev) => {
+    console.debug('[realtime] status WS close', ev.code, ev.reason || '');
+    REALTIME.statusOpen = false;
+    if (!REALTIME.statusWsDownAt) REALTIME.statusWsDownAt = Date.now();
+    if (ev.code === 1008) {
+      refreshSession()
+        .catch((e) => console.warn('[realtime] session refresh after WS 1008 failed', e))
+        .finally(() => scheduleStatusReconnect());
+      return;
+    }
+    scheduleStatusReconnect();
+  };
+}
+
+function connectLogsWebSocket() {
+  clearLogsReconnect();
+  detachWebSocket(REALTIME.logsWs);
+  const url = wsUrl('/ws/logs');
+  console.debug('[realtime] logs WS connecting', url);
+  const ws = new WebSocket(url);
+  REALTIME.logsWs = ws;
+
+  ws.onopen = () => {
+    console.debug('[realtime] logs WS open');
+    REALTIME.logsAttempt = 0;
+    REALTIME.logsOpen = true;
+    REALTIME.logsWsDownAt = 0;
+    stopLogsPolling();
+    handlers.bootstrapLogs(REALTIME.lastLogsPollTs).catch((e) => {
+      console.warn('[realtime] logs bootstrap after WS open failed', e);
+    });
+    updateRealtimeConnUI();
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      handlers.onLog(JSON.parse(ev.data));
+    } catch (e) {
+      console.error('[realtime] log message parse error', e);
+    }
+  };
+
+  ws.onerror = () => {
+    console.warn('[realtime] logs WS error');
+    if (REALTIME.logsAttempt >= 3) {
+      console.warn(
+        '[realtime] 日志 WebSocket 未连接；约 1s 内会改用 HTTP 轮询同步日志。',
+      );
+    }
+    if (!REALTIME.logsWsDownAt) REALTIME.logsWsDownAt = Date.now();
+    scheduleLogsPollingGraceCheck();
+  };
+
+  ws.onclose = (ev) => {
+    console.debug('[realtime] logs WS close', ev.code, ev.reason || '');
+    REALTIME.logsOpen = false;
+    if (!REALTIME.logsWsDownAt) REALTIME.logsWsDownAt = Date.now();
+    if (ev.code === 1008) {
+      refreshSession()
+        .catch((e) => console.warn('[realtime] session refresh after WS 1008 failed', e))
+        .finally(() => scheduleLogsReconnect());
+      return;
+    }
+    scheduleLogsReconnect();
+    updateRealtimeConnUI();
+  };
+}
+
+export function startRealtimeTransport() {
+  setRealtimeConnUI('connecting');
+  setLogsConnUI('connecting');
+  REALTIME.logsWsDownAt = Date.now();
+  scheduleLogsPollingGraceCheck();
+  handlers.bootstrapLogs(0).catch((e) => {
+    console.warn('[realtime] initial logs bootstrap failed', e);
+  });
+  connectStatusWebSocket();
+  connectLogsWebSocket();
+}

@@ -26,6 +26,7 @@ class StatusSnapshotBuilder:
     def build(self) -> dict[str, object]:
         """字段契约供 Web/WS 使用；诊断数据走 DiagnosticSnapshotBuilder，勿混入本 dict。"""
         from app.model_selection import resolve_model_status
+        from app.translations import tr
 
         state = RuntimeState.from_app(self._app)
         live_snapshot = state.live_snapshot
@@ -48,6 +49,7 @@ class StatusSnapshotBuilder:
             "running": state.running,
             "danmu_count": state.danmu_count,
             "queue_count": state.queue_count,
+            # On-screen visible danmu (engine.visible_display_count), not queue/total.
             "display_count": state.display_count,
             "total_tokens": total_tokens,
             "input_tokens": state.input_tokens,
@@ -59,7 +61,11 @@ class StatusSnapshotBuilder:
             "live_local_fallback": bool(live_snapshot.local_fallback) if live_snapshot else False,
             "live_delay_sec": float(live_snapshot.delay_sec) if live_snapshot else 0.0,
             "live_stale_drops": int(live_snapshot.stale_drops) if live_snapshot else 0,
-            "live_message": live_snapshot.primary_message() if live_snapshot else "",
+            "live_message": (
+                tr("control.status_stopped_desc")
+                if not state.running
+                else live_snapshot.primary_message() if live_snapshot else ""
+            ),
             "persona_names": state.persona_names,
             "screen_index": state.screen_index,
             "has_api_key": state.has_api_key,

@@ -538,6 +538,14 @@ class PersonaManager:
         ]
         return filtered or list(self.DEFAULT_ACTIVE)
 
+    def _filter_pickable_active(self, names: list[str]) -> list[str]:
+        valid = set(self.list())
+        return [
+            normalize_persona_name(name)
+            for name in names
+            if name and normalize_persona_name(name) in valid
+        ]
+
     def _purge_removed_personae(self):
         active = self.config.get_json("active_personae", None)
         if isinstance(active, list):
@@ -578,7 +586,8 @@ class PersonaManager:
     def get_active(self) -> list[str]:
         names = self.config.get_json("active_personae", self.DEFAULT_ACTIVE)
         normalized = self._filter_removed_active(names if isinstance(names, list) else [])
-        return normalized
+        pickable = self._filter_pickable_active(normalized)
+        return pickable or list(self.DEFAULT_ACTIVE)
 
     def set_active(self, names: list[str]):
         normalized = self._filter_removed_active([normalize_persona_name(name) for name in names if name])
@@ -604,10 +613,17 @@ class PersonaManager:
         self.config.set("custom_personae", json.dumps(custom, ensure_ascii=False))
 
     def delete_custom(self, name: str):
+        norm = normalize_persona_name(name)
         custom = self._load_custom()
-        custom.pop(normalize_persona_name(name), None)
+        custom.pop(norm, None)
         self._custom = custom
         self.config.set("custom_personae", json.dumps(custom, ensure_ascii=False))
+
+        raw = self.config.get_json("active_personae", None)
+        if isinstance(raw, list):
+            pruned = [n for n in raw if n and normalize_persona_name(n) != norm]
+            if len(pruned) != len(raw):
+                self.set_active(pruned)
 
     def pick_random(self) -> str:
         active = self.get_active()

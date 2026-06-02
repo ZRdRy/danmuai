@@ -8,8 +8,9 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+from app.ai_client import AiProbeResult
 from app.mic_encode import pcm_to_wav_data_uri
-from app.model_providers import model_supports_mic_audio, resolve_api_transport
+from app.model_providers import model_supports_mic_audio
 from app.translations import tr
 
 _TEST_USER_PT = "听得见吗？跟我打个招呼"
@@ -20,8 +21,6 @@ _MIC_UNSUPPORTED_MSG = (
     "开麦请使用火山方舟豆包全模态模型（如 doubao-seed-2-0-mini-260428）"
     "或小米 MiMo 的 mimo-v2.5。"
 )
-
-
 @dataclass(frozen=True)
 class MicSendProbeResult:
     ok: bool
@@ -55,14 +54,46 @@ def placeholder_image_data_uri() -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
+def _probe_result_from_ai(outcome: AiProbeResult) -> MicSendProbeResult:
+    if outcome.signal == "finished" and outcome.message.strip():
+        preview = outcome.message.strip()
+        if len(preview) > _PREVIEW_MAX_LEN:
+            preview = preview[:_PREVIEW_MAX_LEN] + "…"
+        return MicSendProbeResult(
+            ok=True,
+            message=(
+                f"发送成功（input={outcome.input_tokens} · "
+                f"output={outcome.output_tokens}）"
+            ),
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
+            reply_preview=preview,
+        )
+
+    message = outcome.message or tr("ai.error_empty_response")
+    if outcome.signal != "finished":
+        if message == tr("ai.error_empty_response"):
+            message = f"{message} {_AUDIO_MODEL_HINT}"
+        error = "api_error"
+    else:
+        error = "empty_response"
+
+    return MicSendProbeResult(
+        ok=False,
+        message=message,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        error=error,
+    )
+
+
 def send_mic_probe(
-    config,
-    ai_worker,
+    danmu_app,
     image_data_uri: str,
     user_pt: str,
     audio_data_uri: str,
 ) -> MicSendProbeResult:
-    resolved = ai_worker._resolve_request_credentials()
+    resolved = danmu_app.resolve_request_credentials()
     if resolved is None:
         return MicSendProbeResult(
             ok=False,
@@ -81,90 +112,12 @@ def send_mic_probe(
             error="unsupported_model",
         )
 
-    captured = {
-        "signal": "",
-        "message": "",
-        "input_tokens": 0,
-        "output_tokens": 0,
-    }
-    original_emit = ai_worker._emit_result
-
-    def capture_emit(
-        signal_name: str,
-        message: str,
-        persona_id: str,
-        request_round: int,
-        screenshot_id: int,
-        captured_at: float,
-        scene_generation: int,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-    ) -> None:
-        captured["signal"] = signal_name
-        captured["message"] = message
-        captured["input_tokens"] = input_tokens
-        captured["output_tokens"] = output_tokens
-
-    ai_worker._emit_result = capture_emit
-    try:
-        if resolve_api_transport(endpoint, api_mode) == "doubao":
-            ai_worker._request_doubao(
-                image_data_uri,
-                "",
-                user_pt,
-                "mic_probe",
-                0,
-                0,
-                0.0,
-                0,
-                audio_data_uri=audio_data_uri,
-                resolved=resolved,
-            )
-        else:
-            ai_worker._request(
-                image_data_uri,
-                "",
-                user_pt,
-                "mic_probe",
-                0,
-                0,
-                0.0,
-                0,
-                audio_data_uri=audio_data_uri,
-            )
-    finally:
-        ai_worker._emit_result = original_emit
-
-    if captured["signal"] == "finished" and captured["message"].strip():
-        preview = captured["message"].strip()
-        if len(preview) > _PREVIEW_MAX_LEN:
-            preview = preview[:_PREVIEW_MAX_LEN] + "…"
-        return MicSendProbeResult(
-            ok=True,
-            message=(
-                f"发送成功（input={captured['input_tokens']} · "
-                f"output={captured['output_tokens']}）"
-            ),
-            input_tokens=captured["input_tokens"],
-            output_tokens=captured["output_tokens"],
-            reply_preview=preview,
-        )
-
-    message = captured["message"] or tr("ai.error_empty_response")
-    if captured["signal"] != "finished":
-        if message == tr("ai.error_empty_response"):
-            message = f"{message} {_AUDIO_MODEL_HINT}"
-        error = "api_error"
-    else:
-        error = "empty_response"
-
-    return MicSendProbeResult(
-        ok=False,
-        message=message,
-        input_tokens=captured["input_tokens"],
-        output_tokens=captured["output_tokens"],
-        error=error,
+    outcome = danmu_app.run_mic_probe_in_pool(
+        image_data_uri,
+        user_pt,
+        audio_data_uri,
     )
+    return _probe_result_from_ai(outcome)
 
 
 def run_mic_test_send(danmu_app, duration_sec: float = 3.0) -> MicTestSendResult:
@@ -205,7 +158,8 @@ def run_mic_test_send(danmu_app, duration_sec: float = 3.0) -> MicTestSendResult
 
     user_pt = _TEST_USER_PT
     image_uri = placeholder_image_data_uri()
-    probe = danmu_app.send_mic_test_probe(
+    probe = send_mic_probe(
+        danmu_app,
         image_uri,
         user_pt,
         audio_uri,

@@ -1,5 +1,6 @@
 """Tests for pywebview shell helpers."""
 
+import queue
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -7,11 +8,14 @@ from app.webview_shell import (
     _SIGNAL_CREATED,
     _SIGNAL_LOADED,
     WebViewShell,
+    _fallback_to_system_browser,
+    _tray_icon_for_notify,
     _webview_worker,
     notify_web_console_failure,
     preferred_webview_gui,
     wait_for_http_server,
 )
+from main import DanmuApp
 
 
 def test_preferred_webview_gui_windows():
@@ -300,6 +304,12 @@ def test_webview_shell_poll_handshake_load_timeout(monkeypatch):
     assert fallbacks == ["timeout waiting for pywebview loaded"]
 
 
+def test_tray_icon_for_notify_tolerates_partial_danmu_app():
+    """Partial DanmuApp (no QObject __init__) must not break deferred failure UI."""
+    app = DanmuApp.__new__(DanmuApp)
+    assert _tray_icon_for_notify(app) is None
+
+
 def test_notify_web_console_failure_schedules_ui(qtbot, monkeypatch):
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -360,4 +370,170 @@ def test_ensure_server_ready_false_notifies_and_optional_browser(monkeypatch):
 
     assert webview_shell._ensure_server_ready(server) is False
     assert notified
+    assert fallbacks == []
+
+
+def test_fallback_to_system_browser_only_once(monkeypatch):
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server._browser_launch_opened = False
+    server.bridge.danmu_app.logger = MagicMock()
+    browser_calls = []
+    skipped = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.log_startup",
+        lambda event, **kw: skipped.append((event, kw)) if event.endswith(".skipped") else None,
+    )
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    _fallback_to_system_browser(server, "/", "first")
+    _fallback_to_system_browser(server, "/#settings", "second")
+
+    assert browser_calls == ["/"]
+    assert server._browser_launch_opened is True
+    assert any(e == "webview.fallback_browser.skipped" for e, _ in skipped)
+
+
+def test_begin_start_retries_when_spawn_fails(monkeypatch):
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    start_calls = []
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            self._alive = True
+
+        def start(self):
+            start_calls.append(True)
+            if len(start_calls) <= 2:
+                self._alive = False
+
+        def is_alive(self):
+            return self._alive
+
+        def terminate(self):
+            self._alive = False
+
+        def join(self, timeout=0):
+            return None
+
+    class FakeQueue:
+        def __init__(self):
+            self._signals = []
+
+        def get_nowait(self):
+            if not self._signals:
+                raise queue.Empty()
+            return self._signals.pop(0)
+
+    queues = []
+
+    class FakeContext:
+        def Queue(self):
+            q = FakeQueue()
+            queues.append(q)
+            return q
+
+        def Process(self, *args, **kwargs):
+            return FakeProcess()
+
+    monkeypatch.setattr(
+        "app.webview_shell.multiprocessing.get_context",
+        lambda _name: FakeContext(),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell._ensure_server_ready",
+        lambda _server: True,
+    )
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell.begin_start("/") is True
+    assert len(start_calls) == 1
+
+    assert shell.poll_handshake("/") == "pending"
+    assert len(start_calls) == 2
+
+    assert shell.poll_handshake("/") == "pending"
+    assert len(start_calls) == 3
+
+    assert shell._ready_queue is not None
+    shell._ready_queue._signals.extend([_SIGNAL_CREATED, _SIGNAL_LOADED])
+    assert shell.poll_handshake("/") == "success"
+    assert shell._started is True
+    assert shell.handshake_failed is False
+
+
+def test_begin_start_spawn_retries_exhausted_falls_back_once(monkeypatch):
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    server._browser_launch_opened = False
+    shell = WebViewShell(server)
+
+    class FakeProcess:
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def terminate(self):
+            pass
+
+        def join(self, timeout=0):
+            return None
+
+    class FakeContext:
+        def Queue(self):
+            return MagicMock()
+
+        def Process(self, *args, **kwargs):
+            return FakeProcess()
+
+    fallbacks = []
+    monkeypatch.setattr(
+        "app.webview_shell.multiprocessing.get_context",
+        lambda _name: FakeContext(),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell._ensure_server_ready",
+        lambda _server: True,
+    )
+    monkeypatch.setattr(
+        "app.webview_shell._fallback_to_system_browser",
+        lambda s, p, r: fallbacks.append(r),
+    )
+    monkeypatch.setattr(shell, "_terminate", lambda: None)
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell.begin_start("/") is True
+    for _ in range(5):
+        if shell.poll_handshake("/") == "failure":
+            break
+    assert shell.handshake_failed is True
+    assert len(fallbacks) == 1
+
+
+def test_fail_start_is_idempotent(monkeypatch):
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    shell._handshake_failed = True
+
+    fallbacks = []
+    monkeypatch.setattr(
+        "app.webview_shell._fallback_to_system_browser",
+        lambda s, p, r: fallbacks.append(r),
+    )
+    monkeypatch.setattr(shell, "_terminate", lambda: None)
+    monkeypatch.setattr("app.webview_shell.append_frozen_log", lambda _msg: None)
+
+    assert shell._fail_start("again", "/") is False
     assert fallbacks == []

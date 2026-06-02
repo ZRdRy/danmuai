@@ -23,7 +23,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 
@@ -32,9 +32,20 @@ from app.application.config_service import (
     WEB_CONFIG_KEYS,
     apply_web_config_patch,
 )
+from app.application.diagnostics_hub import DiagnosticsHub
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen, resource_path
 from app.live_overlay_hub import LiveOverlayHub
+from app.logger import (
+    API_KEY_PATTERN,
+    AUTH_HEADER_PATTERN,
+    BASE64_AUDIO_PATTERN,
+    BASE64_IMAGE_PATTERN,
+    ENCRYPTED_KEY_PATTERN,
+    GENERIC_API_KEY_PATTERN,
+)
 from app.startup_trace import log_startup, web_console_ready_timeout
+
+WebConsoleStartupPhase = Literal["ready", "slow", "failed"]
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -43,6 +54,7 @@ STATIC_DIR = resource_path("web", "static")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18765
 SAVE_CONFIG_TIMEOUT_SEC = 5.0
+SAVE_CONFIG_ERROR_DETAIL_MAX = 200
 _SAVE_DONE_EVENT_KEY = "__save_done_event"
 _SAVE_RESULT_KEY = "__save_result"
 
@@ -67,6 +79,21 @@ _WS_BROADCAST_LOG_INTERVAL_SEC = 5.0
 
 def _ws_token_valid(query_token: str | None, expected: str) -> bool:
     return bool(query_token and query_token.strip() == expected)
+
+
+def _summarize_config_save_error(detail: object, *, max_len: int = SAVE_CONFIG_ERROR_DETAIL_MAX) -> str:
+    text = str(detail or "").strip()
+    if not text:
+        return "配置保存失败"
+    text = API_KEY_PATTERN.sub("sk-****", text)
+    text = BASE64_IMAGE_PATTERN.sub("data:image/***;base64,(hidden)", text)
+    text = BASE64_AUDIO_PATTERN.sub("data:audio/***;base64,(hidden)", text)
+    text = AUTH_HEADER_PATTERN.sub("Authorization: Bearer (hidden)", text)
+    text = ENCRYPTED_KEY_PATTERN.sub("gAAAA****(hidden)", text)
+    text = GENERIC_API_KEY_PATTERN.sub("(api_key: ****)", text)
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]}…"
 
 
 def _enqueue_ws(
@@ -446,7 +473,7 @@ class WebConsoleBridge(QObject):
         try:
             self.danmu_app.apply_web_config_payload(payload)
         except Exception as exc:
-            detail = f"配置保存失败: {exc}"
+            detail = _summarize_config_save_error(f"配置保存失败: {exc}")
             _write_config_save_result(
                 result_holder,
                 ok=False,
@@ -487,6 +514,7 @@ class WebConsoleServer:
         self.bridge = bridge
         self.host = host
         self.port = port
+        self.diagnostics_hub = DiagnosticsHub()
         self.live_overlay_hub = LiveOverlayHub()
         self.token = secrets.token_urlsafe(24)
         self._thread: threading.Thread | None = None
@@ -495,6 +523,8 @@ class WebConsoleServer:
         self._ready = threading.Event()
         self._bind_failed = threading.Event()
         self.startup_ok = False
+        self._startup_error_from_attach = False
+        self._startup_failure_user_notified = False
 
     @property
     def base_url(self) -> str:
@@ -507,6 +537,8 @@ class WebConsoleServer:
         self._ready.clear()
         self._bind_failed.clear()
         self.startup_ok = False
+        self._startup_error_from_attach = False
+        self._startup_failure_user_notified = False
         # PyInstaller：非 daemon，避免 pywebview/Qt 尚未 enter 事件循环时守护线程被回收
         self._thread = threading.Thread(
             target=self._run,
@@ -537,6 +569,7 @@ class WebConsoleServer:
         log_startup("uvicorn.started", base_url=self.base_url)
         self._ready.set()
         self.startup_ok = True
+        clear_startup_attach_error_if_needed(self)
 
     def stop(self) -> None:
         danmu_app = self.bridge.danmu_app
@@ -600,6 +633,7 @@ class WebConsoleServer:
             # _DanmuWebUvicornServer.startup() only after bind succeeds.
             server_ref._loop = asyncio.get_running_loop()
             bridge.set_event_loop(server_ref._loop)
+            server_ref.diagnostics_hub.set_loop(server_ref._loop)
             server_ref.live_overlay_hub.set_loop(server_ref._loop)
             try:
                 yield
@@ -741,7 +775,7 @@ class WebConsoleServer:
             return {"ok": True}
 
         from app.web_api.live_overlay import register_live_overlay_routes
-        from app.web_api.routes import register_web_routes
+        from app.web_api.routes import register_diagnostics_sse_route, register_web_routes
 
         register_web_routes(app, bridge, _check_token)
         register_live_overlay_routes(
@@ -750,6 +784,7 @@ class WebConsoleServer:
             self.base_url,
             _check_token,
         )
+        register_diagnostics_sse_route(app, server_ref.diagnostics_hub, bridge, _check_token)
 
         async def _ws_status_endpoint(websocket: WebSocket):
             ws_token = websocket.query_params.get("ws_token")
@@ -886,6 +921,27 @@ class WebConsoleServer:
             append_frozen_log(f"Web console thread crashed (serve):\n{detail}")
 
 
+def classify_web_console_startup(server: WebConsoleServer) -> WebConsoleStartupPhase:
+    """Classify attach-time Web console state for pywebview scheduling."""
+    if server.startup_ok:
+        return "ready"
+    if server._bind_failed.is_set():
+        return "failed"
+    thread = server._thread
+    if thread is None or not thread.is_alive():
+        return "failed"
+    return "slow"
+
+
+def clear_startup_attach_error_if_needed(server: WebConsoleServer) -> None:
+    """Clear transient startup error bar after uvicorn binds (BUG-004)."""
+    if not getattr(server, "_startup_error_from_attach", False):
+        return
+    server._startup_error_from_attach = False
+    danmu_app = server.bridge.danmu_app
+    danmu_app.set_web_error_status("", is_error=False)
+
+
 def _notify_wait_ready_timeout(server: WebConsoleServer, danmu_app: "DanmuApp") -> None:
     """Log wait_ready timeout; ERROR only when the console thread died or bind failed."""
     thread = server._thread
@@ -915,6 +971,7 @@ def _notify_wait_ready_timeout(server: WebConsoleServer, danmu_app: "DanmuApp") 
         msg += f" 诊断日志: {frozen_log_path()}"
     danmu_app.logger.error(msg)
     append_frozen_log(msg)
+    server._startup_error_from_attach = True
     danmu_app.set_web_error_status(msg, is_error=True)
 
 
@@ -943,6 +1000,8 @@ def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebCo
         _notify_wait_ready_timeout(server, danmu_app)
 
     def _tick_status():
+        if classify_web_console_startup(server) == "ready":
+            clear_startup_attach_error_if_needed(server)
         if getattr(danmu_app, "web_bridge", None):
             danmu_app.web_bridge.publish_status()
 

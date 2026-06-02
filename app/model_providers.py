@@ -177,6 +177,42 @@ def resolve_active_model_id(config) -> str:
     return (config.get("model") or "").strip()
 
 
+MIMO_MIC_MODEL_ID = "mimo-v2.5"
+
+
+def is_mimo_mic_model(model_id: str) -> bool:
+    return (model_id or "").strip().lower() == MIMO_MIC_MODEL_ID
+
+
+def resolve_openai_provider_id(model_id: str, endpoint: str, api_mode: str = "") -> str:
+    """Provider id for OpenAI-compat adapter/capability selection."""
+    ep = normalize_endpoint(endpoint)
+    mode = normalize_mode(api_mode)
+    if is_mimo_mic_model(model_id) and resolve_api_transport(ep, mode) == "openai":
+        return "mimo"
+    return guess_provider_from_endpoint(ep, mode)
+
+
+def get_capabilities_for_model(model_id: str, endpoint: str, api_mode: str = ""):
+    from app.providers.capabilities import get_capabilities, get_capabilities_for_endpoint
+
+    if resolve_openai_provider_id(model_id, endpoint, api_mode) == "mimo":
+        return get_capabilities("mimo")
+    return get_capabilities_for_endpoint(endpoint, api_mode)
+
+
+def get_openai_adapter_for_model(model_id: str, endpoint: str, api_mode: str = ""):
+    from app.providers import get_openai_adapter
+    from app.providers.adapters.mimo import MimoOpenAIAdapter
+
+    if resolve_openai_provider_id(model_id, endpoint, api_mode) == "mimo":
+        adapter = get_openai_adapter(endpoint, api_mode)
+        if isinstance(adapter, MimoOpenAIAdapter):
+            return adapter
+        return MimoOpenAIAdapter()
+    return get_openai_adapter(endpoint, api_mode)
+
+
 def model_likely_supports_mic_audio(model_id: str) -> bool:
     """Heuristic for Doubao Responses models that accept ``input_audio``."""
     mid = (model_id or "").strip().lower()
@@ -198,8 +234,8 @@ def model_supports_mic_audio(
     ep = normalize_endpoint(endpoint)
     if is_doubao_mode(mode) or resolve_api_transport(ep, mode) == "doubao":
         return model_likely_supports_mic_audio(model_id)
-    if guess_provider_from_endpoint(ep, mode) == "mimo":
-        return (model_id or "").strip().lower() == "mimo-v2.5"
+    if resolve_api_transport(ep, mode) == "openai" and is_mimo_mic_model(model_id):
+        return True
     return False
 
 

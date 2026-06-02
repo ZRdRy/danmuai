@@ -1,6 +1,10 @@
+import time
+
 from app.mic_buffer import MicRingBuffer, clamp_mic_window_sec
+from app.mic_capture import MicCaptureService
 from app.mic_encode import pcm_to_wav_data_uri
 from app.mic_prompt import build_mic_insert_user_pt
+from main import MIC_POLL_MS, MIC_POLL_PHASE_MS
 
 
 def test_clamp_mic_window_sec():
@@ -27,6 +31,34 @@ def test_pcm_to_wav_data_uri():
 
 def test_pcm_to_wav_data_uri_rejects_short():
     assert pcm_to_wav_data_uri(b"\x00\x01") is None
+
+
+def test_mic_poll_interval_constants():
+    assert MIC_POLL_MS == 600
+    assert MIC_POLL_PHASE_MS == 250
+
+
+def test_try_snapshot_pcm_ms_returns_pcm_when_lock_free():
+    cap = MicCaptureService()
+    cap._buffer.append(b"\x01\x02" * 8000)
+    pcm = cap.try_snapshot_pcm_ms(200)
+    assert pcm is not None
+    assert len(pcm) > 0
+
+
+def test_try_snapshot_pcm_ms_returns_none_when_lock_held():
+    cap = MicCaptureService()
+    cap._buffer.append(b"\x01\x02" * 8000)
+    buf = cap._buffer
+    buf._lock.acquire()
+    try:
+        start = time.perf_counter()
+        pcm = cap.try_snapshot_pcm_ms(200)
+        elapsed = time.perf_counter() - start
+        assert pcm is None
+        assert elapsed < 0.05
+    finally:
+        buf._lock.release()
 
 
 def test_build_mic_insert_user_pt():

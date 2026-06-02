@@ -1,12 +1,27 @@
 import struct
+import time
 from unittest.mock import MagicMock
 
+import pytest
+from app.ai_client import AiProbeResult
 from app.mic_test_send import (
     MicSendProbeResult,
     placeholder_image_data_uri,
     run_mic_test_send,
     send_mic_probe,
 )
+from PyQt6.QtCore import QCoreApplication, QTimer
+from PyQt6.QtWidgets import QApplication
+
+from tests.fakes import FakeLogger
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QCoreApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 def test_placeholder_image_data_uri():
@@ -25,13 +40,11 @@ def test_run_mic_test_send_unsupported_api():
 
 
 def test_send_mic_probe_incomplete_credentials():
-    config = MagicMock()
-    worker = MagicMock()
-    worker._resolve_request_credentials.return_value = None
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = None
 
     result = send_mic_probe(
-        config,
-        worker,
+        app,
         placeholder_image_data_uri(),
         "test",
         "data:audio/wav;base64,abc",
@@ -42,9 +55,8 @@ def test_send_mic_probe_incomplete_credentials():
 
 
 def test_send_mic_probe_unsupported_model():
-    config = MagicMock()
-    worker = MagicMock()
-    worker._resolve_request_credentials.return_value = (
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = (
         "https://ark.cn-beijing.volces.com/api/v3",
         "sk-test",
         "doubao-seed-1-6-flash-250828",
@@ -52,8 +64,7 @@ def test_send_mic_probe_unsupported_model():
     )
 
     result = send_mic_probe(
-        config,
-        worker,
+        app,
         placeholder_image_data_uri(),
         "test",
         "data:audio/wav;base64,abc",
@@ -64,9 +75,8 @@ def test_send_mic_probe_unsupported_model():
 
 
 def test_send_mic_probe_unsupported_generic_openai():
-    config = MagicMock()
-    worker = MagicMock()
-    worker._resolve_request_credentials.return_value = (
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = (
         "https://example.com/v1",
         "sk-test",
         "gpt-4o",
@@ -74,8 +84,7 @@ def test_send_mic_probe_unsupported_generic_openai():
     )
 
     result = send_mic_probe(
-        config,
-        worker,
+        app,
         placeholder_image_data_uri(),
         "test",
         "data:audio/wav;base64,abc",
@@ -85,70 +94,87 @@ def test_send_mic_probe_unsupported_generic_openai():
     assert result.error == "unsupported_model"
 
 
-def test_send_mic_probe_success_mimo_via_request():
-    worker = MagicMock()
-    worker._resolve_request_credentials.return_value = (
+def test_send_mic_probe_success_mimo(monkeypatch):
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = (
         "https://api.xiaomimimo.com/v1",
         "sk-test",
         "mimo-v2.5",
         "openai-compatible",
     )
+    app.ai_worker = MagicMock()
 
-    def fake_request(*args, **kwargs):
-        worker._emit_result(
-            "finished",
-            "heard",
-            "mic_probe",
-            0,
-            0,
-            0.0,
-            0,
-            50,
-            8,
-        )
-
-    worker._request.side_effect = fake_request
+    app.run_mic_probe_in_pool = MagicMock(
+        return_value=AiProbeResult(
+            signal="finished",
+            message="heard",
+            input_tokens=50,
+            output_tokens=8,
+        ),
+    )
 
     result = send_mic_probe(
-        MagicMock(),
-        worker,
+        app,
         placeholder_image_data_uri(),
         "test",
         "data:audio/wav;base64,abc",
     )
 
     assert result.ok is True
-    worker._request.assert_called_once()
-    worker._request_doubao.assert_not_called()
+    assert result.reply_preview == "heard"
 
 
-def test_send_mic_probe_success_via_worker():
-    worker = MagicMock()
-    worker._resolve_request_credentials.return_value = (
+def test_send_mic_probe_supports_mimo_v2_5_on_custom_endpoint():
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = (
+        "https://my-mimo-proxy.com/v1",
+        "sk-test",
+        "mimo-v2.5",
+        "openai-compatible",
+    )
+    app.run_mic_probe_in_pool = MagicMock(
+        return_value=AiProbeResult(
+            signal="finished",
+            message="heard",
+            input_tokens=50,
+            output_tokens=8,
+        ),
+    )
+
+    result = send_mic_probe(
+        app,
+        placeholder_image_data_uri(),
+        "test",
+        "data:audio/wav;base64,abc",
+    )
+
+    assert result.error != "unsupported_model"
+    assert result.ok is True
+    assert result.reply_preview == "heard"
+    app.run_mic_probe_in_pool.assert_called_once()
+
+
+def test_send_mic_probe_success_doubao(monkeypatch):
+    app = MagicMock()
+    app.resolve_request_credentials.return_value = (
         "https://ark.cn-beijing.volces.com/api/v3",
         "sk-test",
         "doubao-seed-2-0-mini-260428",
         "doubao",
     )
+    app.ai_worker = MagicMock()
 
-    def fake_request_doubao(*args, **kwargs):
-        worker._emit_result(
-            "finished",
-            "received",
-            "mic_probe",
-            0,
-            0,
-            0.0,
-            0,
-            900,
-            12,
-        )
-
-    worker._request_doubao.side_effect = fake_request_doubao
+    app.run_mic_probe_in_pool = MagicMock(
+        return_value=AiProbeResult(
+            signal="finished",
+            message="received",
+            input_tokens=900,
+            output_tokens=12,
+        ),
+    )
 
     result = send_mic_probe(
-        MagicMock(),
-        worker,
+        app,
         placeholder_image_data_uri(),
         "test",
         "data:audio/wav;base64,abc",
@@ -179,12 +205,15 @@ def test_run_mic_test_send_success(monkeypatch):
     app.config = MagicMock()
     app.engine.running = False
     app.capture_mic_test_sample.return_value = (pcm, capture_result)
-    app.send_mic_test_probe.return_value = MicSendProbeResult(
-        ok=True,
-        message="sent",
-        input_tokens=900,
-        output_tokens=12,
-        reply_preview="reply",
+    monkeypatch.setattr(
+        "app.mic_test_send.send_mic_probe",
+        lambda *_args, **_kwargs: MicSendProbeResult(
+            ok=True,
+            message="sent",
+            input_tokens=900,
+            output_tokens=12,
+            reply_preview="reply",
+        ),
     )
 
     result = run_mic_test_send(app)
@@ -193,3 +222,78 @@ def test_run_mic_test_send_success(monkeypatch):
     assert result.audio_attached is True
     assert result.input_tokens == 900
     assert "reply" in result.message
+
+
+def test_run_mic_test_send_does_not_block_main_thread(qapp):
+    from main import DanmuApp
+
+    timer_fired = {"value": False}
+
+    def on_timeout():
+        timer_fired["value"] = True
+
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(on_timeout)
+    timer.start(100)
+
+    def slow_probe(*_args, **_kwargs):
+        time.sleep(0.35)
+        return AiProbeResult(signal="finished", message="ok", input_tokens=1, output_tokens=1)
+
+    app = DanmuApp.__new__(DanmuApp)
+    app.ai_worker = MagicMock()
+    app.ai_worker.run_mic_audio_probe.side_effect = slow_probe
+    app.run_mic_probe_in_pool = DanmuApp.run_mic_probe_in_pool.__get__(app, DanmuApp)
+    app.resolve_request_credentials = MagicMock(
+        return_value=(
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "sk-test",
+            "doubao-seed-2-0-mini-260428",
+            "doubao",
+        )
+    )
+
+    send_mic_probe(
+        app,
+        placeholder_image_data_uri(),
+        "test",
+        "data:audio/wav;base64,abc",
+    )
+
+    assert timer_fired["value"] is True
+    timer.stop()
+
+
+def test_run_mic_test_send_does_not_emit_pop_before_reply_warning(monkeypatch):
+    from main import DanmuApp
+
+    app = DanmuApp.__new__(DanmuApp)
+    app.logger = FakeLogger()
+    app._pending_request_meta = {}
+    app.resolve_request_credentials = MagicMock(
+        return_value=(
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "sk-test",
+            "doubao-seed-2-0-mini-260428",
+            "doubao",
+        )
+    )
+    app.ai_worker = MagicMock()
+
+    app.run_mic_probe_in_pool = MagicMock(
+        return_value=AiProbeResult(
+            signal="error",
+            message="probe failed",
+        ),
+    )
+
+    before = dict(app._pending_request_meta)
+    send_mic_probe(
+        app,
+        placeholder_image_data_uri(),
+        "test",
+        "data:audio/wav;base64,abc",
+    )
+    assert app._pending_request_meta == before
+    assert not any("pop_before_reply" in line for line in app.logger.warning_messages)

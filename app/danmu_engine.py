@@ -820,11 +820,10 @@ class DanmuEngine(QObject):
                 self._accel_remaining = 0
         for track in self.tracks:
             track.update(speed_factor, dt_sec, self)
-        self._visibility_stale = False
-        self._visibility_counts_seeded = True
 
     def start(self):
         self.running = True
+        self._mark_visibility_stale()
 
     def stop(self):
         self.running = False
@@ -867,11 +866,14 @@ class DanmuEngine(QObject):
             track = self._nearest_track_for_y(item.y)
             if track is not None:
                 track.add(item)
-        self._visible_count = 0
-        self._right_visible_count = 0
-        self._fade_zone_count = 0
-        self._visibility_stale = True
-        self._visibility_counts_seeded = False
+        if preserved:
+            self._rebuild_visibility_counts()
+        else:
+            self._visible_count = 0
+            self._right_visible_count = 0
+            self._fade_zone_count = 0
+            self._visibility_stale = False
+            self._visibility_counts_seeded = False
 
     def track_count(self) -> int:
         return len(self.tracks)

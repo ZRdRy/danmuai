@@ -8,19 +8,27 @@ P0-005 最小主流程测试
 4. 连续失败退避
 """
 
+import sqlite3
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
+import pytest
 from app.application.generation_pipeline_state import GenerationPipelineState
 from app.application.stats_state import StatsState
 from app.application.web_runtime_state import WebRuntimeState
+from app.config_store import ConfigStore
+from app.danmu_engine import DanmuEngine, normalize_danmu_display_text
+from app.lifetime_stats import STATS_LIFETIME_RUNTIME_SEC, LifetimeStats
 from app.memory.activity import RecentActivityState
+from app.overlay import DanmuOverlay
 from app.reply_queue import AIReplyFIFOBuffer, QueuedReply
 from app.runnable import AiRunnable
 from app.scene_memory import SceneMemoryStore
-from main import DanmuApp, compress_screenshot
+from main import DanmuApp, compress_screenshot, show_startup_notice_if_needed
+from PyQt6.QtWidgets import QApplication
 
+from tests.conftest import bind_minimal_danmu_app
 from tests.fakes import FakeLifetimeStats, FakeLogger
 
 
@@ -39,6 +47,9 @@ class FakeConfig:
     def get_float(self, key, default=0.0):
         val = self.values.get(key, default)
         return float(val)
+
+    def set(self, key, value):
+        self.values[key] = value
 
     def get_api_key(self):
         return self.values.get("api_key", "")
@@ -441,6 +452,57 @@ def test_normal_mode_consumes_all_non_duplicate_items():
     assert len(app.history_writer.calls) == 2
 
 
+def test_history_enqueue_matches_display_truncation():
+    """BUG-015: history row content matches on-screen truncation."""
+    app = _make_minimal_app()
+    app.config = FakeConfig({"danmu_max_chars": "8", "drop_stale": "0"})
+    app.engine.running = True
+    raw = "一二三四五六七八九十"
+    expected = normalize_danmu_display_text(raw, app.config)
+    now = time.monotonic()
+    app.reply_buffer.push(
+        QueuedReply(
+            "p1",
+            1,
+            0,
+            raw,
+            screenshot_id=1,
+            captured_at=now,
+            scene_generation=0,
+        )
+    )
+    app._consume_reply_queue()
+    assert len(app.history_writer.calls) == 1
+    assert app.history_writer.calls[0][0] == expected
+    assert app.history_writer.calls[0][0] != raw
+
+
+def test_inject_test_danmu_batch_reuses_history_truncation_path():
+    app = _make_minimal_app()
+    app.config = FakeConfig({"danmu_max_chars": "8", "drop_stale": "0"})
+    raw = "一二三四五六七八九十"
+    expected = normalize_danmu_display_text(raw, app.config)
+
+    result = app.inject_test_danmu_batch([raw], persona_id="验收")
+
+    assert result["ok"] is True
+    assert result["queued"] == 1
+    assert result["expected_texts"] == [expected]
+    assert result["visible_texts"] == []
+    assert result["active_texts"] == []
+    assert app.reply_buffer.is_empty()
+    assert len(app.history_writer.calls) == 1
+    assert app.history_writer.calls[0][0] == expected
+    assert app.history_writer.calls[0][0] != raw
+
+
+def test_inject_test_danmu_batch_rejects_empty_items():
+    app = _make_minimal_app()
+
+    with pytest.raises(ValueError, match="请至少提供一条弹幕"):
+        app.inject_test_danmu_batch(["", "   "])
+
+
 def test_compress_screenshot_failure_path():
     """测试截图压缩失败时 in-flight 计数正确释放"""
     # 模拟一个会导致压缩失败的 pixmap
@@ -826,3 +888,877 @@ def test_generation_pipeline_state_is_read_only_projection():
     assert state.latest_displayed_screenshot_id == 10
     assert app._active_scene_probe_size == 32
     assert app._scene_generation_bumped_at == 4.5
+
+
+def test_show_startup_notice_on_first_run(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from PyQt6.QtWidgets import QMessageBox
+
+    notice = "未找到配置文件，已创建默认配置，请先检查 API Key 等基础设置。"
+    config = MagicMock()
+    config.get_startup_notice.return_value = notice
+    logger = FakeLogger()
+    dialog_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: dialog_calls.append(args),
+    )
+
+    assert show_startup_notice_if_needed(config, logger) is True
+    assert len(dialog_calls) == 1
+    assert dialog_calls[0][2] == notice
+    assert any(notice in msg for msg in logger.info_messages)
+
+
+def test_init_normalizes_legacy_realtime_display_mode_config():
+    app = DanmuApp.__new__(DanmuApp)
+    app.config = FakeConfig({"danmu_display_mode": "realtime"})
+    app._normalize_legacy_display_mode_config = DanmuApp._normalize_legacy_display_mode_config.__get__(
+        app,
+        DanmuApp,
+    )
+
+    app._normalize_legacy_display_mode_config()
+
+    assert app.config.get("danmu_display_mode") == "normal"
+
+
+def test_schedule_webview_skipped_when_startup_terminal_failed(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "webview")
+    object.__setattr__(app, "webview_shell", None)
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._bind_failed.set()
+    object.__setattr__(app, "web_server", server)
+
+    scheduled = []
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append(ms),
+    )
+
+    app._schedule_webview_attach("/")
+    assert scheduled == []
+
+
+def test_schedule_webview_runs_when_startup_slow(monkeypatch):
+    import threading
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "webview")
+    object.__setattr__(app, "webview_shell", None)
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+
+    def _sleep() -> None:
+        time.sleep(5.0)
+
+    server._thread = threading.Thread(target=_sleep, daemon=True)
+    server._thread.start()
+
+    scheduled = []
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append(ms),
+    )
+    try:
+        object.__setattr__(app, "web_server", server)
+        app._schedule_webview_attach("/")
+        assert scheduled == [800]
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+def test_schedule_webview_attach_retries_after_handshake_failure(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from main import _WEBVIEW_ATTACH_RETRY_MS
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "webview")
+    object.__setattr__(app, "webview_shell", None)
+    server = MagicMock()
+    server.startup_ok = True
+    server.base_url = "http://127.0.0.1:18765"
+    server._browser_launch_opened = False
+    object.__setattr__(app, "web_server", server)
+
+    attach_count = [0]
+    destroy_count = [0]
+
+    class FakeShell:
+        def destroy(self):
+            destroy_count[0] += 1
+
+        def is_running(self):
+            return False
+
+        def is_handshake_pending(self):
+            return False
+
+    def fake_attach(danmu, srv, *, initial_path="/", on_handshake_failed=None):
+        attach_count[0] += 1
+        shell = FakeShell()
+        danmu.webview_shell = shell
+        if attach_count[0] == 1 and on_handshake_failed is not None:
+            on_handshake_failed()
+        return shell
+
+    def fake_single_shot(ms, cb):
+        if ms == _WEBVIEW_ATTACH_RETRY_MS:
+            cb()
+
+    monkeypatch.setattr("app.webview_shell.attach_webview_shell", fake_attach)
+    monkeypatch.setattr("main.QTimer.singleShot", fake_single_shot)
+    monkeypatch.setattr("app.webview_shell.wait_for_http_server", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.web_console.clear_startup_attach_error_if_needed",
+        lambda _s: None,
+    )
+
+    app._schedule_webview_attach("/", attempt=1)
+
+    assert attach_count[0] == 2
+    assert destroy_count[0] == 1
+
+
+def test_open_web_console_when_ready_skips_attach_on_terminal_failure(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "webview_shell", None)
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._bind_failed.set()
+    object.__setattr__(app, "web_server", server)
+
+    attach_calls = []
+    notified = []
+    monkeypatch.setattr(
+        "app.webview_shell.attach_webview_shell",
+        lambda *args, **kwargs: attach_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.notify_web_console_failure",
+        lambda danmu, key, **kw: notified.append(key),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda url, timeout: False,
+    )
+
+    app._open_web_console_when_ready("/")
+    assert attach_calls == []
+    assert notified == ["web_console.startup_failed"]
+    assert server._startup_failure_user_notified is True
+
+    app._open_web_console_when_ready("/")
+    assert notified == ["web_console.startup_failed"]
+
+
+def test_webview_recovers_after_delayed_server_ready(monkeypatch):
+    """BUG-004 sub-scenario: slow startup; HTTP becomes ready within retry window."""
+    import threading
+
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        classify_web_console_startup,
+    )
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "webview")
+    object.__setattr__(app, "webview_shell", None)
+    object.__setattr__(
+        app,
+        "set_web_error_status",
+        DanmuApp.set_web_error_status.__get__(app, DanmuApp),
+    )
+    object.__setattr__(
+        app,
+        "_set_error_status_safe",
+        DanmuApp._set_error_status_safe.__get__(app, DanmuApp),
+    )
+    object.__setattr__(
+        app,
+        "_ensure_web_runtime_state",
+        DanmuApp._ensure_web_runtime_state.__get__(app, DanmuApp),
+    )
+
+    bridge = WebConsoleBridge.__new__(WebConsoleBridge)
+    bridge.danmu_app = app
+    server = WebConsoleServer(bridge)
+    server._thread = threading.Thread(target=time.sleep, args=(30.0,), daemon=True)
+    server._thread.start()
+    server._startup_error_from_attach = True
+    app.set_web_error_status("Web 控制台未就绪", is_error=True)
+
+    assert classify_web_console_startup(server) == "slow"
+
+    http_checks: list[int] = []
+
+    def _wait_for_http(url: str, timeout: float) -> bool:
+        http_checks.append(1)
+        return len(http_checks) >= 2
+
+    attach_calls: list[tuple] = []
+    notified: list[str] = []
+    scheduled: list[tuple] = []
+
+    monkeypatch.setattr("app.webview_shell.wait_for_http_server", _wait_for_http)
+    monkeypatch.setattr(
+        "app.webview_shell.attach_webview_shell",
+        lambda *args, **kwargs: attach_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.notify_web_console_failure",
+        lambda danmu, key, **kw: notified.append(key),
+    )
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append((ms, cb)),
+    )
+
+    try:
+        object.__setattr__(app, "web_server", server)
+        app._open_web_console_when_ready("/", use_browser=False, attempt=0)
+
+        safety = 0
+        while scheduled and not attach_calls and safety < 50:
+            safety += 1
+            pending = scheduled[:]
+            scheduled.clear()
+            for _ms, cb in pending:
+                cb()
+
+        assert attach_calls, "expected attach_webview_shell after delayed HTTP ready"
+        assert len(attach_calls) == 1
+        assert app.web_runtime_state.is_error is False
+        assert app.web_runtime_state.error_message == ""
+        assert server._startup_error_from_attach is False
+        assert notified == []
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+def test_webview_does_not_recover_when_bind_failed(monkeypatch):
+    """Port conflict / bind failure: no in-process webview recovery (restart required)."""
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer, classify_web_console_startup
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "webview_shell", None)
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._bind_failed.set()
+    object.__setattr__(app, "web_server", server)
+
+    assert classify_web_console_startup(server) == "failed"
+
+    attach_calls: list[tuple] = []
+    notified: list[str] = []
+    monkeypatch.setattr(
+        "app.webview_shell.attach_webview_shell",
+        lambda *args, **kwargs: attach_calls.append(1),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda url, timeout: True,
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.notify_web_console_failure",
+        lambda danmu, key, **kw: notified.append(key),
+    )
+
+    app._open_web_console_when_ready("/")
+    assert attach_calls == []
+    assert notified == ["web_console.startup_failed"]
+
+
+def test_browser_mode_opens_browser_when_server_slow(monkeypatch):
+    import threading
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+
+    def _sleep() -> None:
+        time.sleep(5.0)
+
+    server._thread = threading.Thread(target=_sleep, daemon=True)
+    server._thread.start()
+
+    browser_calls = []
+    scheduled = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda url, timeout: False,
+    )
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append(ms),
+    )
+    try:
+        object.__setattr__(app, "web_server", server)
+        app._open_web_console_when_ready("/", use_browser=True, attempt=0)
+        assert browser_calls == ["/"]
+        assert server._browser_launch_opened is True
+        assert scheduled == [500]
+
+        app._open_web_console_when_ready("/", use_browser=True, attempt=1)
+        assert browser_calls == ["/"]
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+def test_browser_mode_opens_browser_when_server_ready(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server.startup_ok = True
+    object.__setattr__(app, "web_server", server)
+
+    browser_calls = []
+    scheduled = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append(ms),
+    )
+
+    app._open_web_console_when_ready("/", use_browser=True, attempt=0)
+    assert browser_calls == ["/"]
+    assert scheduled == []
+
+
+def test_open_web_console_after_handshake_failed_does_not_reopen_browser(monkeypatch):
+    from unittest.mock import MagicMock
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "webview")
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    object.__setattr__(app, "web_server", server)
+
+    shell = MagicMock()
+    shell.is_running.return_value = False
+    shell.is_handshake_pending.return_value = False
+    shell.handshake_failed = True
+    object.__setattr__(app, "webview_shell", shell)
+
+    browser_calls = []
+    attach_calls = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.attach_webview_shell",
+        lambda *args, **kwargs: attach_calls.append(1),
+    )
+
+    app._open_web_console("/#settings")
+    assert browser_calls == []
+    assert attach_calls == []
+
+
+def test_browser_mode_skips_browser_on_terminal_failure(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._bind_failed.set()
+    object.__setattr__(app, "web_server", server)
+
+    browser_calls = []
+    notified = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.notify_web_console_failure",
+        lambda danmu, key, **kw: notified.append(key),
+    )
+
+    app._open_web_console_when_ready("/", use_browser=True, attempt=0)
+    assert browser_calls == []
+    assert notified == ["web_console.startup_failed"]
+
+
+def test_browser_mode_open_web_console_dedupes_browser(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "browser")
+    object.__setattr__(app, "webview_shell", None)
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server.startup_ok = True
+    server._browser_launch_opened = True
+    object.__setattr__(app, "web_server", server)
+
+    browser_calls = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+
+    app._open_web_console("/#settings")
+    assert browser_calls == []
+
+
+def test_browser_mode_start_without_api_key_dedupes_with_timer_path(monkeypatch):
+    import threading
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    object.__setattr__(app, "web_launch_mode", "browser")
+    object.__setattr__(app, "webview_shell", None)
+    object.__setattr__(app, "config", FakeConfig({}))
+    object.__setattr__(app, "tray", MagicMock())
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._thread = threading.Thread(target=time.sleep, args=(5.0,), daemon=True)
+    server._thread.start()
+    object.__setattr__(app, "web_server", server)
+    object.__setattr__(
+        app,
+        "_set_error_status_safe",
+        DanmuApp._set_error_status_safe.__get__(app, DanmuApp),
+    )
+
+    browser_calls = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda url, timeout: False,
+    )
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: None,
+    )
+
+    try:
+        DanmuApp.start(app)
+        app._open_web_console_when_ready("/#settings", use_browser=True, attempt=0)
+        assert browser_calls == ["/#settings"]
+        assert server._browser_launch_opened is True
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+def test_browser_mode_opens_browser_after_5s_when_server_slow(monkeypatch):
+    import threading
+    from unittest.mock import MagicMock
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    app = _make_minimal_app()
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    server._thread = threading.Thread(target=time.sleep, args=(5.0,), daemon=True)
+    server._thread.start()
+    object.__setattr__(app, "web_server", server)
+
+    browser_calls = []
+    scheduled = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda url, timeout: False,
+    )
+    monkeypatch.setattr(
+        "main.QTimer.singleShot",
+        lambda ms, cb: scheduled.append(ms),
+    )
+
+    try:
+        app._open_web_console_when_ready("/", use_browser=True, attempt=0)
+        assert browser_calls == ["/"]
+        assert server._browser_launch_opened is True
+
+        scheduled.clear()
+        app._open_web_console_when_ready("/", use_browser=True, attempt=10)
+        assert browser_calls == ["/"]
+        assert scheduled == [500]
+    finally:
+        server._bind_failed.set()
+        server._thread.join(timeout=1.0)
+
+
+@pytest.fixture()
+def qapp():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    yield app
+    app.processEvents()
+
+
+def test_config_change_updates_overlay_font(workspace_tmp, qapp):
+    """BUG-007: font_size change via _on_config_changed must refresh overlay font immediately."""
+    del qapp
+    store = ConfigStore(db_path=workspace_tmp / "font_overlay.db")
+    store.set("font_size", "24")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "4")
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks()
+    overlay = DanmuOverlay(store, engine)
+    engine.overlay = overlay
+
+    app = DanmuApp.__new__(DanmuApp)
+    app.config = store
+    app.engine = engine
+    app.overlay = overlay
+    app.web_runtime_state = WebRuntimeState(
+        cached_danmu_lines=4,
+        cached_layout_mode=store.get("layout_mode", "fullscreen"),
+    )
+    app.screenshot_timer = FakeTimer()
+    app.reply_buffer = AIReplyFIFOBuffer(max_items=8)
+    app.hotkey = Mock()
+    app._sync_scene_probe_size = lambda: None
+    app._sync_mic_service = lambda: None
+    app._sync_reply_batch_config = DanmuApp._sync_reply_batch_config.__get__(app, DanmuApp)
+    app._normal_recognition_interval_ms = DanmuApp._normal_recognition_interval_ms.__get__(
+        app, DanmuApp
+    )
+    app._queue_capacity = DanmuApp._queue_capacity.__get__(app, DanmuApp)
+    app._ensure_web_runtime_state = DanmuApp._ensure_web_runtime_state.__get__(app, DanmuApp)
+    app._on_config_changed = DanmuApp._on_config_changed.__get__(app, DanmuApp)
+
+    assert overlay.font.pointSize() == 24
+
+    store.set("font_size", "36")
+    app._on_config_changed()
+
+    assert overlay.font.pointSize() == 36
+
+
+def test_start_seeds_visibility_counts(workspace_tmp, monkeypatch):
+    """BUG-003: after start + on-screen danmu, visible display_count must not stay 0."""
+    monkeypatch.setattr("app.danmu_engine.random.uniform", lambda _a, _b: 50.0)
+    monkeypatch.setattr("app.danmu_engine.random.choices", lambda population, **_kw: population[:1])
+
+    store = ConfigStore(db_path=workspace_tmp / "bug003.db")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "5")
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks()
+    engine.start()
+
+    item = engine.add_text("hello", persona="p1")
+    assert item is not None
+    item.x = 100.0
+    engine._refresh_item_visibility(item)
+
+    assert engine.visible_display_count() > 0
+
+    app = SimpleNamespace(
+        engine=engine,
+        reply_buffer=SimpleNamespace(size=lambda: 0),
+        visible_display_count=lambda: engine.visible_display_count(),
+        stats_state=StatsState(danmu_count=0, start_time=time.monotonic()),
+        web_runtime_state=WebRuntimeState(),
+        personae=SimpleNamespace(get_active=lambda: []),
+        config=store,
+        lifetime_stats=SimpleNamespace(snapshot=lambda **_kwargs: {}),
+        session_run_log=SimpleNamespace(list_dicts_newest_first=lambda: []),
+        build_live_status_snapshot=lambda: None,
+        _region_selection_state="idle",
+    )
+    status = DanmuApp.build_status_snapshot(app)
+    assert status["display_count"] > 0
+
+
+def test_startup_notice_skipped_when_not_first_run(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from PyQt6.QtWidgets import QMessageBox
+
+    config = MagicMock()
+    config.get_startup_notice.return_value = ""
+    logger = FakeLogger()
+    dialog_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: dialog_calls.append(args),
+    )
+
+    assert show_startup_notice_if_needed(config, logger) is False
+    assert dialog_calls == []
+    assert logger.info_messages == []
+
+
+def test_init_language_uses_seeded_config_not_system_locale(tmp_path, monkeypatch):
+    from app.config_defaults import DEFAULT_LANGUAGE, config_value_with_default
+    from app.translations import Translator
+
+    monkeypatch.setattr(Translator, "detect_system_language", lambda: "en")
+
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    assert store.get("language") == DEFAULT_LANGUAGE
+
+    resolved = Translator.resolve_language(
+        config_value_with_default(store, "language")
+    )
+    assert resolved == DEFAULT_LANGUAGE
+
+    store.close()
+
+
+def _make_app_for_start_without_api_key(monkeypatch):
+    """Minimal DanmuApp stub for BUG-009 start() API-key guard tests."""
+    from unittest.mock import MagicMock
+
+    app = DanmuApp.__new__(DanmuApp)
+    engine = FakeEngine()
+    engine_start_called: list[bool] = []
+
+    def fake_engine_start():
+        engine_start_called.append(True)
+        engine.running = True
+
+    monkeypatch.setattr(engine, "start", fake_engine_start)
+
+    screenshot_timer = FakeTimer()
+    tray = MagicMock()
+
+    object.__setattr__(app, "config", FakeConfig({}))
+    object.__setattr__(app, "engine", engine)
+    object.__setattr__(app, "logger", FakeLogger())
+    object.__setattr__(app, "web_runtime_state", WebRuntimeState())
+    object.__setattr__(app, "tray", tray)
+    object.__setattr__(app, "web_server", None)
+    object.__setattr__(app, "screenshot_timer", screenshot_timer)
+    object.__setattr__(app, "web_bridge", None)
+    object.__setattr__(
+        app,
+        "_ensure_web_runtime_state",
+        DanmuApp._ensure_web_runtime_state.__get__(app, DanmuApp),
+    )
+    object.__setattr__(
+        app,
+        "_set_error_status_safe",
+        DanmuApp._set_error_status_safe.__get__(app, DanmuApp),
+    )
+
+    return app, engine_start_called, screenshot_timer, tray
+
+
+def test_start_without_api_key_does_not_start(monkeypatch):
+    """BUG-009: start() must not start engine or timers when API key is missing."""
+    app, engine_start_called, screenshot_timer, _tray = _make_app_for_start_without_api_key(
+        monkeypatch
+    )
+    DanmuApp.start(app)
+    assert engine_start_called == []
+    assert app.engine.running is False
+    assert screenshot_timer.started == 0
+
+
+def test_start_without_api_key_surfaces_ui_feedback(monkeypatch):
+    """BUG-009: missing API key must set web error state and show tray hint."""
+    from app.translations import tr
+
+    app, _engine_start_called, _screenshot_timer, tray = _make_app_for_start_without_api_key(
+        monkeypatch
+    )
+    DanmuApp.start(app)
+    msg = tr("app.api_key_missing_warning")
+    assert app.web_runtime_state.error_message == msg
+    assert app.web_runtime_state.is_error is True
+    tray.show_api_key_missing_hint.assert_called_once()
+
+
+def test_toggle_without_api_key_delegates_to_start_guard(monkeypatch):
+    """BUG-009: hotkey/tray toggle path must surface the same guard as start()."""
+    app, engine_start_called, _screenshot_timer, tray = _make_app_for_start_without_api_key(
+        monkeypatch
+    )
+    object.__setattr__(app, "toggle", DanmuApp.toggle.__get__(app, DanmuApp))
+    DanmuApp.toggle(app)
+    assert engine_start_called == []
+    assert app.engine.running is False
+    assert app.web_runtime_state.is_error is True
+    tray.show_api_key_missing_hint.assert_called_once()
+
+
+def test_stop_flushes_session_runtime_to_lifetime_stats(workspace_tmp):
+    """BUG-010: stop path persists session runtime and clears session clock on success."""
+    store = ConfigStore(db_path=workspace_tmp / "stop_runtime.db")
+    lifetime = LifetimeStats(store)
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app, config=store, lifetime_stats=lifetime)
+    object.__setattr__(
+        app,
+        "_flush_session_runtime_to_lifetime",
+        DanmuApp._flush_session_runtime_to_lifetime.__get__(app, DanmuApp),
+    )
+    object.__setattr__(app, "_ensure_stats_state", DanmuApp._ensure_stats_state.__get__(app, DanmuApp))
+
+    stats = app.stats_state
+    stats.start_time = time.monotonic() - 42.0
+
+    DanmuApp._flush_session_runtime_to_lifetime(app)
+
+    assert stats.start_time == 0.0
+    persisted = float(store.get(STATS_LIFETIME_RUNTIME_SEC))
+    assert persisted >= 40.0
+    assert lifetime.snapshot()["lifetime_runtime_sec"] == persisted
+
+
+def test_flush_session_runtime_keeps_start_time_when_set_batch_fails(workspace_tmp):
+    """BUG-010: failed lifetime flush must not clear session clock."""
+    store = ConfigStore(db_path=workspace_tmp / "flush_fail.db")
+    lifetime = LifetimeStats(store)
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app, config=store, lifetime_stats=lifetime)
+    object.__setattr__(
+        app,
+        "_flush_session_runtime_to_lifetime",
+        DanmuApp._flush_session_runtime_to_lifetime.__get__(app, DanmuApp),
+    )
+    object.__setattr__(app, "_ensure_stats_state", DanmuApp._ensure_stats_state.__get__(app, DanmuApp))
+
+    stats = app.stats_state
+    stats.start_time = time.monotonic() - 10.0
+    before = stats.start_time
+
+    with patch.object(store, "set_batch", side_effect=sqlite3.OperationalError("locked")):
+        with pytest.raises(sqlite3.OperationalError):
+            DanmuApp._flush_session_runtime_to_lifetime(app)
+
+    assert stats.start_time == before
+    assert store.get(STATS_LIFETIME_RUNTIME_SEC, "") in ("", "0", "0.0")
+
+
+def test_pick_random_skips_deleted_custom_persona(tmp_path):
+    from app.personae import PersonaManager, get_reply_contract
+
+    store = ConfigStore(db_path=tmp_path / "persona_pick.db")
+    personae = PersonaManager(store)
+    contract = get_reply_contract(store)
+    personae.save_custom("测试A", contract, "看图发弹幕：")
+    personae.set_active(["测试A"])
+    personae.delete_custom("测试A")
+
+    assert "测试A" not in personae.get_active()
+    assert "测试A" not in personae.list()
+
+    for _ in range(20):
+        picked = personae.pick_random()
+        assert picked != "测试A"
+        system_pt, user_pt = personae.get_prompt(picked)
+        assert system_pt
+        assert user_pt
+
+
+def test_delete_custom_prunes_active_personae(tmp_path):
+    from app.personae import PersonaManager, get_reply_contract
+
+    store = ConfigStore(db_path=tmp_path / "persona_prune.db")
+    personae = PersonaManager(store)
+    contract = get_reply_contract(store)
+    personae.save_custom("测试A", contract, "看图发弹幕：")
+    personae.set_active(["测试A", "吐槽型"])
+    personae.delete_custom("测试A")
+
+    stored = store.get_json("active_personae", [])
+    assert "测试A" not in stored
+    assert "吐槽型" in stored
+    assert "测试A" not in personae.get_active()
+
+
+def test_quit_stops_pool_topup_timer(monkeypatch):
+    """BUG-019: quit() must stop _pool_topup_timer even if stop() does not."""
+    import PyQt6.QtCore as qtcore
+
+    fake_pool = MagicMock()
+    fake_pool.waitForDone.return_value = True
+
+    class _FakeQThreadPool:
+        @staticmethod
+        def globalInstance():
+            return fake_pool
+
+    monkeypatch.setattr(qtcore, "QThreadPool", _FakeQThreadPool)
+    monkeypatch.setattr("main.QApplication.quit", MagicMock())
+
+    pool_timer = FakeTimer()
+    pool_timer.active = True
+    pool_timer.started = 1
+
+    app = SimpleNamespace(
+        logger=MagicMock(),
+        stop=MagicMock(),
+        hotkey=MagicMock(),
+        tray=MagicMock(),
+        ai_worker=MagicMock(),
+        history_writer=MagicMock(),
+        config=MagicMock(),
+        overlay=MagicMock(),
+        webview_shell=None,
+        web_server=MagicMock(),
+        stop_web_status_timer=MagicMock(),
+        _pool_topup_timer=pool_timer,
+    )
+
+    DanmuApp.quit(app)
+
+    app.stop.assert_called_once_with()
+    assert not pool_timer.isActive()
+    assert pool_timer.stopped >= 1

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import app.api_schedule as api_schedule
 import main
 import pytest
 from app.application.request_scheduler import RequestScheduler
 from app.application.request_timing_service import RequestTimingService
+from app.main_helpers import (
+    density_right_target,
+    reply_request_id,
+    scene_api_blocked,
+)
 from main import DanmuApp
 
 from tests.conftest import bind_minimal_danmu_app
@@ -49,7 +54,7 @@ def _make_request_app(**overrides):
     for name in (
         "_has_visual_request_in_flight",
         "_scene_api_block_reason",
-        "_api_schedule_block_reason",
+        "api_schedule_block_reason",
         "_consume_request_timing",
         "_rtt_avg",
         "_smart_cooldown_ms",
@@ -70,9 +75,23 @@ def _make_request_app(**overrides):
     object.__setattr__(app, "_record_scene_memory_display", lambda *_args, **_kwargs: None)
     object.__setattr__(app, "_memory_enabled", lambda: False)
     object.__setattr__(app, "_current_persona", "p1")
-    object.__setattr__(app, "_visible_display_count", lambda: 0)
+    object.__setattr__(app, "visible_display_count", lambda: 0)
     app.engine.running = True
     return app
+
+
+def test_reply_request_id_format():
+    assert reply_request_id(2, 7, 0) == "2:7:0"
+    assert reply_request_id(-1, 5, 0) != reply_request_id(3, 5, 0)
+
+
+def test_density_right_target():
+    assert density_right_target(0) == 2
+    assert density_right_target(9) == 3
+
+
+def test_scene_api_blocked_always_false():
+    assert scene_api_blocked() is False
 
 
 def test_min_api_interval_blocks_and_then_allows(monkeypatch):
@@ -81,10 +100,10 @@ def test_min_api_interval_blocks_and_then_allows(monkeypatch):
 
     monkeypatch.setenv("DANMU_MIN_API_INTERVAL_MS", "800")
     monkeypatch.setattr(api_schedule.time, "monotonic", lambda: 100.5)
-    assert app._api_schedule_block_reason(enforce_min_interval=True) == "min_api_interval"
+    assert app.api_schedule_block_reason(enforce_min_interval=True) == "min_api_interval"
 
     monkeypatch.setattr(api_schedule.time, "monotonic", lambda: 100.81)
-    assert app._api_schedule_block_reason(enforce_min_interval=True) == ""
+    assert app.api_schedule_block_reason(enforce_min_interval=True) == ""
 
 
 def test_consume_request_timing_updates_history_and_clears_id(monkeypatch):
@@ -113,6 +132,12 @@ def test_request_timing_keys_do_not_collide_for_mic_and_visual(monkeypatch):
     visual_rtt = app._get_request_timing_service().consume_timing(request_id=visual_id, now=21.5)
     assert visual_rtt == pytest.approx(11.5)
     assert mic_id in app._request_started_at_by_id
+
+
+def test_get_request_scheduler_public_facade():
+    app = _make_request_app()
+    scheduler = app.get_request_scheduler()
+    assert scheduler is app._get_request_scheduler()
 
 
 def test_request_scheduler_records_trigger_time():
@@ -163,6 +188,28 @@ def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
     assert app._rtt_history == pytest.approx([1.2])
     assert app._enqueue_reply_batch.called
     app._consume_reply_queue.assert_called_once_with()
+
+
+def test_mic_probe_does_not_touch_pending_request_meta(monkeypatch):
+    from app.ai_client import AiProbeResult
+    from app.mic_test_send import send_mic_probe
+
+    app = _make_request_app()
+    app.resolve_request_credentials = lambda: (
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "sk-test",
+        "doubao-seed-2-0-mini-260428",
+        "doubao",
+    )
+    app.ai_worker = MagicMock()
+    app.run_mic_probe_in_pool = lambda *_args, **_kwargs: AiProbeResult(
+        signal="finished",
+        message="ok",
+    )
+
+    before = dict(app._pending_request_meta)
+    send_mic_probe(app, "data:image/jpeg;base64,abc", "hi", "data:audio/wav;base64,x")
+    assert app._pending_request_meta == before
 
 
 def test_on_ai_error_consumes_timing_on_error_path(monkeypatch):

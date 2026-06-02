@@ -26,8 +26,12 @@ python main.py --web-browser    # 系统浏览器
 | 组件 | 路径 | 说明 |
 |------|------|------|
 | HTTP API | `app/web_console.py` | FastAPI，`127.0.0.1:18765`，Bearer 鉴权 |
-| 扩展路由 | `app/web_api/routes.py` | 人格、自定义模型、公式化弹幕库、读弹幕（TTS）、压缩预览 |
-| 静态页 | `web/static/` | Qwen 温馨风格 |
+| 扩展路由注册器 | `app/web_api/routes.py` | 人格、自定义模型、公式化弹幕库、读弹幕（TTS）、诊断等 HTTP 注册与 bridge 薄适配 |
+| 公告已读状态 | `app/web_api/announcements_state.py` | `GET/PUT /api/announcements-read-state` 的 config 归一化与校验 |
+| 更新忽略状态 | `app/web_api/app_update_state.py` | `GET/PUT /api/app-update-state` 的 config 归一化与校验 |
+| 压缩预览路由 | `app/web_api/preview_compress.py` | `POST /api/preview/compress` 注册（实现仍在 `app/image_compress.py`） |
+| 静态页 | `web/static/` | Qwen 温馨风格；入口 `index.html` 以 `type="module"` 加载 `app.js` |
+| 前端主干模块 | `web/static/modules/` | `transport.js`（会话/HTTP/WS）、`status.js`（`/api/status` UI）、`logs.js`（日志缓冲与渲染）、`diagnostics.js`（`/api/diagnostics` 面板）、`settings.js`（助手设置表单/模型/识图区域/压缩预览）、`content-pages.js`（公告/反馈/AI 管家）；`app.js` 仍为跨页编排入口 |
 | 桌面壳 | `app/webview_shell.py` | pywebview 子进程 + `nav_queue` 跨进程导航；失败回退系统浏览器 |
 | 单实例 | `app/single_instance.py` | `QLocalServer`；二次启动激活已有窗口并退出 |
 | Overlay | `app/overlay.py` | Qt 透明置顶弹幕 |
@@ -44,7 +48,6 @@ python main.py --web-browser    # 系统浏览器
 | 人格工坊 | 提示词编辑、版本回滚预览、新建/删除自定义人格 |
 | 弹幕日记 | 多级别过滤、复制可见、自动滚动 |
 | 教程 | 飞书文档外链 |
-| 社区 | 介绍页 + **进入社区** / **在浏览器中打开**（外链 Vercel 社区站；URL 见 `GET /api/community-site` 或 `DANMU_COMMUNITY_SITE_URL`；见 [community/DESKTOP-ENTRY.md](community/DESKTOP-ENTRY.md)） |
 | 公告 | Supabase 已发布公告列表（置顶优先；需 `web/static/supabase-config.js`）；**温馨控制台**顶栏可显示最新公告「标题：正文」前 30 字，可关闭 |
 | 侧栏左下角 | **赞赏**（微信赞赏码弹窗）；当前版本 / 最新版本（`GET /api/version` + Supabase `app_updates`） |
 | 问题反馈 | 在线反馈表单（Supabase）、社群说明、QQ 群二维码 |
@@ -79,7 +82,6 @@ python main.py --web-browser    # 系统浏览器
 | GET | `/api/providers` | 否 | 服务商预设 |
 | GET | `/api/model-catalog` | 否 | 视觉模型平台目录（模型 ID、价格、最便宜/麦克风标记） |
 | GET | `/api/meta` | 否 | UI 模式、快捷键等 |
-| GET | `/api/community-site` | 否 | 社区 Vercel 外链 URL（`DANMU_COMMUNITY_SITE_URL` 或默认常量） |
 | GET | `/api/version` | 否 | 本地构建版本 `{ current_version }`（[`app/version.py`](../app/version.py)） |
 | GET | `/api/app-update-state` | 否 | 更新弹窗忽略状态 `{ dismissedLatestVersion }`，持久化于 `config.db` 键 `app_update_state` |
 | PUT | `/api/app-update-state` | Bearer | 写入忽略状态；非空 `dismissedLatestVersion` 须为合法版本字符串 |
@@ -210,9 +212,11 @@ python main.py --web-browser    # 系统浏览器
 1. HTTP 线程校验 payload（`validate_web_config_patch`）。
 2. `WebConsoleBridge.save_config_requested.emit(data)` → 主线程 `_on_save_config` → `apply_web_config_payload`。
 3. HTTP 立即返回 `{"ok": true}`；**不**等待主线程写入完成。成功时主线程 `logger.info`；失败时 `logger.error` + `set_web_error_status`（运行概览错误区）。UI toast 以 HTTP 200 为准时，存在极短异步窗口。
-4. 状态降级轮询失败时前端 toast；未捕获的 Promise  rejection 也会 toast（[`web/static/app.js`](../web/static/app.js)）。
+4. 状态降级轮询失败时前端 toast；未捕获的 Promise rejection 也会 toast（[`web/static/modules/transport.js`](../web/static/modules/transport.js) 经 `app.js` 注入 `showToast`）。
 
-### 扩展路由写操作（`app/web_api/routes.py`）
+### 扩展路由写操作（`app/web_api/routes.py` 及领域模块）
+
+公告已读、更新忽略、压缩预览的状态/校验逻辑在 `announcements_state.py`、`app_update_state.py`、`preview_compress.py`；`routes.py` 仅注册路由并委托上述模块。
 
 需**同步返回**且会写入 `ConfigStore`、调用 `DanmuApp` 公开方法或 `config_changed.emit()` 的路由（人格、弹幕库、自定义模型、公告已读、麦克风测试等）统一经 `WebConsoleBridge.invoke_on_main(fn, *args, **kwargs)`：uvicorn 线程 `emit` + `BlockingQueuedConnection`，阻塞直至主线程槽执行完毕并返回结果。
 
@@ -233,7 +237,7 @@ python main.py --web-browser    # 系统浏览器
 **实现（双入口，参数一致）**
 
 - 运行时：`main.compress_screenshot()`（`QPixmap` → JPEG Base64 data URI）
-- Web 预览：`app/image_compress.compress_image_bytes()`（上传字节 → 同 scale/quality 逻辑）
+- Web 预览：`app/web_api/preview_compress.py` 注册 `POST /api/preview/compress`，委托 `app/image_compress.compress_image_bytes()`（上传字节 → 同 scale/quality 逻辑）
 
 本地调 JPEG 质量（不调用 AI、不写仓库图片）：[`scripts/bench_jpeg_quality.py`](../scripts/bench_jpeg_quality.py)，说明见 [scripts/README.md](../scripts/README.md)。
 

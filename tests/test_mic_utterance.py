@@ -1,6 +1,9 @@
 import struct
+import threading
+import time
 
 from app.mic_buffer import DEFAULT_MIC_SAMPLE_RATE, MicRingBuffer
+from app.mic_capture import MicCaptureService
 from app.mic_test import pcm_metrics
 from app.mic_utterance import MicUtteranceConfig, MicUtteranceDetector, UtteranceState
 
@@ -121,6 +124,27 @@ def test_utterance_with_high_noise_floor():
     _finish_utterance(detector, t0=t0 + 0.1, speech_sec=0.35, silence_sec=0.35, loud_rms=900)
 
     assert fired == [True]
+
+
+def test_utterance_poll_does_not_block_audio_callback():
+    cap = MicCaptureService()
+    stop = threading.Event()
+    chunk = b"\x00\x01" * 400
+
+    def append_loop() -> None:
+        while not stop.is_set():
+            cap._buffer.append(chunk)
+
+    worker = threading.Thread(target=append_loop, daemon=True)
+    worker.start()
+    try:
+        for _ in range(50):
+            start = time.perf_counter()
+            cap.try_snapshot_pcm_ms(600)
+            assert time.perf_counter() - start < 0.05
+    finally:
+        stop.set()
+        worker.join(timeout=2.0)
 
 
 def test_take_recent_ms():

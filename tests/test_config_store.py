@@ -46,6 +46,7 @@ def test_first_run_seeds_config_defaults(tmp_path):
     assert store.get("freshness") == ""
     assert store.get("eviction_mode") == "natural"
     assert store.get("hotkey") == "Ctrl+Shift+B"
+    assert store.get("language") == "zh"
     assert store.get("danmu_pool_enabled") == "1"
     store.close()
 
@@ -121,4 +122,69 @@ def test_missing_config_file_has_friendly_notice(tmp_path):
     store2 = ConfigStore(db_path=db_path)
     assert store2.is_first_run is False
     assert store2.get_startup_notice() == ""
+    store2.close()
+
+
+def test_config_value_with_default_language(tmp_path):
+    from app.config_defaults import DEFAULT_LANGUAGE, config_value_with_default
+
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    assert config_value_with_default(store, "language") == DEFAULT_LANGUAGE
+
+    store.set("language", "")
+    assert config_value_with_default(store, "language") == DEFAULT_LANGUAGE
+
+    store.set("language", "en")
+    assert config_value_with_default(store, "language") == "en"
+
+    store.close()
+
+
+def test_set_region_zeros_all_keys_when_size_non_positive(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set_region(10, 20, 100, 80)
+    store.set_region(100, 200, 0, 0)
+
+    assert store.get_region() == (0, 0, 0, 0)
+    assert store.get("region_x") == "0"
+    assert store.get("region_y") == "0"
+    assert store.get("region_w") == "0"
+    assert store.get("region_h") == "0"
+
+    store.close()
+
+
+def test_set_region_clear_persists_after_reopen(tmp_path):
+    db = tmp_path / "config.db"
+    store1 = ConfigStore(db_path=db)
+    store1.set_region(50, 60, 320, 180)
+    store1.set_region(0, 0, 0, 0)
+    store1.close()
+
+    store2 = ConfigStore(db_path=db)
+    assert store2.get_region() == (0, 0, 0, 0)
+    assert store2.get("region_x") == "0"
+    assert store2.get("region_y") == "0"
+    assert store2.get("region_w") == "0"
+    assert store2.get("region_h") == "0"
+    store2.close()
+
+
+def test_config_store_repairs_stale_region_on_init(tmp_path):
+    db = tmp_path / "config.db"
+    store1 = ConfigStore(db_path=db)
+    store1.set_batch({
+        "region_x": "100",
+        "region_y": "200",
+        "region_w": "0",
+        "region_h": "0",
+    })
+    store1.close()
+
+    store2 = ConfigStore(db_path=db)
+    assert store2.get_region() == (0, 0, 0, 0)
+    assert store2.get("region_x") == "0"
+    assert store2.get("region_y") == "0"
+    assert store2.get("region_w") == "0"
+    assert store2.get("region_h") == "0"
     store2.close()

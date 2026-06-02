@@ -17,6 +17,7 @@
 import json
 import logging
 import threading
+from dataclasses import dataclass
 
 import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -31,6 +32,8 @@ from app.logger import (
     GENERIC_API_KEY_PATTERN,
 )
 from app.model_providers import (
+    get_capabilities_for_model,
+    get_openai_adapter_for_model,
     guess_provider_from_endpoint,
     normalize_endpoint,
     normalize_mode,
@@ -175,6 +178,16 @@ def parse_stream_usage(usage: dict | None, *, usage_token_style: str = "openai")
     return DefaultOpenAIAdapter().normalize_usage(usage, caps=caps)
 
 
+@dataclass(frozen=True)
+class AiProbeResult:
+    """Mic test-send probe outcome; does not use Qt signals or DanmuApp request meta."""
+
+    signal: str
+    message: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class AiWorker(QObject):
     """AI 请求工作线程对象，在 QThreadPool 中运行 HTTP 请求并通过信号回传结果。
 
@@ -217,6 +230,60 @@ class AiWorker(QObject):
     def reset_stopping(self):
         """新会话开始时重置，允许后续请求正常执行。"""
         self._stopping = False
+
+    def resolve_request_credentials(self) -> tuple[str, str, str, str] | None:
+        """Public façade for credential resolution (Web/mic probe)."""
+        return self._resolve_request_credentials()
+
+    def run_mic_audio_probe(
+        self,
+        image_data_uri: str,
+        user_pt: str,
+        audio_data_uri: str,
+        *,
+        system_pt: str = "",
+    ) -> AiProbeResult:
+        """Run one mic audio probe HTTP request without emitting finished/error signals."""
+        if self._stopping:
+            return AiProbeResult(
+                signal="error",
+                message=tr("ai.error_request_failed").format(error="stopped"),
+            )
+        resolved = self._resolve_request_credentials()
+        if resolved is None:
+            return AiProbeResult(
+                signal="error",
+                message=tr("custom_model.error_incomplete"),
+            )
+        endpoint, _, _, api_mode = resolved
+        persona_id = "mic_probe"
+        if resolve_api_transport(endpoint, api_mode) == "doubao":
+            return self._request_doubao(
+                image_data_uri,
+                system_pt,
+                user_pt,
+                persona_id,
+                0,
+                0,
+                0.0,
+                0,
+                audio_data_uri=audio_data_uri,
+                resolved=resolved,
+                emit=False,
+            )
+        return self._request_openai(
+            image_data_uri,
+            system_pt,
+            user_pt,
+            persona_id,
+            0,
+            0,
+            0.0,
+            0,
+            audio_data_uri=audio_data_uri,
+            resolved=resolved,
+            emit=False,
+        )
 
     def _get_model_config(self) -> dict:
         """获取当前激活的自定义模型配置；如无则返回空 dict（走全局配置）。"""
@@ -350,6 +417,40 @@ class AiWorker(QObject):
             output_tokens,
         )
 
+    def _deliver_outcome(
+        self,
+        *,
+        emit: bool,
+        signal_name: str,
+        message: str,
+        persona_id: str,
+        request_round: int,
+        screenshot_id: int,
+        captured_at: float,
+        scene_generation: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> AiProbeResult | None:
+        if emit:
+            self._emit_result(
+                signal_name,
+                message,
+                persona_id,
+                request_round,
+                screenshot_id,
+                captured_at,
+                scene_generation,
+                input_tokens,
+                output_tokens,
+            )
+            return None
+        return AiProbeResult(
+            signal=signal_name,
+            message=message,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
     def _request_doubao(
         self,
         image_data_uri: str,
@@ -363,7 +464,8 @@ class AiWorker(QObject):
         *,
         audio_data_uri: str | None = None,
         resolved: tuple[str, str, str, str] | None = None,
-    ):
+        emit: bool = True,
+    ) -> AiProbeResult | None:
         """豆包 Responses API 流式请求。
 
         请求体结构：model / input(user+image+audio) / stream=True / thinking / max_output_tokens。
@@ -373,26 +475,32 @@ class AiWorker(QObject):
         if resolved is None:
             resolved = self._resolve_request_credentials()
         if resolved is None:
-            self._emit_result(
-                "error",
-                tr("custom_model.error_incomplete"),
-                persona_id,
-                request_round,
-                screenshot_id,
-                captured_at,
-                scene_generation,
-                0,
-                0,
+            return self._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("custom_model.error_incomplete"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
             )
-            return
         endpoint, api_key, model, _ = resolved
         temperature = self.config.get_float("temperature", 0.7)
         configured_max = self.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
         max_output_tokens = resolve_danmu_max_output_tokens(configured_max, use_thinking=False)
 
         if not api_key:
-            self._emit_result("error", tr("ai.error_api_key_missing"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
-            return
+            return self._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("ai.error_api_key_missing"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
+            )
 
         user_content: list[dict] = [
             {"type": "input_image", "image_url": image_data_uri},
@@ -434,19 +542,56 @@ class AiWorker(QObject):
             try:
                 text, input_tokens, output_tokens, stream_error = self._stream_doubao(http_client, url, headers, data)
                 if text:
-                    self._emit_result("finished", text.strip(), persona_id, request_round, screenshot_id, captured_at, scene_generation, input_tokens, output_tokens)
-                else:
-                    msg = stream_error or tr("ai.error_empty_response")
-                    self._emit_result("error", msg, persona_id, request_round, screenshot_id, captured_at, scene_generation, input_tokens, output_tokens)
-                return
+                    return self._deliver_outcome(
+                        emit=emit,
+                        signal_name="finished",
+                        message=text.strip(),
+                        persona_id=persona_id,
+                        request_round=request_round,
+                        screenshot_id=screenshot_id,
+                        captured_at=captured_at,
+                        scene_generation=scene_generation,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
+                msg = stream_error or tr("ai.error_empty_response")
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=msg,
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
             except httpx.TimeoutException:
                 if attempt < 1:
                     continue
-                self._emit_result("error", tr("ai.error_timeout"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=tr("ai.error_timeout"),
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
             except httpx.HTTPStatusError as e:
                 msg = format_http_status_error(e)
-                self._emit_result("error", msg, persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
-                return
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=msg,
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
             except Exception as e:
                 if attempt < 1:
                     if hasattr(self._thread_local, "client") and self._thread_local.client is not None:
@@ -459,7 +604,26 @@ class AiWorker(QObject):
                         self._thread_local.client = None
                     http_client = self._get_http_client()
                     continue
-                self._emit_result("error", tr("ai.error_request_failed").format(error=e), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=tr("ai.error_request_failed").format(error=e),
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
+        return self._deliver_outcome(
+            emit=emit,
+            signal_name="error",
+            message=tr("ai.error_empty_response"),
+            persona_id=persona_id,
+            request_round=request_round,
+            screenshot_id=screenshot_id,
+            captured_at=captured_at,
+            scene_generation=scene_generation,
+        )
 
     def _stream_doubao(self, http_client, url: str, headers: dict, data: dict) -> tuple[str, int, int, str]:
         """豆包 SSE 流解析委托：调用 doubao_responses_stream.stream_doubao_responses 并提取结果。"""
@@ -490,7 +654,8 @@ class AiWorker(QObject):
         *,
         audio_data_uri: str | None = None,
         resolved: tuple[str, str, str, str] | None = None,
-    ):
+        emit: bool = True,
+    ) -> AiProbeResult | None:
         """OpenAI Chat Completions SSE 流式请求。
 
         请求体结构：model / messages(system+user+image) / stream=True / stream_options(include_usage)。
@@ -500,22 +665,20 @@ class AiWorker(QObject):
         if resolved is None:
             resolved = self._resolve_request_credentials()
         if resolved is None:
-            self._emit_result(
-                "error",
-                tr("custom_model.error_incomplete"),
-                persona_id,
-                request_round,
-                screenshot_id,
-                captured_at,
-                scene_generation,
-                0,
-                0,
+            return self._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("custom_model.error_incomplete"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
             )
-            return
         endpoint, api_key, model, api_mode = resolved
         temperature = self.config.get_float("temperature", 0.7)
         configured_max = self.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
-        caps = get_capabilities_for_endpoint(endpoint, api_mode)
+        caps = get_capabilities_for_model(model, endpoint, api_mode)
         # MiMo 等模型即使设了 thinking:disabled 仍可能产生 reasoning_content，
         # 这些 token 也计入 max_completion_tokens，所以按 thinking 模式分配更大余量。
         max_tokens = resolve_danmu_max_output_tokens(
@@ -523,8 +686,16 @@ class AiWorker(QObject):
         )
 
         if not api_key:
-            self._emit_result("error", tr("ai.error_api_key_missing"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
-            return
+            return self._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("ai.error_api_key_missing"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
+            )
 
         from app.model_providers import model_supports_mic_audio
 
@@ -533,7 +704,7 @@ class AiWorker(QObject):
             mic_audio = None
 
         http_client = self._get_http_client()
-        adapter = get_openai_adapter(endpoint, api_mode)
+        adapter = get_openai_adapter_for_model(model, endpoint, api_mode)
         data: dict[str, object] = {
             "model": model,
             "messages": [
@@ -562,18 +733,55 @@ class AiWorker(QObject):
                     http_client, url, headers, data, endpoint=endpoint, api_mode=api_mode
                 )
                 if text:
-                    self._emit_result("finished", text.strip(), persona_id, request_round, screenshot_id, captured_at, scene_generation, input_tokens, output_tokens)
-                else:
-                    self._emit_result("error", tr("ai.error_empty_response"), persona_id, request_round, screenshot_id, captured_at, scene_generation, input_tokens, output_tokens)
-                return
+                    return self._deliver_outcome(
+                        emit=emit,
+                        signal_name="finished",
+                        message=text.strip(),
+                        persona_id=persona_id,
+                        request_round=request_round,
+                        screenshot_id=screenshot_id,
+                        captured_at=captured_at,
+                        scene_generation=scene_generation,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=tr("ai.error_empty_response"),
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
             except httpx.TimeoutException:
                 if attempt < 1:
                     continue
-                self._emit_result("error", tr("ai.error_timeout"), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=tr("ai.error_timeout"),
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
             except httpx.HTTPStatusError as e:
                 msg = format_http_status_error(e)
-                self._emit_result("error", msg, persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
-                return
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=msg,
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
             except Exception as e:
                 if attempt < 1:
                     if hasattr(self._thread_local, "client") and self._thread_local.client is not None:
@@ -586,7 +794,26 @@ class AiWorker(QObject):
                         self._thread_local.client = None
                     http_client = self._get_http_client()
                     continue
-                self._emit_result("error", tr("ai.error_request_failed").format(error=e), persona_id, request_round, screenshot_id, captured_at, scene_generation, 0, 0)
+                return self._deliver_outcome(
+                    emit=emit,
+                    signal_name="error",
+                    message=tr("ai.error_request_failed").format(error=e),
+                    persona_id=persona_id,
+                    request_round=request_round,
+                    screenshot_id=screenshot_id,
+                    captured_at=captured_at,
+                    scene_generation=scene_generation,
+                )
+        return self._deliver_outcome(
+            emit=emit,
+            signal_name="error",
+            message=tr("ai.error_empty_response"),
+            persona_id=persona_id,
+            request_round=request_round,
+            screenshot_id=screenshot_id,
+            captured_at=captured_at,
+            scene_generation=scene_generation,
+        )
 
     def _stream_openai(
         self,

@@ -214,6 +214,21 @@ class TestP1003_KeyFileCorruptionRecovery:
         # 应该有解密失败警告
         assert any("解密失败" in msg or "decrypt" in msg.lower() for msg in log_messages)
 
+    def test_decrypt_failure_with_legacy_base64_keeps_old_key(self, temp_config_dir):
+        """加密值损坏但 legacy base64 仍在时，应继续回退读取旧 key。"""
+        if not _HAS_CRYPTO:
+            pytest.skip("cryptography not available")
+
+        store = ConfigStore(db_path=temp_config_dir / "config.db")
+        store.set("api_key_encrypted", "not-valid-encrypted-data")
+        store.set("api_key_encoded", "bGVnYWN5LXNlY3JldC1rZXk=")
+
+        with self._capture_logs() as log_messages:
+            result = store.get_api_key()
+
+        assert result == "legacy-secret-key"
+        assert any("解密失败" in msg or "decrypt" in msg.lower() for msg in log_messages)
+
     @staticmethod
     def _capture_logs():
         """捕获日志的上下文管理器"""
