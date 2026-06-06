@@ -1,0 +1,309 @@
+from __future__ import annotations
+
+import re
+
+from app.config_store import ConfigStore
+from app.danmu_engine import (
+    DEFAULT_DANMU_MAX_CHARS_EN,
+    DEFAULT_DANMU_MAX_CHARS_ZH,
+    resolve_danmu_max_chars,
+)
+from app.translations import Translator
+
+REPLY_COUNT_MIN = 2
+REPLY_COUNT_MAX = 7
+DEFAULT_REPLY_SCENE_COUNT = 2
+DEFAULT_REPLY_FILLER_COUNT = 3
+
+DEFAULT_NORMAL_REPLY_COUNT = 5
+NORMAL_REPLY_COUNT_MIN = 1
+NORMAL_REPLY_COUNT_MAX = 20
+
+_CONTRACT_ZH_RE = re.compile(
+    r"你是直播弹幕评论员。必须且只能返回 JSON 字符串数组，不要解释，不要 Markdown。"
+    r"固定返回 \d+ 条弹幕：前 \d+ 条必须强相关当前画面，后 \d+ 条必须是适合直播间氛围的泛用弹幕。"
+    r"每条不超过 \d+ 个字，避免重复，输出格式："
+    r'\["[^"]*"(?:, "[^"]*")*\]。'
+)
+_CONTRACT_EN_RE = re.compile(
+    r"You are a live-stream danmu commentator\. You must return a JSON string array only, "
+    r"with no explanations and no Markdown\. "
+    r"Always return exactly \d+ comments: the first \d+ must be strongly tied to the current frame, "
+    r"and the last \d+ must be generic danmu suitable for a live-stream atmosphere\. "
+    r"All comments MUST be written in English only\. "
+    r"Each comment must stay within \d+ characters\. Avoid repetition\. Output format: "
+    r'\["[^"]*"(?:, "[^"]*")*\]\.'
+)
+_CONTRACT_NORMAL_ZH_RE = re.compile(
+    r"直播弹幕评论员。只输出 JSON 字符串数组，无解释、无 Markdown。"
+    r"固定 \d+ 条，每条≤\d+字。"
+    r"像多位真实观众：短句口语碎片化；优先贴当前画面，可少量接梗或气氛句；条间口吻可不同。"
+    r"禁 AI腔/总结腔/客服腔/长句/说教/重复。"
+    r"格式："
+    r'\["[^"]*"(?:, "[^"]*")*\]。'
+)
+_CONTRACT_NORMAL_ZH_LEGACY_RE = re.compile(
+    r"你是直播弹幕评论员。必须且只能返回 JSON 字符串数组，不要解释，不要 Markdown。"
+    r"固定返回 \d+ 条弹幕，必须与当前画面或直播氛围相关，避免重复。"
+    r"每条不超过 \d+ 个字，输出格式："
+    r'\["[^"]*"(?:, "[^"]*")*\]。'
+)
+_CONTRACT_NORMAL_EN_RE = re.compile(
+    r"Live-stream danmu commentator\. JSON string array only, no explanation, no Markdown\. "
+    r"Exactly \d+ comments, max \d+ chars each\. "
+    r"Multiple real viewers: short, casual, fragmented; prioritize the current frame; "
+    r"a few meme or vibe lines OK; vary voice per line\. "
+    r"No AI tone, summaries, customer-service voice, long lines, preaching, or repetition\. "
+    r"All comments MUST be in English only\. "
+    r"Format: "
+    r'\["[^"]*"(?:, "[^"]*")*\]\.'
+)
+_CONTRACT_NORMAL_EN_LEGACY_RE = re.compile(
+    r"You are a live-stream danmu commentator\. You must return a JSON string array only, "
+    r"with no explanations and no Markdown\. "
+    r"Always return exactly \d+ comments that must relate to the current frame or live-stream atmosphere\. "
+    r"Avoid repetition\. All comments MUST be written in English only\. "
+    r"Each comment must stay within \d+ characters\. Output format: "
+    r'\["[^"]*"(?:, "[^"]*")*\]\.'
+)
+
+REPLY_CONTRACT_ZH = ""
+REPLY_CONTRACT_EN = ""
+REPLY_CONTRACT_ALIASES: set[str] = set()
+REPLY_CONTRACT = ""
+
+
+def _clamp_reply_count(value: int, default: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(REPLY_COUNT_MIN, min(REPLY_COUNT_MAX, n))
+
+
+def reply_counts_from_config(config: ConfigStore | None) -> tuple[int, int]:
+    if config is None:
+        return DEFAULT_REPLY_SCENE_COUNT, DEFAULT_REPLY_FILLER_COUNT
+    scene = _clamp_reply_count(
+        config.get_int("reply_scene_count", DEFAULT_REPLY_SCENE_COUNT),
+        DEFAULT_REPLY_SCENE_COUNT,
+    )
+    filler = _clamp_reply_count(
+        config.get_int("reply_filler_count", DEFAULT_REPLY_FILLER_COUNT),
+        DEFAULT_REPLY_FILLER_COUNT,
+    )
+    return scene, filler
+
+
+def _clamp_normal_reply_count(value: int, default: int = DEFAULT_NORMAL_REPLY_COUNT) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(NORMAL_REPLY_COUNT_MIN, min(NORMAL_REPLY_COUNT_MAX, n))
+
+
+def normal_reply_count_from_config(config: ConfigStore | None) -> int:
+    if config is None:
+        return DEFAULT_NORMAL_REPLY_COUNT
+    return _clamp_normal_reply_count(
+        config.get_int("normal_reply_count", DEFAULT_NORMAL_REPLY_COUNT),
+        DEFAULT_NORMAL_REPLY_COUNT,
+    )
+
+
+def _json_example_zh(total: int) -> str:
+    items = [f"弹幕{i}" for i in range(1, total + 1)]
+    return '["' + '", "'.join(items) + '"]'
+
+
+def _json_example_en(total: int) -> str:
+    items = [f"comment {i}" for i in range(1, total + 1)]
+    return '["' + '", "'.join(items) + '"]'
+
+
+def build_reply_contract_zh(
+    scene_count: int,
+    filler_count: int,
+    max_chars: int | None = None,
+) -> str:
+    scene = _clamp_reply_count(scene_count, DEFAULT_REPLY_SCENE_COUNT)
+    filler = _clamp_reply_count(filler_count, DEFAULT_REPLY_FILLER_COUNT)
+    total = scene + filler
+    limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_ZH
+    return (
+        "你是直播弹幕评论员。必须且只能返回 JSON 字符串数组，不要解释，不要 Markdown。"
+        f"固定返回 {total} 条弹幕：前 {scene} 条必须强相关当前画面，后 {filler} 条必须是适合直播间氛围的泛用弹幕。"
+        f"每条不超过 {limit} 个字，避免重复，输出格式："
+        f"{_json_example_zh(total)}。"
+    )
+
+
+def build_reply_contract_en(
+    scene_count: int,
+    filler_count: int,
+    max_chars: int | None = None,
+) -> str:
+    scene = _clamp_reply_count(scene_count, DEFAULT_REPLY_SCENE_COUNT)
+    filler = _clamp_reply_count(filler_count, DEFAULT_REPLY_FILLER_COUNT)
+    total = scene + filler
+    limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_EN
+    return (
+        "You are a live-stream danmu commentator. You must return a JSON string array only, "
+        "with no explanations and no Markdown. "
+        f"Always return exactly {total} comments: the first {scene} must be strongly tied to the current frame, "
+        f"and the last {filler} must be generic danmu suitable for a live-stream atmosphere. "
+        "All comments MUST be written in English only. "
+        f"Each comment must stay within {limit} characters. Avoid repetition. Output format: "
+        f"{_json_example_en(total)}."
+    )
+
+
+def build_normal_reply_contract_zh(
+    count: int,
+    max_chars: int | None = None,
+) -> str:
+    total = _clamp_normal_reply_count(count, DEFAULT_NORMAL_REPLY_COUNT)
+    limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_ZH
+    return (
+        "直播弹幕评论员。只输出 JSON 字符串数组，无解释、无 Markdown。"
+        f"固定 {total} 条，每条≤{limit}字。"
+        "像多位真实观众：短句口语碎片化；优先贴当前画面，可少量接梗或气氛句；条间口吻可不同。"
+        "禁 AI腔/总结腔/客服腔/长句/说教/重复。"
+        f"格式：{_json_example_zh(total)}。"
+    )
+
+
+def build_normal_reply_contract_en(
+    count: int,
+    max_chars: int | None = None,
+) -> str:
+    total = _clamp_normal_reply_count(count, DEFAULT_NORMAL_REPLY_COUNT)
+    limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_EN
+    return (
+        "Live-stream danmu commentator. JSON string array only, no explanation, no Markdown. "
+        f"Exactly {total} comments, max {limit} chars each. "
+        "Multiple real viewers: short, casual, fragmented; prioritize the current frame; "
+        "a few meme or vibe lines OK; vary voice per line. "
+        "No AI tone, summaries, customer-service voice, long lines, preaching, or repetition. "
+        "All comments MUST be in English only. "
+        f"Format: {_json_example_en(total)}."
+    )
+
+
+def _refresh_legacy_contract_aliases() -> None:
+    global REPLY_CONTRACT_ZH, REPLY_CONTRACT_EN, REPLY_CONTRACT, REPLY_CONTRACT_ALIASES
+    REPLY_CONTRACT_ZH = build_reply_contract_zh(
+        DEFAULT_REPLY_SCENE_COUNT,
+        DEFAULT_REPLY_FILLER_COUNT,
+        DEFAULT_DANMU_MAX_CHARS_ZH,
+    )
+    REPLY_CONTRACT_EN = build_reply_contract_en(
+        DEFAULT_REPLY_SCENE_COUNT,
+        DEFAULT_REPLY_FILLER_COUNT,
+        DEFAULT_DANMU_MAX_CHARS_EN,
+    )
+    REPLY_CONTRACT = REPLY_CONTRACT_ZH
+    normal_zh = build_normal_reply_contract_zh(DEFAULT_NORMAL_REPLY_COUNT, DEFAULT_DANMU_MAX_CHARS_ZH)
+    normal_en = build_normal_reply_contract_en(DEFAULT_NORMAL_REPLY_COUNT, DEFAULT_DANMU_MAX_CHARS_EN)
+    REPLY_CONTRACT_ALIASES = {REPLY_CONTRACT_ZH, REPLY_CONTRACT_EN, normal_zh, normal_en}
+
+
+_refresh_legacy_contract_aliases()
+
+
+def get_reply_contract(config: ConfigStore | None = None) -> str:
+    lang = Translator.get_language()
+    if config is None:
+        max_chars = (
+            DEFAULT_DANMU_MAX_CHARS_EN if lang == "en" else DEFAULT_DANMU_MAX_CHARS_ZH
+        )
+    else:
+        max_chars = resolve_danmu_max_chars(config, lang=lang)
+    count = normal_reply_count_from_config(config)
+    if lang == "en":
+        return build_normal_reply_contract_en(count, max_chars)
+    return build_normal_reply_contract_zh(count, max_chars)
+
+
+def strip_reply_contract(system_pt: str) -> str:
+    base = (system_pt or "").strip()
+    for pattern in (
+        _CONTRACT_ZH_RE,
+        _CONTRACT_EN_RE,
+        _CONTRACT_NORMAL_ZH_RE,
+        _CONTRACT_NORMAL_ZH_LEGACY_RE,
+        _CONTRACT_NORMAL_EN_RE,
+        _CONTRACT_NORMAL_EN_LEGACY_RE,
+    ):
+        base = pattern.sub("", base).strip()
+    for contract in REPLY_CONTRACT_ALIASES:
+        if base.startswith(contract):
+            base = base[len(contract) :].strip()
+    return base
+
+
+def ensure_reply_contract(system_pt: str, config: ConfigStore | None = None) -> str:
+    custom_part = strip_reply_contract(system_pt)
+    contract = get_reply_contract(config)
+    return f"{contract} {custom_part}".strip() if custom_part else contract
+
+
+# W-NICKNAME-001
+NICKNAME_MAX_LEN = 20
+_NICKNAME_LINE_ZH = "[用户昵称：{nick}；可在合适时自然称呼用户，但不要每条回复都重复]"
+_NICKNAME_LINE_EN = "[User nickname: {nick}; you may address the user naturally, but do not repeat it in every reply]"
+
+
+def _read_user_nickname(config: ConfigStore | None) -> str:
+    if config is None:
+        return ""
+    try:
+        value = config.get("user_nickname", "")
+    except Exception:
+        return ""
+    return str(value or "")
+
+
+def append_nickname_to_system_pt(system_pt: str, config: ConfigStore | None) -> str:
+    """Append a single nickname line to system_pt; returns unchanged prompt when empty."""
+    nick = _read_user_nickname(config).strip()
+    if not nick:
+        return system_pt
+    nick = nick[:NICKNAME_MAX_LEN]
+    template = _NICKNAME_LINE_EN if Translator.get_language() == "en" else _NICKNAME_LINE_ZH
+    suffix = template.format(nick=nick)
+    base = (system_pt or "").rstrip()
+    if not base:
+        return suffix
+    return f"{base}\n{suffix}"
+
+
+# W-LIVE-TOPIC-001
+LIVE_TOPIC_MAX_LEN = 200
+_LIVE_TOPIC_LINE_ZH = "[本次直播主题：{topic}；请围绕此主题营造氛围并自然带入弹幕风格]"
+_LIVE_TOPIC_LINE_EN = "[Live stream topic: {topic}; please set the tone around this topic and weave it naturally into your danmu]"
+
+
+def _read_live_topic(config: ConfigStore | None) -> str:
+    if config is None:
+        return ""
+    try:
+        value = config.get("live_topic", "")
+    except Exception:
+        return ""
+    return str(value or "")
+
+
+def append_live_topic_to_system_pt(system_pt: str, config: ConfigStore | None) -> str:
+    """Append a live-topic line to system_pt; returns unchanged prompt when empty."""
+    topic = _read_live_topic(config).strip()
+    if not topic:
+        return system_pt
+    topic = topic[:LIVE_TOPIC_MAX_LEN]
+    template = _LIVE_TOPIC_LINE_EN if Translator.get_language() == "en" else _LIVE_TOPIC_LINE_ZH
+    suffix = template.format(topic=topic)
+    base = (system_pt or "").rstrip()
+    if not base:
+        return suffix
+    return f"{base}\n{suffix}"

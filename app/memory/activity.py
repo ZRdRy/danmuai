@@ -63,17 +63,6 @@ class RecentActivityState:
         self.switching_count = len(self._scene_switch_times)
         self.is_frequent_switching = self.switching_count >= FREQUENT_SWITCH_THRESHOLD
 
-    def on_scene_change(self, new_generation: int) -> None:
-        self.scene_generation = new_generation
-        self.record_scene_switch()
-        # 游戏场景切换意味着完全不同的上下文，旧活动摘要不再适用
-        if self.activity_type == ACTIVITY_TYPE_GAME:
-            self._observations.clear()
-            self.activity_summary = ""
-            self.main_scene = ""
-            self.app_or_game_name = ""
-            self.topic_hint = ""
-
     def reset(self) -> None:
         self.activity_type = "unknown"
         self.activity_summary = ""

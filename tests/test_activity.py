@@ -230,30 +230,6 @@ class TestSceneSwitch:
         assert state.switching_count == 1
 
 
-class TestOnSceneChange:
-    def test_game_scene_change_clears_state(self):
-        state = RecentActivityState()
-        state.record_observation(_obs_game("英雄联盟"))
-        assert state.activity_summary != ""
-        state.on_scene_change(new_generation=5)
-        assert state.scene_generation == 5
-        assert state.activity_summary == ""
-        assert state.app_or_game_name == ""
-
-    def test_non_game_scene_change_keeps_state(self):
-        state = RecentActivityState()
-        for _ in range(3):
-            state.record_observation(_obs_coding())
-        summary_before = state.activity_summary
-        state.on_scene_change(new_generation=5)
-        assert state.activity_summary == summary_before
-
-    def test_scene_change_increments_switch(self):
-        state = RecentActivityState()
-        state.on_scene_change(new_generation=1)
-        assert state.switching_count == 1
-
-
 class TestReset:
     def test_reset_clears_everything(self):
         state = RecentActivityState()

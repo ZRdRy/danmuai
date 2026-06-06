@@ -2,7 +2,11 @@ from app.personae import (
     BUILTIN_PERSONAE,
     DEFAULT_REPLY_FILLER_COUNT,
     DEFAULT_REPLY_SCENE_COUNT,
+    LIVE_TOPIC_MAX_LEN,
+    NICKNAME_MAX_LEN,
     REPLY_CONTRACT,
+    append_live_topic_to_system_pt,
+    append_nickname_to_system_pt,
     build_normal_reply_contract_zh,
     build_reply_contract_en,
     build_reply_contract_zh,
@@ -136,3 +140,137 @@ def test_test1_persona_strip_roundtrip():
     assert "固定 5 条" in merged
     assert strip_reply_contract(merged) == body
     assert "测试" not in BUILTIN_PERSONAE
+
+
+# W-NICKNAME-001
+def test_append_nickname_returns_prompt_unchanged_when_empty():
+    base = "你是主播。\n[输出契约] ABC"
+    cfg = FakeConfig({"user_nickname": ""})
+    assert append_nickname_to_system_pt(base, cfg) == base
+
+
+def test_append_nickname_returns_prompt_unchanged_when_key_missing():
+    base = "你是主播。\n[输出契约] ABC"
+    assert append_nickname_to_system_pt(base, FakeConfig()) == base
+
+
+def test_append_nickname_returns_prompt_unchanged_when_only_whitespace():
+    base = "你是主播。"
+    cfg = FakeConfig({"user_nickname": "   "})
+    assert append_nickname_to_system_pt(base, cfg) == base
+
+
+def test_append_nickname_handles_none_config():
+    base = "你是主播。"
+    assert append_nickname_to_system_pt(base, None) == base
+
+
+def test_append_nickname_appends_chinese_line_for_zh():
+    base = "你是主播。"
+    cfg = FakeConfig({"user_nickname": "小明"})
+    out = append_nickname_to_system_pt(base, cfg)
+    assert out.startswith(base)
+    assert "[用户昵称：小明" in out
+    assert "不要每条回复都重复" in out
+
+
+def test_append_nickname_appends_english_line_for_en():
+    from app.translations import Translator
+
+    Translator.set_language("en")
+    try:
+        base = "You are a host."
+        cfg = FakeConfig({"user_nickname": "Alice"})
+        out = append_nickname_to_system_pt(base, cfg)
+        assert out.startswith(base)
+        assert "[User nickname: Alice" in out
+        assert "do not repeat it" in out
+    finally:
+        Translator.set_language("zh")
+
+
+def test_append_nickname_truncates_over_long_value():
+    base = "你是主播。"
+    long_nick = "A" * (NICKNAME_MAX_LEN + 12)
+    cfg = FakeConfig({"user_nickname": long_nick})
+    out = append_nickname_to_system_pt(base, cfg)
+    expected_nick = long_nick[:NICKNAME_MAX_LEN]
+    assert f"[用户昵称：{expected_nick}" in out
+    # The truncated tail must not appear right after the nickname; the rest of the
+    # suffix template (advice about repetition) is unrelated and stays.
+    assert f"昵称：{expected_nick}；" in out
+    assert f"昵称：{expected_nick}A" not in out
+
+
+def test_append_nickname_to_empty_base_just_returns_line():
+    cfg = FakeConfig({"user_nickname": "小明"})
+    out = append_nickname_to_system_pt("", cfg)
+    assert "[用户昵称：小明" in out
+    assert out == out.strip()
+
+
+# W-LIVE-TOPIC-001
+def test_append_live_topic_empty_returns_unchanged():
+    base = "你是主播。\n[输出契约] ABC"
+    cfg = FakeConfig({"live_topic": ""})
+    assert append_live_topic_to_system_pt(base, cfg) == base
+    assert append_live_topic_to_system_pt(base, FakeConfig()) == base
+    assert append_live_topic_to_system_pt(base, FakeConfig({"live_topic": "   "})) == base
+    assert append_live_topic_to_system_pt(base, None) == base
+
+
+def test_append_live_topic_basic_injection_zh():
+    base = "你是主播。"
+    cfg = FakeConfig({"live_topic": "今晚播《艾尔登法环》"})
+    out = append_live_topic_to_system_pt(base, cfg)
+    assert out.startswith(base)
+    assert "[本次直播主题：今晚播《艾尔登法环》" in out
+    assert "营造氛围" in out
+
+
+def test_append_live_topic_basic_injection_en():
+    from app.translations import Translator
+
+    Translator.set_language("en")
+    try:
+        base = "You are a host."
+        cfg = FakeConfig({"live_topic": "Elden Ring DLC"})
+        out = append_live_topic_to_system_pt(base, cfg)
+        assert out.startswith(base)
+        assert "[Live stream topic: Elden Ring DLC" in out
+        assert "weave it naturally" in out
+    finally:
+        Translator.set_language("zh")
+
+
+def test_append_live_topic_truncates_long_input():
+    base = "你是主播。"
+    long_topic = "啊" * (LIVE_TOPIC_MAX_LEN + 300)
+    cfg = FakeConfig({"live_topic": long_topic})
+    out = append_live_topic_to_system_pt(base, cfg)
+    expected = long_topic[:LIVE_TOPIC_MAX_LEN]
+    assert f"[本次直播主题：{expected}" in out
+    assert f"主题：{expected}啊" not in out
+
+
+def test_nickname_then_live_topic_chain_both_present():
+    base = "你是主播。"
+    cfg = FakeConfig({"user_nickname": "小明", "live_topic": "黑神话悟空"})
+    out = append_live_topic_to_system_pt(
+        append_nickname_to_system_pt(base, cfg),
+        cfg,
+    )
+    nick_pos = out.index("[用户昵称：小明")
+    topic_pos = out.index("[本次直播主题：黑神话悟空")
+    assert nick_pos < topic_pos
+
+
+def test_nickname_then_live_topic_chain_topic_empty():
+    base = "你是主播。"
+    cfg = FakeConfig({"user_nickname": "小明", "live_topic": ""})
+    out = append_live_topic_to_system_pt(
+        append_nickname_to_system_pt(base, cfg),
+        cfg,
+    )
+    assert "[用户昵称：小明" in out
+    assert "[本次直播主题：" not in out

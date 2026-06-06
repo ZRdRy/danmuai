@@ -1,7 +1,7 @@
 """消费节奏与缓冲模拟测试。
 
 PipelineSimulator 仅测 reply_timer 间隔与队列排水，不复制 main 已移除的
-drop_stale / freshness 轮次滞后丢弃策略（_is_reply_stale 恒为不丢弃）。
+普通模式回复入队与消费（无 stale 硬丢弃）。
 """
 from types import SimpleNamespace
 from unittest.mock import MagicMock

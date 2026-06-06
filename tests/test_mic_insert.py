@@ -16,12 +16,10 @@ def _bind_main_methods(app):
         "_pop_request_meta",
         "_release_inflight_for_source",
         "_enqueue_reply_batch",
-        "_is_reply_stale",
         "_handle_mic_ai_reply",
         "_on_ai_reply",
         "_on_ai_error",
         "_default_batch_interval",
-        "_log_reply_drop",
         "_consume_request_timing",
         "_publish_live_status",
         "_consume_reply_queue",
@@ -69,25 +67,6 @@ def test_mic_enqueue_does_not_reset_batch_tracker(app):
     assert queued
     assert all(item.source == "mic" for item in queued)
     assert all(item.replaceable is False for item in queued)
-
-
-def test_mic_reply_never_stale_ttl(app):
-    captured = time.monotonic() - 120.0
-    stale, reason = app._is_reply_stale(1, captured, 0, source="mic")
-    assert stale is False
-    assert reason == ""
-
-
-def test_mic_reply_stale_skips_newer_frame_supersede(app):
-    app._latest_screenshot_id = 20
-    app._latest_requested_screenshot_id = 20
-    captured = time.monotonic()
-    stale, reason = app._is_reply_stale(10, captured, 0, source="mic")
-    assert stale is False
-
-    stale_ai, reason_ai = app._is_reply_stale(10, captured, 0, source="ai")
-    assert stale_ai is False
-    assert reason_ai == ""
 
 
 def test_on_ai_reply_mic_does_not_decrement_visual_inflight(app):

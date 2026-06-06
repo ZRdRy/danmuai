@@ -1,0 +1,321 @@
+"""Web console support helpers extracted from app.web_console.
+
+Keeps route/bootstrap code small while preserving the existing public imports
+re-exported from app.web_console for tests and callers.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from app.application.config_service import MASKED_API_KEY, WEB_CONFIG_KEYS, apply_web_config_patch
+from app.logger import (
+    API_KEY_PATTERN,
+    AUTH_HEADER_PATTERN,
+    BASE64_AUDIO_PATTERN,
+    BASE64_IMAGE_PATTERN,
+    ENCRYPTED_KEY_PATTERN,
+    GENERIC_API_KEY_PATTERN,
+)
+
+if TYPE_CHECKING:
+    from app.web_console import WebConsoleBridge
+
+SAVE_CONFIG_TIMEOUT_SEC = 10.0
+SAVE_CONFIG_ERROR_DETAIL_MAX = 200
+SAVE_DONE_EVENT_KEY = "__save_done_event"
+SAVE_RESULT_KEY = "__save_result"
+
+
+@dataclass
+class WebStatusSnapshot:
+    running: bool = False
+    danmu_count: int = 0
+    queue_count: int = 0
+    display_count: int = 0
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    runtime_sec: float = 0.0
+    error_message: str = ""
+    is_error: bool = False
+    live_analyzing: bool = False
+    live_local_fallback: bool = False
+    live_delay_sec: float = 0.0
+    live_message: str = ""
+    persona_names: list[str] = field(default_factory=list)
+    screen_index: int = 0
+    has_api_key: bool = False
+    dedup_profile: dict[str, Any] | None = None
+    lifetime_danmu_count: int = 0
+    lifetime_runtime_sec: float = 0.0
+    lifetime_total_tokens: int = 0
+    lifetime_input_tokens: int = 0
+    lifetime_output_tokens: int = 0
+    session_runs: list[dict] = field(default_factory=list)
+    active_model_id: str = ""
+    inferred_provider_id: str = ""
+    model_display_name: str = ""
+    uses_custom_credentials: bool = False
+    model_source: str = "unknown"
+    provider_model_mismatch: bool = False
+    capture_mode: str = "screen"
+    capture_window_hwnd: int = 0
+    capture_region_mode: str = "full"
+    region_x: int = 0
+    region_y: int = 0
+    region_w: int = 0
+    region_h: int = 0
+    region_selection_state: str = "idle"
+
+
+def summarize_config_save_error(detail: object, *, max_len: int = SAVE_CONFIG_ERROR_DETAIL_MAX) -> str:
+    text = str(detail or "").strip()
+    if not text:
+        return "配置保存失败"
+    text = API_KEY_PATTERN.sub("sk-****", text)
+    text = BASE64_IMAGE_PATTERN.sub("data:image/***;base64,(hidden)", text)
+    text = BASE64_AUDIO_PATTERN.sub("data:audio/***;base64,(hidden)", text)
+    text = AUTH_HEADER_PATTERN.sub("Authorization: Bearer (hidden)", text)
+    text = ENCRYPTED_KEY_PATTERN.sub("gAAAA****(hidden)", text)
+    text = GENERIC_API_KEY_PATTERN.sub("(api_key: ****)", text)
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]}…"
+
+
+def enumerate_screens() -> list[dict[str, Any]]:
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return [{"index": 0, "label": "显示器 1", "width": 0, "height": 0}]
+    screens = app.screens() or []
+    items = []
+    for index, screen in enumerate(screens):
+        geo = screen.geometry()
+        dpr = screen.devicePixelRatio()
+        phys_w = int(geo.width() * dpr)
+        phys_h = int(geo.height() * dpr)
+        items.append(
+            {
+                "index": index,
+                "label": f"显示器 {index + 1} — {phys_w}×{phys_h}",
+                "width": phys_w,
+                "height": phys_h,
+            }
+        )
+    return items or [{"index": 0, "label": "显示器 1", "width": 0, "height": 0}]
+
+
+def is_empty_screens_fallback(screens: list[dict[str, Any]]) -> bool:
+    """True when enumerate_screens had no Qt screens() yet (single 0×0 placeholder)."""
+    if len(screens) != 1:
+        return False
+    item = screens[0]
+    return (
+        item.get("index") == 0
+        and int(item.get("width", -1)) == 0
+        and int(item.get("height", -1)) == 0
+    )
+
+
+def resolve_screens_for_api(
+    cached: list[dict[str, Any]] | None,
+    live: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prefer live enumeration when cache is empty, stale fallback, or has fewer displays."""
+    cached_list = list(cached or [])
+    if not cached_list:
+        return live
+    if len(live) > len(cached_list):
+        return live
+    if is_empty_screens_fallback(cached_list) and not is_empty_screens_fallback(live):
+        return live
+    return cached_list
+
+
+def try_cache_screens(bridge: object) -> bool:
+    """Write bridge.cached_screens when Qt reports real displays; return True if cached."""
+    screens = enumerate_screens()
+    if not is_empty_screens_fallback(screens):
+        bridge.cached_screens = screens
+        return True
+    return False
+
+
+_SCREEN_CACHE_RETRY_DELAYS_MS = (500, 100, 500)
+
+
+def schedule_screen_cache(bridge: object) -> None:
+    """Delay first cache until displays exist; retry up to 3 times (BUG-030)."""
+    from PyQt6.QtCore import QTimer
+
+    def _attempt(attempt_index: int) -> None:
+        if try_cache_screens(bridge):
+            return
+        if attempt_index >= len(_SCREEN_CACHE_RETRY_DELAYS_MS) - 1:
+            screens = enumerate_screens()
+            if screens:
+                bridge.cached_screens = screens
+            return
+        delay_ms = _SCREEN_CACHE_RETRY_DELAYS_MS[attempt_index + 1]
+        QTimer.singleShot(delay_ms, lambda: _attempt(attempt_index + 1))
+
+    QTimer.singleShot(_SCREEN_CACHE_RETRY_DELAYS_MS[0], lambda: _attempt(0))
+
+
+def _mask_api_key(config) -> str:
+    return MASKED_API_KEY if config.get_api_key() else ""
+
+
+def _mask_mic_api_key(config) -> str:
+    getter = getattr(config, "get_mic_api_key", None)
+    if callable(getter) and getter():
+        return MASKED_API_KEY
+    return ""
+
+
+def export_config(config) -> dict[str, Any]:
+    from app.config_defaults import config_value_with_default
+    from app.model_providers import (
+        mic_audio_supported_for_mic_config,
+        resolve_active_model_id,
+    )
+    from app.model_selection import resolve_model_status
+    from app.personae import normal_reply_count_from_config
+    from app.web_api.capture_region import capture_region_mode
+    from app.web_api.custom_models import _mask_model
+
+    data = {key: config_value_with_default(config, key) for key in WEB_CONFIG_KEYS}
+    data["api_key"] = _mask_api_key(config)
+    data["has_api_key"] = bool(config.get_api_key())
+    active_model_id = resolve_active_model_id(config)
+    model_status = resolve_model_status(config)
+    data["default_model_id"] = config.get_default_model_id()
+    data["active_model_id"] = active_model_id
+    data.update(model_status)
+    data["mic_api_key"] = _mask_mic_api_key(config)
+    data["has_mic_api_key"] = bool(getattr(config, "get_mic_api_key", lambda: "")())
+    data["mic_audio_likely_supported"] = mic_audio_supported_for_mic_config(config)
+    data["custom_models"] = [
+        _mask_model(model)
+        for model in config.get_custom_models()
+        if isinstance(model, dict)
+    ]
+    data["reply_batch_total"] = normal_reply_count_from_config(config)
+    rx, ry, rw, rh = config.get_region()
+    data["region_x"] = rx
+    data["region_y"] = ry
+    data["region_w"] = rw
+    data["region_h"] = rh
+    data["capture_region_mode"] = capture_region_mode(config)
+    return data
+
+
+def extract_config_payload(body: Any) -> dict[str, Any]:
+    """Accept `{data: {...}}` wrapper or a flat config patch dict."""
+    if not isinstance(body, dict):
+        raise ValueError("无效的配置数据")
+    nested = body.get("data")
+    if isinstance(nested, dict):
+        return nested
+    if body:
+        return body
+    raise ValueError("配置数据为空")
+
+
+def apply_config_patch(danmu_app, payload: dict[str, Any]) -> None:
+    """主线程执行：委托 ConfigService 统一处理 Web 配置 patch。"""
+    apply_web_config_patch(danmu_app, payload)
+
+
+def write_config_save_result(
+    result_holder: object,
+    *,
+    ok: bool,
+    error: str | None = None,
+    detail: str | None = None,
+) -> None:
+    if not isinstance(result_holder, dict):
+        return
+    result_holder.clear()
+    result_holder["ok"] = ok
+    if error:
+        result_holder["error"] = error
+    if detail:
+        result_holder["detail"] = detail
+
+
+def save_config_via_bridge(
+    bridge: "WebConsoleBridge",
+    payload: dict[str, Any],
+    *,
+    timeout_sec: float = SAVE_CONFIG_TIMEOUT_SEC,
+) -> dict[str, Any]:
+    done = threading.Event()
+    result: dict[str, Any] = {
+        "ok": False,
+        "error": "save_timeout",
+        "detail": "配置保存超时，请稍后重试。",
+    }
+    queued_payload = dict(payload)
+    queued_payload[SAVE_DONE_EVENT_KEY] = done
+    queued_payload[SAVE_RESULT_KEY] = result
+    bridge.save_config_requested.emit(queued_payload)
+    if done.wait(timeout=timeout_sec):
+        return result
+    bridge.danmu_app.logger.error(
+        "配置保存超时: keys=%s timeout_sec=%.1f",
+        sorted(payload.keys()),
+        timeout_sec,
+    )
+    return result
+
+
+def handle_save_config_request(bridge: "WebConsoleBridge", payload: object) -> None:
+    if not isinstance(payload, dict):
+        return
+    done_event = payload.pop(SAVE_DONE_EVENT_KEY, None)
+    result_holder = payload.pop(SAVE_RESULT_KEY, None)
+    keys = sorted(payload.keys())
+    cap_mode = payload.get("capture_mode", "<missing>")
+    cap_hwnd = payload.get("capture_window_hwnd", "<missing>")
+    try:
+        bridge.danmu_app.apply_web_config_payload(payload)
+    except Exception as exc:
+        detail = summarize_config_save_error(f"配置保存失败: {exc}")
+        write_config_save_result(
+            result_holder,
+            ok=False,
+            error="save_failed",
+            detail=detail,
+        )
+        bridge.danmu_app.logger.error(
+            "配置保存失败: keys=%s, error=%s",
+            keys,
+            exc,
+            exc_info=True,
+        )
+        bridge.danmu_app.set_web_error_status(detail, is_error=True)
+        bridge.publish_status()
+        if done_event is not None:
+            done_event.set()
+        return
+    write_config_save_result(result_holder, ok=True)
+    if done_event is not None:
+        done_event.set()
+    stored_mode = bridge.danmu_app.config.get("capture_mode", "screen")
+    stored_hwnd = bridge.danmu_app.config.get("capture_window_hwnd", "0")
+    bridge.danmu_app.logger.info(
+        "配置保存成功: keys=%s capture_mode=%s→%s capture_window_hwnd=%s→%s",
+        keys,
+        cap_mode,
+        stored_mode,
+        cap_hwnd,
+        stored_hwnd,
+    )
+    bridge.danmu_app.set_web_error_status("", is_error=False)
+    bridge.publish_status()

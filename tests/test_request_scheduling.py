@@ -11,11 +11,7 @@ import main
 import pytest
 from app.application.request_scheduler import RequestScheduler
 from app.application.request_timing_service import RequestTimingService
-from app.main_helpers import (
-    density_right_target,
-    reply_request_id,
-    scene_api_blocked,
-)
+from app.main_helpers import MAX_IN_FLIGHT, density_right_target, reply_request_id
 from main import DanmuApp
 
 from tests.conftest import bind_minimal_danmu_app
@@ -53,8 +49,10 @@ def _make_request_app(**overrides):
     object.__setattr__(app, "capturer", SimpleNamespace(grab=lambda: None))
 
     for name in (
+        "_get_request_scheduler",
+        "get_request_scheduler",
+        "get_request_timing_service",
         "_has_visual_request_in_flight",
-        "_scene_api_block_reason",
         "api_schedule_block_reason",
         "_consume_request_timing",
         "_rtt_avg",
@@ -72,7 +70,6 @@ def _make_request_app(**overrides):
     object.__setattr__(app, "_log_api_schedule", lambda **_kwargs: None)
     object.__setattr__(app, "_publish_live_status", lambda: None)
     object.__setattr__(app, "_set_error_status_safe", lambda *_args, **_kwargs: None)
-    object.__setattr__(app, "_apply_screenshot_interval_backoff", lambda: None)
     object.__setattr__(app, "_record_scene_memory_display", lambda *_args, **_kwargs: None)
     object.__setattr__(app, "_memory_enabled", lambda: False)
     object.__setattr__(app, "_current_persona", "p1")
@@ -82,7 +79,7 @@ def _make_request_app(**overrides):
 
 
 def test_reply_request_id_format():
-    assert reply_request_id(2, 7, 0) == "2:7:0"
+    assert reply_request_id(2, 7, 0) == (2, 7, 0)
     assert reply_request_id(-1, 5, 0) != reply_request_id(3, 5, 0)
 
 
@@ -233,13 +230,9 @@ def test_density_right_target():
     assert density_right_target(9) == 3
 
 
-def test_scene_api_blocked_always_false():
-    assert scene_api_blocked() is False
-
-
 def test_min_api_interval_blocks_and_then_allows(monkeypatch):
     app = _make_request_app()
-    app._last_api_trigger_at = 100.0
+    app.get_request_scheduler().last_api_trigger_at = 100.0
 
     monkeypatch.setenv("DANMU_MIN_API_INTERVAL_MS", "800")
     monkeypatch.setattr(api_schedule.time, "monotonic", lambda: 100.5)
@@ -252,14 +245,15 @@ def test_min_api_interval_blocks_and_then_allows(monkeypatch):
 def test_consume_request_timing_updates_history_and_clears_id(monkeypatch):
     app = _make_request_app()
     request_id = app._reply_request_id(2, 7, 0)
-    app._request_started_at_by_id[request_id] = 10.0
+    timing = app.get_request_timing_service()
+    timing.request_started_at_by_id[request_id] = 10.0
     app._register_request_meta(2, 7, 0, "visual")
     monkeypatch.setattr(main.time, "monotonic", lambda: 11.5)
 
     app._consume_request_timing(2, 7, 0)
 
-    assert request_id not in app._request_started_at_by_id
-    assert app._rtt_history == pytest.approx([1.5])
+    assert request_id not in timing.request_started_at_by_id
+    assert timing.rtt_history == pytest.approx([1.5])
 
 
 def test_request_timing_keys_do_not_collide_for_mic_and_visual(monkeypatch):
@@ -274,7 +268,7 @@ def test_request_timing_keys_do_not_collide_for_mic_and_visual(monkeypatch):
 
     visual_rtt = app._get_request_timing_service().consume_timing(request_id=visual_id, now=21.5)
     assert visual_rtt == pytest.approx(11.5)
-    assert mic_id in app._request_started_at_by_id
+    assert mic_id in app.get_request_timing_service().request_started_at_by_id
 
 
 def test_get_request_scheduler_public_facade():
@@ -298,16 +292,16 @@ def test_request_timing_service_avg_rtt():
     assert service.avg_rtt() == pytest.approx(2.0)
 
 
-def test_rtt_history_facade_stays_in_sync(monkeypatch):
+def test_consume_request_timing_updates_rtt_history(monkeypatch):
     app = _make_request_app()
     request_id = app._reply_request_id(1, 1, 0)
-    app._request_started_at_by_id[request_id] = 0.0
+    timing = app.get_request_timing_service()
+    timing.request_started_at_by_id[request_id] = 0.0
     monkeypatch.setattr(main.time, "monotonic", lambda: 1.0)
 
     app._consume_request_timing(1, 1, 0)
 
-    assert app._rtt_history == [1.0]
-    assert app._get_request_timing_service().rtt_history == [1.0]
+    assert timing.rtt_history == [1.0]
 
 
 def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
@@ -315,9 +309,9 @@ def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
     app.ai_in_flight = 1
     app._is_generating = True
     request_id = app._reply_request_id(3, 5, 0)
-    app._request_started_at_by_id[request_id] = 10.0
+    timing = app.get_request_timing_service()
+    timing.request_started_at_by_id[request_id] = 10.0
     app._register_request_meta(3, 5, 0, "visual")
-    app._is_reply_stale = lambda *_args, **_kwargs: (False, "")  # type: ignore[method-assign]
     app._enqueue_reply_batch = Mock()
     app._consume_reply_queue = Mock()
     app.reply_timer.active = False
@@ -327,8 +321,8 @@ def test_on_ai_reply_consumes_timing_on_success_path(monkeypatch):
 
     app._on_ai_reply('["A"]', "p1", 3, 5, 10.0, 0)
 
-    assert request_id not in app._request_started_at_by_id
-    assert app._rtt_history == pytest.approx([1.2])
+    assert request_id not in timing.request_started_at_by_id
+    assert timing.rtt_history == pytest.approx([1.2])
     assert app._enqueue_reply_batch.called
     app._consume_reply_queue.assert_called_once_with()
 
@@ -338,13 +332,13 @@ def test_mic_probe_does_not_touch_pending_request_meta(monkeypatch):
     from app.mic_test_send import send_mic_probe
 
     app = _make_request_app()
-    app.resolve_request_credentials = lambda: (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials = lambda: (
         "https://ark.cn-beijing.volces.com/api/v3",
         "sk-test",
         "doubao-seed-2-0-mini-260428",
         "doubao",
     )
-    app.ai_worker = MagicMock()
     app.run_mic_probe_in_pool = lambda *_args, **_kwargs: AiProbeResult(
         signal="finished",
         message="ok",
@@ -360,11 +354,44 @@ def test_on_ai_error_consumes_timing_on_error_path(monkeypatch):
     app.ai_in_flight = 1
     app._is_generating = True
     request_id = app._reply_request_id(4, 8, 0)
-    app._request_started_at_by_id[request_id] = 20.0
+    timing = app.get_request_timing_service()
+    timing.request_started_at_by_id[request_id] = 20.0
     app._register_request_meta(4, 8, 0, "visual")
     monkeypatch.setattr(main.time, "monotonic", lambda: 21.5)
 
     app._on_ai_error("boom", "p1", 4, 8, 20.0, 0)
 
-    assert request_id not in app._request_started_at_by_id
-    assert app._rtt_history == pytest.approx([1.5])
+    assert request_id not in timing.request_started_at_by_id
+    assert timing.rtt_history == pytest.approx([1.5])
+
+
+def test_max_in_flight_module_constant_gates_trigger(monkeypatch):
+    """BUG-011: MAX_IN_FLIGHT is a module constant; at-cap visual requests do not fire again."""
+    from tests.conftest import make_minimal_danmu_app
+
+    app = make_minimal_danmu_app()
+    app.engine.running = True
+    app._latest_screenshot = object()
+    app._latest_screenshot_id = 3
+    app._latest_screenshot_time = __import__("time").monotonic()
+    app.ai_in_flight = MAX_IN_FLIGHT
+    app._is_generating = True
+    app.personae = SimpleNamespace(
+        pick_random=lambda: "p1",
+        get_prompt=lambda _p: ("sys", "user"),
+    )
+    app._log_api_schedule = lambda **_kwargs: None
+    app._trigger_api_call = DanmuApp._trigger_api_call.__get__(app, DanmuApp)
+
+    pool = Mock()
+    pool.start = Mock()
+    monkeypatch.setattr(
+        "PyQt6.QtCore.QThreadPool",
+        Mock(globalInstance=Mock(return_value=pool)),
+    )
+    monkeypatch.setattr("app.runnable.AiRunnable", lambda *a, **k: Mock())
+
+    app._trigger_api_call()
+    assert app.ai_in_flight == MAX_IN_FLIGHT
+    pool.start.assert_not_called()
+    assert "MAX_IN_FLIGHT" not in app.__dict__

@@ -26,6 +26,17 @@ def persona_app(tmp_path):
     return app
 
 
+def test_create_persona_rejects_slash_in_name(persona_app):
+    with pytest.raises(ValueError, match="不能包含"):
+        persona_api.create_persona(persona_app, "测试/人格")
+
+
+def test_create_persona_rejects_url_reserved_chars(persona_app):
+    for bad_name in ("a\\b", "a%b", "a#b", "a?b"):
+        with pytest.raises(ValueError, match="不能包含"):
+            persona_api.create_persona(persona_app, bad_name)
+
+
 def test_create_and_save_custom_persona(persona_app):
     created = persona_api.create_persona(persona_app, "测试人格A")
     assert created["id"] == "测试人格A"
@@ -148,3 +159,51 @@ def test_experimental_personae_have_prompts(persona_app):
         system_pt, user_pt = persona_app.personae.get_prompt(name)
         assert system_pt
         assert user_pt == "看图发弹幕："
+
+
+# W-LIVE-TOPIC-001
+def test_export_config_includes_live_topic(persona_app):
+    from app.web_console_support import export_config
+
+    data = export_config(persona_app.config)
+    assert "live_topic" in data
+    assert data["live_topic"] == ""
+
+
+def test_put_config_persists_live_topic(persona_app):
+    from unittest.mock import MagicMock
+
+    from app.application.config_service import apply_web_config_patch
+    from app.config_store import ConfigStore
+    from app.personae import append_live_topic_to_system_pt
+
+    store = persona_app.config
+    assert store.get("live_topic", "") == ""
+
+    persona_app.config_changed = MagicMock()
+    apply_web_config_patch(persona_app, {"live_topic": "今晚播《艾尔登法环》"})
+    assert store.get("live_topic", "") == "今晚播《艾尔登法环》"
+    persona_app.config_changed.emit.assert_called_once()
+
+    store2 = ConfigStore(db_path=store.db_path)
+    assert store2.get("live_topic", "") == "今晚播《艾尔登法环》"
+    assert "[本次直播主题：今晚播《艾尔登法环》" in append_live_topic_to_system_pt(
+        "你是主播。", store2
+    )
+
+    apply_web_config_patch(persona_app, {"live_topic": ""})
+    assert store.get("live_topic", "") == ""
+    assert append_live_topic_to_system_pt("你是主播。", store) == "你是主播。"
+
+
+def test_live_topic_default_in_config_defaults():
+    from app.config_defaults import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS.get("live_topic", "") == ""
+
+
+def test_live_topic_in_web_config_keys():
+    from app.application.config_service import WEB_CONFIG_KEYS
+
+    assert "live_topic" in WEB_CONFIG_KEYS
+    assert "live_topic" in tuple(WEB_CONFIG_KEYS)

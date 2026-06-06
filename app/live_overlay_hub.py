@@ -95,6 +95,7 @@ class LiveOverlayHub:
         speed: float,
         source: str,
     ) -> dict[str, Any]:
+        resolved_source = source or "ai"
         return {
             "event": "danmu_item",
             "text": text,
@@ -102,7 +103,7 @@ class LiveOverlayHub:
             "screen_width": screen_width,
             "screen_height": screen_height,
             "speed": speed,
-            "source": source,
+            "source": resolved_source,
             "ts": time.time(),
         }
 

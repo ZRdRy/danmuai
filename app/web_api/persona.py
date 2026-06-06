@@ -49,10 +49,11 @@ def get_template_detail(app: "DanmuApp", name: str) -> dict[str, Any]:
 
 
 def list_versions(app: "DanmuApp", name: str) -> list[dict[str, Any]]:
+    from app.persona_version_history import list_versions as list_persona_versions
     from app.personae import normalize_persona_name
 
     name = normalize_persona_name(name)
-    return app.templates.versions(name)
+    return list_persona_versions(app.templates, name)
 
 
 def save_template(app: "DanmuApp", name: str, system_custom: str, user_pt: str) -> None:
@@ -96,11 +97,9 @@ def rollback_preview(app: "DanmuApp", name: str, version: int) -> dict[str, Any]
 
 
 def create_persona(app: "DanmuApp", name: str) -> dict[str, Any]:
-    from app.personae import normalize_persona_name, persona_display_name
+    from app.personae import normalize_persona_name, persona_display_name, validate_persona_name
 
-    name = normalize_persona_name(name.strip())
-    if not name:
-        raise ValueError("请输入人格名称")
+    name = normalize_persona_name(validate_persona_name(name))
     if name in app.personae.list():
         raise ValueError("人格名称已存在")
 

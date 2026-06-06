@@ -8,6 +8,8 @@ from typing import Any
 
 from PIL import Image
 
+from app.jpeg_resize import resize_rgb_to_jpeg_bytes
+
 
 def compress_image_bytes(
     data: bytes,
@@ -15,18 +17,12 @@ def compress_image_bytes(
     quality: int = 85,
 ) -> dict[str, Any]:
     pil_image = Image.open(io.BytesIO(data))
-    pil_image = pil_image.convert("RGB")
     orig_width, orig_height = pil_image.size
-
-    if orig_width > max_width:
-        ratio = max_width / orig_width
-        new_height = int(orig_height * ratio)
-        pil_image = pil_image.resize((max_width, new_height), Image.Resampling.LANCZOS)
-
-    final_width, final_height = pil_image.size
-    buf = io.BytesIO()
-    pil_image.save(buf, format="JPEG", quality=quality)
-    jpeg_bytes = buf.getvalue()
+    _, jpeg_bytes, final_width, final_height = resize_rgb_to_jpeg_bytes(
+        pil_image,
+        max_width=max_width,
+        quality=quality,
+    )
     b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
     return {

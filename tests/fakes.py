@@ -1,5 +1,6 @@
 """Shared test doubles for DanmuApp and related components."""
 
+import json
 from types import SimpleNamespace
 
 
@@ -34,22 +35,47 @@ class FakeLogger:
 
 class FakeConfig:
     def __init__(self, values=None):
-        self.values = {}
-        self.values.update(values or {})
+        self.values = dict(values or {})
+        if values and "_api_key" in values:
+            self._api_key = values["_api_key"]
+        else:
+            self._api_key = self.values.get("api_key", self.values.get("_api_key", ""))
 
     def get(self, key, default=""):
         return self.values.get(key, default)
 
     def get_int(self, key, default=0):
-        return int(self.values.get(key, default))
+        val = self.get(key)
+        if val == "" or val is None:
+            return int(default)
+        return int(val)
 
     def get_float(self, key, default=0.0):
-        return float(self.values.get(key, default))
+        val = self.get(key)
+        if val == "" or val is None:
+            return float(default)
+        return float(val)
+
+    def set(self, key, value):
+        self.values[key] = value
 
     def set_batch(self, items):
         self.values.update(items)
 
+    def set_api_key(self, key):
+        self._api_key = key
+        self.values["api_key_encrypted"] = "enc"
+
+    def set_default_model_id(self, model_id):
+        self.values["default_model_id"] = model_id
+
+    def set_custom_models(self, models):
+        self.values["custom_models"] = models
+
     def get_region(self):
+        region = self.values.get("region")
+        if region is not None:
+            return region
         return (
             self.get_int("region_x", 0),
             self.get_int("region_y", 0),
@@ -66,14 +92,29 @@ class FakeConfig:
     def get_default_model_id(self):
         return str(self.values.get("default_model_id", self.values.get("model", "")))
 
-    def set_default_model_id(self, model_id):
-        self.values["default_model_id"] = str(model_id or "")
-
     def get_api_key(self):
-        return str(self.values.get("_api_key", ""))
+        if self._api_key:
+            return str(self._api_key)
+        return str(self.values.get("api_key", ""))
+
+    def get_mic_api_key(self):
+        return str(self.values.get("_mic_api_key", self.values.get("mic_api_key", "")))
+
+    def set_mic_api_key(self, key):
+        self.values["_mic_api_key"] = key
+        self.values["mic_api_key_encrypted"] = "enc"
 
     def get_custom_models(self):
         return list(self.values.get("custom_models", []))
+
+    def get_json(self, key: str, default=None):
+        val = self.get(key)
+        if not val:
+            return default if default is not None else {}
+        return json.loads(val)
+
+    def set_json(self, key: str, value):
+        self.values[key] = json.dumps(value, ensure_ascii=False)
 
 
 class FakeLifetimeStats:
@@ -119,8 +160,11 @@ class FakeEngine:
     def __init__(self):
         self.calls = []
         self.running = False
+        self.dropped_pending = 0
         self.screen_width = 1920.0
         self.screen_height = 1080.0
+        self._accel_remaining = 0
+        self._accel_peak = 1.0
         self.tracks = []
         self._config_values = {}
 
@@ -140,9 +184,6 @@ class FakeEngine:
         pass
 
     def drop_pending_below_generation(self, min_generation):
-        return 0
-
-    def drop_items_below_scene_generation(self, min_generation):
         return 0
 
     def drop_items_with_batch_id(self, batch_id):
@@ -169,6 +210,65 @@ class FakeEngine:
     def right_zone_count(self):
         return 0
 
+    def needs_refill(self):
+        return True
+
+    def drop_pending_items(self):
+        self.dropped_pending += 1
+        return 1
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+
+class DedupFakeEngine(FakeEngine):
+    def __init__(self, duplicate_text: str):
+        super().__init__()
+        self.duplicate_text = duplicate_text
+        self.running = True
+
+    def add_text(self, content, persona, batch_id=0, scene_generation=0, *, skip_dedup=False, **_kwargs):
+        if not skip_dedup and content == self.duplicate_text:
+            return None
+        return super().add_text(
+            content,
+            persona,
+            batch_id=batch_id,
+            scene_generation=scene_generation,
+            skip_dedup=skip_dedup,
+        )
+
+    def is_duplicate(self, content: str) -> bool:
+        return content == self.duplicate_text
+
+
+class FakeCapturer:
+    def __init__(self, pixmap=None):
+        self._pixmap = pixmap
+
+    def grab(self):
+        return self._pixmap
+
+
+class FakePixmap:
+    def __init__(self, scene_byte, *, is_null: bool = False, width: int = 200, height: int = 200):
+        self.scene_byte = scene_byte
+        self._is_null = is_null
+        self._width = width
+        self._height = height
+
+    def isNull(self):
+        return self._is_null
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
 
 class FakeHistoryWriter:
     def __init__(self):
@@ -187,6 +287,7 @@ class FakeTimer:
         self.started = 0
         self.stopped = 0
         self._interval = 800
+        self._single_shot = False
 
     def isActive(self):
         return self.active
@@ -204,3 +305,6 @@ class FakeTimer:
 
     def setInterval(self, ms):
         self._interval = ms
+
+    def setSingleShot(self, val):
+        self._single_shot = val

@@ -50,6 +50,9 @@ class FakeConfig:
     def get_api_key(self):
         return self._api_key
 
+    def get_mic_api_key(self):
+        return self._data.get("_mic_api_key", "")
+
     def get_default_model_id(self):
         return self._default_model_id
 
@@ -545,6 +548,43 @@ def test_request_openai_resolves_credentials_once():
     mock_resolve.assert_called_once()
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["resolved"] == resolved
+    worker.close()
+
+
+def test_request_with_audio_uses_mic_credentials():
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "doubao",
+                "model": "doubao-seed-1-6-flash-250828",
+                "mic_use_visual_model": "0",
+                "mic_model": "doubao-seed-2-0-mini-260428",
+                "mic_api_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+                "mic_api_mode": "doubao",
+                "_mic_api_key": "sk-mic",
+            },
+        )
+    )
+    visual = ("https://ark.cn-beijing.volces.com/api/v3", "sk-visual", "doubao-seed-1-6-flash-250828", "doubao")
+    mic = ("https://ark.cn-beijing.volces.com/api/v3", "sk-mic", "doubao-seed-2-0-mini-260428", "doubao")
+    with patch.object(worker, "_resolve_request_credentials", return_value=visual) as mock_visual:
+        with patch.object(worker, "resolve_mic_request_credentials", return_value=mic) as mock_mic:
+            with patch.object(worker, "_request_doubao") as mock_doubao:
+                worker._request(
+                    "data:image/jpeg;base64,abc",
+                    "sys",
+                    "user",
+                    "p1",
+                    1,
+                    1,
+                    1.0,
+                    0,
+                    audio_data_uri="data:audio/wav;base64,abc",
+                )
+    mock_visual.assert_not_called()
+    mock_mic.assert_called_once()
+    mock_doubao.assert_called_once()
+    assert mock_doubao.call_args.kwargs["resolved"] == mic
     worker.close()
 
 

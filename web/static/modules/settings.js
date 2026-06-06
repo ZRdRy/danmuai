@@ -4,7 +4,12 @@ import { API, apiFetch, apiFormFetch } from './transport.js';
 
 export const MASKED_API_KEY = '********';
 
-let bindDeps = { showToast: () => {}, navigate: () => {}, onConfigSaved: null };
+let bindDeps = {
+  showToast: () => {},
+  navigate: () => {},
+  onConfigSaved: null,
+  onSettingsTabSwitch: null,
+};
 
 export function configureSettingsBindings(deps) {
   bindDeps = { ...bindDeps, ...deps };
@@ -22,10 +27,18 @@ const CONFIG_FIELDS = [
   'api_endpoint', 'api_mode', 'model', 'temperature', 'max_tokens',
   'danmu_speed', 'danmu_lines', 'danmu_max_chars', 'dedup_threshold',
   'screen_index', 'layout_mode', 'opacity', 'font_size', 'hotkey',
-  'eviction_mode',
+  'eviction_mode', 'danmu_pending_entry_cap', 'danmu_track_retention_cap', 'reply_queue_max_items',
   'image_max_width', 'image_quality',
-  'mic_window_sec', 'memory_mode', 'memory_window',
+  'mic_window_sec', 'mic_api_endpoint', 'mic_api_mode', 'mic_model',
+  'memory_mode', 'memory_window',
   'normal_recognition_interval_sec', 'normal_reply_count',
+  // W-FP-003：悬浮窗（弹幕姬式）模式与配置
+  'display_mode',
+  'floating_panel_opacity',
+  'floating_panel_font_size',
+  'floating_panel_max_items',
+  'floating_panel_speed',
+  'floating_panel_click_through',
 ];
 
 /**
@@ -36,19 +49,24 @@ const CONFIG_FIELDS = [
 const SETTINGS_RESTORE_GROUPS = {
   api: [
     'api_endpoint', 'api_mode', 'screen_index', 'model', 'temperature', 'max_tokens',
-    'mic_window_sec', 'memory_mode', 'memory_window',
+    'memory_mode', 'memory_window',
   ],
+  mic: ['mic_window_sec', 'mic_api_endpoint', 'mic_api_mode', 'mic_model'],
   capture: [],
   danmu: [
     'normal_recognition_interval_sec', 'normal_reply_count', 'danmu_speed', 'danmu_lines',
     'font_size', 'danmu_max_chars', 'opacity', 'dedup_threshold', 'layout_mode', 'hotkey',
-    'eviction_mode',
+    'eviction_mode', 'danmu_pending_entry_cap', 'danmu_track_retention_cap', 'reply_queue_max_items',
+    'display_mode', 'floating_panel_opacity', 'floating_panel_font_size',
+    'floating_panel_max_items', 'floating_panel_speed', 'floating_panel_click_through',
   ],
   rhythm: ['image_max_width', 'image_quality'],
+  'danmu-read': [],
 };
 
 const SETTINGS_RESTORE_CHECKBOXES = {
-  api: ['mic_mode_enabled'],
+  api: [],
+  mic: ['mic_mode_enabled', 'mic_use_visual_model'],
   capture: [],
   danmu: ['empty_accel'],
   rhythm: [],
@@ -267,7 +285,7 @@ function restorableKeysForScope(scope) {
 
 function applyDefaultToField(key, rawValue) {
   const value = rawValue === undefined || rawValue === null ? '' : String(rawValue);
-  if (key === 'mic_mode_enabled' || key === 'empty_accel') {
+  if (key === 'mic_mode_enabled' || key === 'mic_use_visual_model' || key === 'empty_accel' || key === 'floating_panel_click_through') {
     const el = document.getElementById(key);
     if (el) el.checked = value === '1';
     return;
@@ -282,6 +300,11 @@ function applyDefaultToField(key, rawValue) {
   if (key === 'layout_mode') {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
     el.value = allowed.includes(value) ? value : 'fullscreen';
+    return;
+  }
+  if (key === 'display_mode') {
+    const allowed = ['overlay', 'floating_panel', 'both'];
+    el.value = allowed.includes(value) ? value : 'overlay';
     return;
   }
   if (key === 'eviction_mode') {
@@ -307,14 +330,21 @@ function applySettingsDefaults(scope) {
     return;
   }
   const apiKeyEl = document.getElementById('api_key');
+  const micKeyEl = document.getElementById('mic_api_key');
   const apiKeySnapshot = apiKeyEl?.value ?? '';
+  const micKeySnapshot = micKeyEl?.value ?? '';
   keys.forEach((key) => {
     applyDefaultToField(key, configDefaultsCache[key]);
   });
   if (apiKeyEl) apiKeyEl.value = apiKeySnapshot;
+  if (micKeyEl) micKeyEl.value = micKeySnapshot;
   syncProviderPresetFromEndpoint();
   const modelId = configDefaultsCache.model || document.getElementById('model')?.value || '';
   syncVisionModelPickerFromForm(modelId);
+  syncMicProviderPresetFromEndpoint();
+  const micModelId = configDefaultsCache.mic_model || document.getElementById('mic_model')?.value || '';
+  syncMicModelPickerFromForm(micModelId);
+  applyMicIndependentVisibility();
   updateMicModeHint();
   updateNormalBatchPreview();
   closeRestoreDefaultsModal();
@@ -352,6 +382,7 @@ export function initRestoreDefaultsControls() {
 
 export function collectFormData() {
   syncVisionModelToHidden();
+  syncMicModelToHidden();
   const data = {};
   CONFIG_FIELDS.forEach((name) => {
     const el = document.getElementById(name);
@@ -359,8 +390,13 @@ export function collectFormData() {
   });
   data.empty_accel = document.getElementById('empty_accel')?.checked ? '1' : '0';
   data.mic_mode_enabled = document.getElementById('mic_mode_enabled')?.checked ? '1' : '0';
+  data.mic_use_visual_model = document.getElementById('mic_use_visual_model')?.checked ? '1' : '0';
+  // W-FP-003：悬浮窗鼠标穿透 checkbox
+  data.floating_panel_click_through = document.getElementById('floating_panel_click_through')?.checked ? '1' : '0';
   const key = (document.getElementById('api_key')?.value || '').trim();
   if (key && key !== MASKED_API_KEY) data.api_key = key;
+  const micKey = (document.getElementById('mic_api_key')?.value || '').trim();
+  if (micKey && micKey !== MASKED_API_KEY) data.mic_api_key = micKey;
   return data;
 }
 
@@ -376,10 +412,33 @@ function catalogModelSupportsMic(modelId) {
   return false;
 }
 
+function isMicUseVisualModel() {
+  return document.getElementById('mic_use_visual_model')?.checked !== false;
+}
+
+function applyMicIndependentVisibility() {
+  const section = document.getElementById('micIndependentSection');
+  if (!section) return;
+  section.classList.toggle('hidden', isMicUseVisualModel());
+}
+
+function getMicConfigContext() {
+  if (isMicUseVisualModel()) {
+    return {
+      apiMode: document.getElementById('api_mode')?.value || 'doubao',
+      modelId: (document.getElementById('model')?.value || '').trim(),
+      endpoint: document.getElementById('api_endpoint')?.value || '',
+    };
+  }
+  return {
+    apiMode: document.getElementById('mic_api_mode')?.value || 'doubao',
+    modelId: (document.getElementById('mic_model')?.value || '').trim(),
+    endpoint: document.getElementById('mic_api_endpoint')?.value || '',
+  };
+}
+
 function micModeConfigSupported() {
-  const apiMode = document.getElementById('api_mode')?.value || 'doubao';
-  const modelId = (document.getElementById('model')?.value || '').trim();
-  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const { apiMode, modelId, endpoint } = getMicConfigContext();
   const providerId = guessProviderIdFromEndpoint(endpoint, apiMode);
   if (apiMode === 'doubao' || providerId === 'doubao') {
     return micAudioLikelySupported || catalogModelSupportsMic(modelId);
@@ -400,9 +459,7 @@ export function updateMicModeHint() {
     hint.textContent = '';
     return;
   }
-  const apiMode = document.getElementById('api_mode')?.value || 'doubao';
-  const modelId = document.getElementById('model')?.value || '';
-  const endpoint = document.getElementById('api_endpoint')?.value || '';
+  const { apiMode, modelId, endpoint } = getMicConfigContext();
   const providerId = guessProviderIdFromEndpoint(endpoint, apiMode);
   if (micModeConfigSupported()) {
     hint.classList.add('hidden');
@@ -411,14 +468,14 @@ export function updateMicModeHint() {
   }
   hint.classList.remove('hidden');
   if (providerId === 'mimo') {
-    hint.textContent = `麦克风模式需使用 MiMo-V2.5（mimo-v2.5）。当前模型「${modelId || '未选'}」不支持开麦；请改选目录中的 mimo-v2.5，保存配置后再开始弹幕。对着麦克风说话，句末停顿约半秒；「测试发送」不检测停顿。`;
+    hint.textContent = `麦克风模式需使用 MiMo-V2.5（mimo-v2.5）。当前模型「${modelId || '未选'}」不支持开麦；请在麦克风标签改选 mimo-v2.5 或开启「与识图模型相同」，保存后再开始弹幕。`;
     return;
   }
   if (apiMode !== 'doubao' && providerId !== 'doubao') {
-    hint.textContent = '麦克风模式需使用火山方舟豆包（API 模式 doubao）或小米 MiMo（mimo-v2.5）。当前为其他 OpenAI 兼容配置，保存后对着麦克风说话也不会生成接话弹幕。';
+    hint.textContent = '麦克风模式需使用火山方舟豆包（doubao）或小米 MiMo（mimo-v2.5）。当前配置不支持开麦；可在本标签单独配置，或开启「与识图模型相同」。';
     return;
   }
-  hint.textContent = `当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选列表里带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），勾选后先点「保存配置」再开始弹幕。使用时对着麦克风说话，句末停顿约半秒；「测试发送」按钮不检测停顿。`;
+  hint.textContent = `当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），保存后再开始弹幕。`;
 }
 
 export function fillForm(cfg) {
@@ -444,6 +501,22 @@ export function fillForm(cfg) {
   setIfEmpty('max_tokens');
   setIfEmpty('image_quality');
   setIfEmpty('danmu_max_chars');
+  setIfEmpty('danmu_pending_entry_cap');
+  setIfEmpty('danmu_track_retention_cap');
+  setIfEmpty('reply_queue_max_items');
+  // W-FP-003：悬浮窗字段
+  setIfEmpty('display_mode');
+  setIfEmpty('floating_panel_opacity');
+  setIfEmpty('floating_panel_font_size');
+  setIfEmpty('floating_panel_max_items');
+  setIfEmpty('floating_panel_speed');
+  const fpClickThrough = document.getElementById('floating_panel_click_through');
+  if (fpClickThrough) {
+    const value = cfg.floating_panel_click_through;
+    if (value === '0' || value === 'false') fpClickThrough.checked = false;
+    else if (value === '1' || value === 'true') fpClickThrough.checked = true;
+    else fpClickThrough.checked = configDefaultValue('floating_panel_click_through') !== '0';
+  }
   const evictionMode = document.getElementById('eviction_mode');
   if (evictionMode && !cfg.eviction_mode) {
     evictionMode.value = configDefaultValue('eviction_mode') || 'natural';
@@ -461,9 +534,19 @@ export function fillForm(cfg) {
   micAudioLikelySupported = cfg.mic_audio_likely_supported !== false;
   const micMode = document.getElementById('mic_mode_enabled');
   if (micMode) micMode.checked = cfg.mic_mode_enabled === '1';
-  updateMicModeHint();
+  const micUseVisual = document.getElementById('mic_use_visual_model');
+  if (micUseVisual) micUseVisual.checked = cfg.mic_use_visual_model !== '0';
   const micWindow = document.getElementById('mic_window_sec');
   if (micWindow && !cfg.mic_window_sec) micWindow.value = configDefaultValue('mic_window_sec') || '5';
+  const micModelEl = document.getElementById('mic_model');
+  const micModelId = cfg.mic_model || configDefaultValue('mic_model') || '';
+  if (micModelEl) micModelEl.value = micModelId;
+  syncMicProviderPresetFromEndpoint();
+  syncMicModelPickerFromForm(micModelId);
+  const micKeyEl = document.getElementById('mic_api_key');
+  if (micKeyEl) micKeyEl.value = cfg.has_mic_api_key ? MASKED_API_KEY : '';
+  applyMicIndependentVisibility();
+  updateMicModeHint();
   const layoutMode = document.getElementById('layout_mode');
   if (layoutMode) {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
@@ -598,6 +681,7 @@ async function pollCaptureRegionUntilDone() {
         }
         if (Date.now() - start >= maxMs) {
           stopCaptureRegionPoll();
+          applyCaptureRegionFromPayload({ selection_state: 'timeout' });
           showToast('框选等待超时，请重试', true);
           resolve(data);
           return;
@@ -688,6 +772,16 @@ export async function loadProviders() {
       opt.value = p.id;
       opt.textContent = p.label;
       modelProv.appendChild(opt);
+    });
+  }
+  const micSel = document.getElementById('micProviderPreset');
+  if (micSel) {
+    micSel.innerHTML = '<option value="">自定义</option>';
+    providersCache.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      micSel.appendChild(opt);
     });
   }
 }
@@ -1036,6 +1130,184 @@ function renderVisionModelPicker(providerId, selectedModelId, options = {}) {
 function syncVisionModelPickerFromForm(selectedModelId) {
   renderVisionModelPicker(resolveProviderIdForPicker(), selectedModelId || '');
 }
+
+const MIC_MODEL_CUSTOM_VALUE = '__mic_custom__';
+
+function resolveMicProviderIdForPicker() {
+  const endpoint = document.getElementById('mic_api_endpoint')?.value || '';
+  const apiMode = document.getElementById('mic_api_mode')?.value || '';
+  return guessProviderIdFromEndpoint(endpoint, apiMode);
+}
+
+function pickDefaultMicCatalogModelId(providerId) {
+  const platform = resolveCatalogPlatform(providerId);
+  if (!platform?.models?.length) return '';
+  const micModel = platform.models.find((m) => m.supports_mic);
+  return micModel ? micModel.id : '';
+}
+
+function setMicModelValue(modelId) {
+  const hidden = document.getElementById('mic_model');
+  if (hidden) hidden.value = modelId || '';
+  updateMicModeHint();
+}
+
+function syncMicModelToHidden() {
+  const customWrap = document.getElementById('micModelCustom');
+  const customInput = document.getElementById('micModelCustomInput');
+  const checked = document.querySelector('input[name="mic_model_choice"]:checked');
+  if (checked?.value === MIC_MODEL_CUSTOM_VALUE) {
+    setMicModelValue(customInput?.value?.trim() || '');
+    return;
+  }
+  if (checked) {
+    setMicModelValue(checked.value);
+    return;
+  }
+  if (customWrap && !customWrap.classList.contains('hidden') && customInput) {
+    setMicModelValue(customInput.value.trim());
+  }
+}
+
+function showMicModelCustom(show, initialValue = '') {
+  const wrap = document.getElementById('micModelCustom');
+  const input = document.getElementById('micModelCustomInput');
+  if (!wrap || !input) return;
+  if (show) {
+    wrap.classList.remove('hidden');
+    if (initialValue !== undefined && initialValue !== null) input.value = initialValue;
+    input.oninput = () => setMicModelValue(input.value.trim());
+  } else {
+    wrap.classList.add('hidden');
+    input.oninput = null;
+  }
+}
+
+function setMicModelPickerVisible(visible) {
+  const picker = document.getElementById('micModelPicker');
+  if (!picker) return;
+  if (visible) picker.classList.remove('hidden');
+  else picker.classList.add('hidden');
+}
+
+function renderMicModelPicker(providerId, selectedModelId, options = {}) {
+  const picker = document.getElementById('micModelPicker');
+  if (!picker) return;
+
+  const { providerSwitch = false } = options;
+  const platform = resolveCatalogPlatform(providerId);
+  const micModels = (platform?.models || []).filter((m) => m.supports_mic);
+  if (!micModels.length) {
+    picker.innerHTML = '';
+    setMicModelPickerVisible(false);
+    const customInitial = providerSwitch ? '' : (selectedModelId || '');
+    showMicModelCustom(true, customInitial);
+    setMicModelValue(customInitial);
+    return;
+  }
+
+  setMicModelPickerVisible(true);
+  picker.innerHTML = '';
+  const knownIds = new Set(micModels.map((m) => m.id));
+  const defaultId = pickDefaultMicCatalogModelId(providerId);
+  let selected;
+  let useCustom;
+  if (providerSwitch) {
+    selected = defaultId || micModels[0].id;
+    useCustom = false;
+  } else {
+    selected = selectedModelId && knownIds.has(selectedModelId)
+      ? selectedModelId
+      : (defaultId || micModels[0].id);
+    useCustom = Boolean(selectedModelId && !knownIds.has(selectedModelId));
+  }
+
+  micModels.forEach((model) => {
+    const row = document.createElement('label');
+    row.className = 'vision-model-row';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'mic_model_choice';
+    radio.value = model.id;
+    radio.checked = !useCustom && model.id === selected;
+    radio.addEventListener('change', () => {
+      if (radio.checked) {
+        showMicModelCustom(false);
+        setMicModelValue(model.id);
+      }
+    });
+
+    const textWrap = document.createElement('span');
+    textWrap.className = 'vision-model-id flex flex-col min-w-0';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'font-semibold text-warmText truncate';
+    nameSpan.textContent = model.name || model.id;
+    const idSpan = document.createElement('span');
+    idSpan.className = 'text-xs text-gray-400 truncate';
+    idSpan.textContent = model.id;
+    textWrap.append(nameSpan, idSpan);
+
+    row.append(radio, textWrap);
+    appendVisionModelRowMeta(row, model);
+    picker.appendChild(row);
+  });
+
+  const otherRow = document.createElement('label');
+  otherRow.className = 'vision-model-row';
+  const otherRadio = document.createElement('input');
+  otherRadio.type = 'radio';
+  otherRadio.name = 'mic_model_choice';
+  otherRadio.value = MIC_MODEL_CUSTOM_VALUE;
+  otherRadio.checked = useCustom;
+  otherRadio.addEventListener('change', () => {
+    const current = document.getElementById('mic_model')?.value || '';
+    showMicModelCustom(true, useCustom ? (selectedModelId || current) : '');
+    syncMicModelToHidden();
+  });
+  const otherLabel = document.createElement('span');
+  otherLabel.className = 'vision-model-id';
+  otherLabel.textContent = '自定义模型';
+  otherRow.append(otherRadio, otherLabel);
+  picker.appendChild(otherRow);
+
+  if (useCustom) {
+    showMicModelCustom(true, selectedModelId);
+  } else {
+    setMicModelValue(selected);
+  }
+}
+
+function syncMicModelPickerFromForm(selectedModelId) {
+  renderMicModelPicker(resolveMicProviderIdForPicker(), selectedModelId || '');
+}
+
+function syncMicProviderPresetFromEndpoint() {
+  const sel = document.getElementById('micProviderPreset');
+  if (!sel) return;
+  const endpoint = document.getElementById('mic_api_endpoint')?.value || '';
+  const apiMode = document.getElementById('mic_api_mode')?.value || '';
+  const guessed = guessProviderIdFromEndpoint(endpoint, apiMode);
+  if (!guessed) {
+    sel.value = '';
+    return;
+  }
+  const hasOption = Array.from(sel.options).some((opt) => opt.value === guessed);
+  sel.value = hasOption ? guessed : '';
+}
+
+function applyMicProviderPreset(providerId) {
+  const p = providersCache.find((x) => x.id === providerId);
+  if (!p) return;
+  document.getElementById('mic_api_endpoint').value = p.default_endpoint;
+  document.getElementById('mic_api_mode').value = p.mode === 'openai-compatible' ? 'openai' : p.mode;
+  const micKeyEl = document.getElementById('mic_api_key');
+  if (micKeyEl) micKeyEl.value = '';
+  const defaultModelId = pickDefaultMicCatalogModelId(providerId);
+  renderMicModelPicker(providerId, defaultModelId, { providerSwitch: true });
+  updateMicModeHint();
+  showToast(`已填入 ${p.label} 的默认麦克风地址，请填写对应 API 密钥~`);
+}
+
 // 自定义模型 CRUD：掩码 apiKey 在服务端保留；设为默认会同步 global model（ConfigService 双写规则）
 export async function loadCustomModels() {
   const data = await apiFetch('/api/custom-models');
@@ -1137,7 +1409,19 @@ const SETTINGS_FIELD_TIPS = {
   api_endpoint:
     '视觉模型服务的网址。火山方舟豆包一般填到 /api/v3；多数 OpenAI 兼容服务填到 /v1。',
   api_mode:
-    'doubao：火山方舟豆包。openai：其他兼容 Chat 接口的服务（如部分第三方中转）。麦克风模式需选 doubao。',
+    'doubao：火山方舟豆包。openai：其他兼容 Chat 接口的服务（如部分第三方中转）。',
+  mic_use_visual_model:
+    '开启时开麦与识图共用上方「API 与模型」的接口与模型；关闭后可在本标签单独配置支持麦克风的模型。',
+  micProviderPreset:
+    '为麦克风接话选择服务商预设，会自动填入麦克风 API 地址与模式。',
+  mic_api_endpoint:
+    '麦克风专用 API 地址。豆包一般填到 /api/v3；MiMo 等 OpenAI 兼容服务填到 /v1。',
+  mic_api_mode:
+    '麦克风请求使用的 API 模式。开麦需 doubao 全模态或 MiMo 的 mimo-v2.5。',
+  mic_model:
+    '听懂麦克风并生成接话弹幕的模型；与识图视觉模型可不同。',
+  mic_api_key:
+    '麦克风专用 API 密钥，与识图密钥分开加密保存。留空保存不会覆盖已有密钥。',
   model:
     '实际调用的模型名称或接入点 ID。也可在下方「自定义模型」里保存多套配置。',
   screen_index:
@@ -1182,8 +1466,26 @@ const SETTINGS_FIELD_TIPS = {
     '全局快捷键，随时开始或停止生成弹幕。首次使用可能需在系统里允许本程序监听键盘。',
   eviction_mode:
     '自然：按正常速度滚出屏幕。加速：换场景或清屏时让旧弹幕更快消失。',
+  danmu_pending_entry_cap:
+    '入口区（屏幕右侧待滚入）最多保留几条 pending 弹幕。0 表示无限制；低配机可设 200–500 作性能保护，超出时淘汰最远屏外条目而非拒绝新弹幕。',
+  danmu_track_retention_cap:
+    '所有轨道上同时保留的弹幕总条数上限。0 表示无限制；超出时优先淘汰屏外 pending。',
+  reply_queue_max_items:
+    'AI 回复在入队等待上屏时的最大条数。0 表示不裁剪；>0 时超出会从队首丢弃最旧条目。',
   empty_accel:
     '某行轨道空了时，暂时加快滚动，让新弹幕更快占满空位。',
+  display_mode:
+    '仅横向：保留原屏幕弹幕。 仅悬浮窗：开一个独立弹幕姬式悬浮窗。 两者并存：横向与悬浮窗同时显示。',
+  floating_panel_opacity:
+    '悬浮窗整体不透明度 0–100（0 = 完全透明，100 = 完全不透明）。',
+  floating_panel_font_size:
+    '悬浮窗内每条弹幕的字号（12–48 px）。',
+  floating_panel_max_items:
+    '悬浮窗同时显示的最多条数。超过时按 FIFO 丢最旧。',
+  floating_panel_speed:
+    '悬浮窗弹幕向上滚动的速度（0.5–5.0；越大越快）。',
+  floating_panel_click_through:
+    '勾选后鼠标点击会穿透悬浮窗，落到下层窗口（推荐开）。关闭后可在悬浮窗内拖动窗口。',
   image_max_width:
     '发给 AI 前把截图缩到多宽。越小越省流量和费用，越大越清晰。',
   image_quality:
@@ -1325,7 +1627,7 @@ export function initSettingsFieldHints() {
   }
 }
 
-function switchSettingsTab(tabId) {
+export function switchSettingsTab(tabId) {
   activeSettingsTabId = tabId;
   document.querySelectorAll('.settings-tab').forEach((tab) => {
     const active = tab.dataset.settingsTab === tabId;
@@ -1337,6 +1639,7 @@ function switchSettingsTab(tabId) {
     panel.classList.toggle('active', active);
     panel.hidden = !active;
   });
+  bindDeps.onSettingsTabSwitch?.(tabId);
 }
 
 export function initSettingsTabs() {
@@ -1350,6 +1653,26 @@ export function bindSettingsControls(deps = {}) {
   const { onConfigSaved } = bindDeps;
 
   document.getElementById('mic_mode_enabled')?.addEventListener('change', updateMicModeHint);
+  document.getElementById('mic_use_visual_model')?.addEventListener('change', () => {
+    applyMicIndependentVisibility();
+    updateMicModeHint();
+  });
+  document.getElementById('micProviderPreset')?.addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (id) applyMicProviderPreset(id);
+    else syncMicProviderPresetFromEndpoint();
+  });
+  ['mic_api_endpoint', 'mic_api_mode'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      syncMicProviderPresetFromEndpoint();
+      syncMicModelPickerFromForm(document.getElementById('mic_model')?.value || '');
+      updateMicModeHint();
+    });
+    document.getElementById(id)?.addEventListener('input', () => {
+      syncMicProviderPresetFromEndpoint();
+      updateMicModeHint();
+    });
+  });
 
   document.getElementById('settingsForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1365,6 +1688,10 @@ export function bindSettingsControls(deps = {}) {
       const keyInput = document.getElementById('api_key');
       if (keyInput?.value && keyInput.value !== MASKED_API_KEY) {
         keyInput.value = MASKED_API_KEY;
+      }
+      const micKeyInput = document.getElementById('mic_api_key');
+      if (micKeyInput?.value && micKeyInput.value !== MASKED_API_KEY) {
+        micKeyInput.value = MASKED_API_KEY;
       }
     } catch (err) {
       showToast(err.message || '保存时出了点小状况', true);
@@ -1464,6 +1791,11 @@ export function bindSettingsControls(deps = {}) {
   document.getElementById('toggleKey')?.addEventListener('click', () => {
     const inp = document.getElementById('api_key');
     inp.type = inp.type === 'password' ? 'text' : 'password';
+  });
+
+  document.getElementById('toggleMicKey')?.addEventListener('click', () => {
+    const inp = document.getElementById('mic_api_key');
+    if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
   });
 
   document.getElementById('previewImageFile')?.addEventListener('change', async (e) => {

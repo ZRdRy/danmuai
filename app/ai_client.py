@@ -14,178 +14,55 @@
 
 调用方：app.runnable.AiRunnable.run() → worker._request()
 """
-import json
 import logging
 import threading
-from dataclasses import dataclass
 
 import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from app.ai_client_requests import (
+    request_doubao,
+    request_openai,
+    resolve_mic_request_credentials,
+    resolve_request_credentials,
+    stream_doubao,
+    stream_openai,
+)
+from app.ai_client_support import (
+    DANMU_MIN_OUTPUT_TOKENS,
+    DANMU_MIN_OUTPUT_TOKENS_THINKING,
+    AiProbeResult,
+    build_openai_vision_user_content,
+    format_http_status_error,
+    format_openai_http_error,
+    is_mimo_endpoint,
+    openai_compatible_request_extensions,
+    parse_stream_usage,
+    resolve_danmu_max_output_tokens,
+    sanitize_provider_error_snippet,
+)
 from app.config_store import ConfigStore
-from app.logger import (
-    API_KEY_PATTERN,
-    AUTH_HEADER_PATTERN,
-    BASE64_AUDIO_PATTERN,
-    BASE64_IMAGE_PATTERN,
-    ENCRYPTED_KEY_PATTERN,
-    GENERIC_API_KEY_PATTERN,
-)
-from app.model_providers import (
-    get_capabilities_for_model,
-    get_openai_adapter_for_model,
-    guess_provider_from_endpoint,
-    normalize_endpoint,
-    normalize_mode,
-    resolve_api_transport,
-)
-from app.providers import get_capabilities_for_endpoint, get_openai_adapter
+from app.model_providers import resolve_api_transport
 from app.providers.constants import THINKING_DISABLED
 from app.translations import tr
 
-HTTP_ERROR_MESSAGE_DISPLAY_MAX = 240
-HTTP_ERROR_MESSAGE_SNIPPET_MAX = 200
-
-# 弹幕固定 5 条 JSON 数组需要输出 token 余量；过低会在 JSON 中途截断导致解析失败。
-DEFAULT_MAX_TOKENS = 512
-DANMU_MIN_OUTPUT_TOKENS = 512  # 非 thinking 模式下限
-DANMU_MIN_OUTPUT_TOKENS_THINKING = 1024  # thinking 模式需要更多 token（内部推理也计费）
-
 logger = logging.getLogger(__name__)
 
-
-def is_mimo_endpoint(endpoint: str) -> bool:
-    return guess_provider_from_endpoint(endpoint) == "mimo"
-
-
-def build_openai_vision_user_content(endpoint: str, user_pt: str, image_data_uri: str) -> list[dict]:
-    """Build multimodal user content; MiMo docs use image before text."""
-    adapter = get_openai_adapter(endpoint, "openai-compatible")
-    return adapter.build_vision_user_content(user_pt, image_data_uri)
-
-
-def openai_compatible_request_extensions(endpoint: str, *, max_tokens: int = 0) -> dict[str, object]:
-    """OpenAI 兼容请求体附加字段（兼容 shim；新代码请用 ProviderAdapter）。"""
-    adapter = get_openai_adapter(endpoint, "openai-compatible")
-    caps = get_capabilities_for_endpoint(endpoint, "openai-compatible")
-    data: dict[str, object] = {}
-    if max_tokens > 0:
-        data["max_tokens"] = max_tokens
-    adapter.patch_probe_body(data, caps=caps)
-    return data
-
-
-def _http_error_message_and_code(exc: httpx.HTTPStatusError) -> tuple[str, object]:
-    message = ""
-    code: object = None
-    try:
-        body = exc.response.json()
-        if isinstance(body, dict):
-            code = body.get("code")
-            raw = body.get("message")
-            if isinstance(raw, str):
-                message = raw.strip()
-            if not message:
-                err = body.get("error")
-                if isinstance(err, dict):
-                    code = code or err.get("code")
-                    nested = err.get("message")
-                    if isinstance(nested, str):
-                        message = nested.strip()
-    except Exception:
-        pass
-    return message, code
-
-
-def sanitize_provider_error_snippet(message: str, max_len: int = HTTP_ERROR_MESSAGE_SNIPPET_MAX) -> str:
-    """Redact secrets and truncate provider error text for user-visible summaries."""
-    text = str(message or "").strip()
-    if not text:
-        return ""
-    text = API_KEY_PATTERN.sub("sk-****", text)
-    text = BASE64_IMAGE_PATTERN.sub("data:image/***;base64,(hidden)", text)
-    text = BASE64_AUDIO_PATTERN.sub("data:audio/***;base64,(hidden)", text)
-    text = AUTH_HEADER_PATTERN.sub("Authorization: Bearer (hidden)", text)
-    text = ENCRYPTED_KEY_PATTERN.sub("gAAAA****(hidden)", text)
-    text = GENERIC_API_KEY_PATTERN.sub("(api_key: ****)", text)
-    if len(text) <= max_len:
-        return text
-    return f"{text[:max_len]}…"
-
-
-def _looks_like_model_not_found(status: int, code: object, message: str) -> bool:
-    if status == 404:
-        return True
-    if code in (20012, "ModelNotFound", "InvalidEndpointOrModel.NotFound"):
-        return True
-    lower = message.lower()
-    if "model does not exist" in lower or "model not found" in lower:
-        return True
-    if "模型" in message and ("不存在" in message or "未找到" in message or "无效" in message):
-        return True
-    return False
-
-
-def format_http_status_error(exc: httpx.HTTPStatusError) -> str:
-    """Map provider HTTP errors to user-facing messages (body message when safe)."""
-    status = exc.response.status_code
-    if status == 401:
-        return tr("ai.error_auth_failed")
-    if status == 429:
-        return tr("ai.error_rate_limited")
-    if status == 402:
-        return tr("ai.error_insufficient_balance")
-    if status == 504:
-        return tr("ai.error_gateway_timeout")
-    message, code = _http_error_message_and_code(exc)
-    if _looks_like_model_not_found(status, code, message):
-        return tr("ai.error_model_not_found")
-    if message:
-        display_message = message
-        if len(message) > HTTP_ERROR_MESSAGE_DISPLAY_MAX:
-            display_message = sanitize_provider_error_snippet(message)
-        if display_message:
-            return tr("ai.error_http_with_message").format(
-                status_code=status,
-                message=display_message,
-            )
-    return tr("ai.error_http_hidden").format(status_code=status)
-
-
-def format_openai_http_error(exc: httpx.HTTPStatusError) -> str:
-    """Alias kept for tests and api_probe imports."""
-    return format_http_status_error(exc)
-
-
-def resolve_danmu_max_output_tokens(configured: int, *, use_thinking: bool = False) -> int:
-    """保证输出 token 不低于下限，防止 5 条弹幕 JSON 在生成中途被截断。
-
-    thinking 模式下限更高（1024），因为内部推理也消耗输出 token。
-    configured <= 0 时使用下限值。
-    """
-    floor = DANMU_MIN_OUTPUT_TOKENS_THINKING if use_thinking else DANMU_MIN_OUTPUT_TOKENS
-    if configured <= 0:
-        return floor
-    return max(configured, floor)
-
-
-def parse_stream_usage(usage: dict | None, *, usage_token_style: str = "openai") -> tuple[int, int]:
-    """从 SSE 流的 usage 块中提取 token 用量，兼容 OpenAI 和 DashScope 两种字段名。"""
-    from app.providers.adapters.default_openai import DefaultOpenAIAdapter
-    from app.providers.capabilities import ProviderCapabilities
-
-    caps = ProviderCapabilities(usage_token_style=usage_token_style)
-    return DefaultOpenAIAdapter().normalize_usage(usage, caps=caps)
-
-
-@dataclass(frozen=True)
-class AiProbeResult:
-    """Mic test-send probe outcome; does not use Qt signals or DanmuApp request meta."""
-
-    signal: str
-    message: str
-    input_tokens: int = 0
-    output_tokens: int = 0
+__all__ = [
+    "AiProbeResult",
+    "AiWorker",
+    "DANMU_MIN_OUTPUT_TOKENS",
+    "DANMU_MIN_OUTPUT_TOKENS_THINKING",
+    "build_openai_vision_user_content",
+    "format_http_status_error",
+    "format_openai_http_error",
+    "is_mimo_endpoint",
+    "openai_compatible_request_extensions",
+    "parse_stream_usage",
+    "resolve_danmu_max_output_tokens",
+    "sanitize_provider_error_snippet",
+    "THINKING_DISABLED",
+]
 
 
 class AiWorker(QObject):
@@ -233,7 +110,11 @@ class AiWorker(QObject):
 
     def resolve_request_credentials(self) -> tuple[str, str, str, str] | None:
         """Public façade for credential resolution (Web/mic probe)."""
-        return self._resolve_request_credentials()
+        return resolve_request_credentials(self.config)
+
+    def resolve_mic_request_credentials(self) -> tuple[str, str, str, str] | None:
+        """Public façade for mic-specific credential resolution."""
+        return resolve_mic_request_credentials(self.config)
 
     def run_mic_audio_probe(
         self,
@@ -249,7 +130,7 @@ class AiWorker(QObject):
                 signal="error",
                 message=tr("ai.error_request_failed").format(error="stopped"),
             )
-        resolved = self._resolve_request_credentials()
+        resolved = self.resolve_mic_request_credentials()
         if resolved is None:
             return AiProbeResult(
                 signal="error",
@@ -285,44 +166,6 @@ class AiWorker(QObject):
             emit=False,
         )
 
-    def _get_model_config(self) -> dict:
-        """获取当前激活的自定义模型配置；如无则返回空 dict（走全局配置）。"""
-        default_model_id = self.config.get_default_model_id()
-        if not default_model_id:
-            return {}
-        custom_models = self.config.get_custom_models()
-        for model in custom_models:
-            if model.get("modelId") == default_model_id:
-                return model
-        return {}
-
-    def _resolve_request_credentials(self) -> tuple[str, str, str, str] | None:
-        """解析请求凭据，优先使用自定义模型配置，回退到全局配置。
-
-        返回 (endpoint, api_key, model_id, api_mode) 或 None（凭据不完整时）。
-        优先级：自定义模型（Web 控制台设置） > 全局配置（api_endpoint/api_key/model/api_mode）。
-        """
-        model_config = self._get_model_config()
-        if model_config:
-            endpoint = normalize_endpoint(model_config.get("endpoint", ""))
-            api_key = (model_config.get("apiKey") or "").strip()
-            model_id = (model_config.get("modelId") or "").strip()
-            api_mode = normalize_mode(model_config.get("mode", ""))
-            if not endpoint or not api_key or not model_id:
-                return None
-            return endpoint, api_key, model_id, api_mode
-
-        endpoint = normalize_endpoint(
-            self.config.get("api_endpoint", "https://ark.cn-beijing.volces.com/api/v3")
-        )
-        api_key = (self.config.get_api_key() or "").strip()
-        model_id = (
-            self.config.get_default_model_id()
-            or self.config.get("model", "doubao-seed-1-6-flash-250828")
-        )
-        api_mode = normalize_mode(self.config.get("api_mode", "doubao"))
-        return endpoint, api_key, model_id, api_mode
-
     def _request(
         self,
         image_data_uri: str,
@@ -342,7 +185,10 @@ class AiWorker(QObject):
         """
         if self._stopping:
             return
-        resolved = self._resolve_request_credentials()
+        if audio_data_uri:
+            resolved = self.resolve_mic_request_credentials()
+        else:
+            resolved = self._resolve_request_credentials()
         if resolved is None:
             self._emit_result(
                 "error",
@@ -451,6 +297,9 @@ class AiWorker(QObject):
             output_tokens=output_tokens,
         )
 
+    def _resolve_request_credentials(self) -> tuple[str, str, str, str] | None:
+        return resolve_request_credentials(self.config)
+
     def _request_doubao(
         self,
         image_data_uri: str,
@@ -466,180 +315,23 @@ class AiWorker(QObject):
         resolved: tuple[str, str, str, str] | None = None,
         emit: bool = True,
     ) -> AiProbeResult | None:
-        """豆包 Responses API 流式请求。
-
-        请求体结构：model / input(user+image+audio) / stream=True / thinking / max_output_tokens。
-        重试策略：超时或未知异常最多 2 次，异常时关闭旧 httpx 客户端并重建；
-        HTTP 状态错误（401/402/404/429/504）不重试，直接报错。
-        """
-        if resolved is None:
-            resolved = self._resolve_request_credentials()
-        if resolved is None:
-            return self._deliver_outcome(
-                emit=emit,
-                signal_name="error",
-                message=tr("custom_model.error_incomplete"),
-                persona_id=persona_id,
-                request_round=request_round,
-                screenshot_id=screenshot_id,
-                captured_at=captured_at,
-                scene_generation=scene_generation,
-            )
-        endpoint, api_key, model, _ = resolved
-        temperature = self.config.get_float("temperature", 0.7)
-        configured_max = self.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
-        max_output_tokens = resolve_danmu_max_output_tokens(configured_max, use_thinking=False)
-
-        if not api_key:
-            return self._deliver_outcome(
-                emit=emit,
-                signal_name="error",
-                message=tr("ai.error_api_key_missing"),
-                persona_id=persona_id,
-                request_round=request_round,
-                screenshot_id=screenshot_id,
-                captured_at=captured_at,
-                scene_generation=scene_generation,
-            )
-
-        user_content: list[dict] = [
-            {"type": "input_image", "image_url": image_data_uri},
-            {"type": "input_text", "text": user_pt},
-        ]
-        if audio_data_uri:
-            user_content.append({"type": "input_audio", "audio_url": audio_data_uri})
-
-        input_messages = [
-            {
-                "type": "message",
-                "role": "user",
-                "content": user_content,
-            }
-        ]
-
-        data = {
-            "model": model,
-            "input": input_messages,
-            "stream": True,
-        }
-        if system_pt:
-            data["instructions"] = system_pt
-        if temperature:
-            data["temperature"] = temperature
-        data["thinking"] = dict(THINKING_DISABLED)
-        data["max_output_tokens"] = max_output_tokens
-
-        url = f"{endpoint}/responses"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        http_client = self._get_http_client()
-
-        # 最多 2 次尝试：超时/未知异常重建 httpx 客户端；HTTP 4xx/5xx 不重试
-        for attempt in range(2):
-            try:
-                text, input_tokens, output_tokens, stream_error = self._stream_doubao(http_client, url, headers, data)
-                if text:
-                    return self._deliver_outcome(
-                        emit=emit,
-                        signal_name="finished",
-                        message=text.strip(),
-                        persona_id=persona_id,
-                        request_round=request_round,
-                        screenshot_id=screenshot_id,
-                        captured_at=captured_at,
-                        scene_generation=scene_generation,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                    )
-                msg = stream_error or tr("ai.error_empty_response")
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=msg,
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                )
-            except httpx.TimeoutException:
-                if attempt < 1:
-                    continue
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=tr("ai.error_timeout"),
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-            except httpx.HTTPStatusError as e:
-                msg = format_http_status_error(e)
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=msg,
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-            except Exception as e:
-                if attempt < 1:
-                    if hasattr(self._thread_local, "client") and self._thread_local.client is not None:
-                        try:
-                            self._thread_local.client.close()
-                        except Exception:
-                            pass
-                        with self._client_lock:
-                            self._clients.discard(self._thread_local.client)
-                        self._thread_local.client = None
-                    http_client = self._get_http_client()
-                    continue
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=tr("ai.error_request_failed").format(error=e),
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-        return self._deliver_outcome(
+        return request_doubao(
+            self,
+            image_data_uri,
+            system_pt,
+            user_pt,
+            persona_id,
+            request_round,
+            screenshot_id,
+            captured_at,
+            scene_generation,
+            audio_data_uri=audio_data_uri,
+            resolved=resolved,
             emit=emit,
-            signal_name="error",
-            message=tr("ai.error_empty_response"),
-            persona_id=persona_id,
-            request_round=request_round,
-            screenshot_id=screenshot_id,
-            captured_at=captured_at,
-            scene_generation=scene_generation,
         )
 
     def _stream_doubao(self, http_client, url: str, headers: dict, data: dict) -> tuple[str, int, int, str]:
-        """豆包 SSE 流解析委托：调用 doubao_responses_stream.stream_doubao_responses 并提取结果。"""
-        from app.doubao_responses_stream import stream_doubao_responses
-
-        result = stream_doubao_responses(http_client, url, headers, data)
-        if not result.text:
-            logger.warning(
-                "doubao stream 返回空文本: input_tokens=%s output_tokens=%s "
-                "stream_events=%s error=%r",
-                result.input_tokens,
-                result.output_tokens,
-                result.stream_events,
-                result.error,
-            )
-        return result.text, result.input_tokens, result.output_tokens, result.error
+        return stream_doubao(self, http_client, url, headers, data)
 
     def _request_openai(
         self,
@@ -656,163 +348,19 @@ class AiWorker(QObject):
         resolved: tuple[str, str, str, str] | None = None,
         emit: bool = True,
     ) -> AiProbeResult | None:
-        """OpenAI Chat Completions SSE 流式请求。
-
-        请求体结构：model / messages(system+user+image) / stream=True / stream_options(include_usage)。
-        重试策略与 _request_doubao 一致：超时或未知异常最多 2 次，HTTP 状态错误不重试。
-        麦克风插入仅 MiMo（mimo-v2.5）经 adapter 附加 input_audio。
-        """
-        if resolved is None:
-            resolved = self._resolve_request_credentials()
-        if resolved is None:
-            return self._deliver_outcome(
-                emit=emit,
-                signal_name="error",
-                message=tr("custom_model.error_incomplete"),
-                persona_id=persona_id,
-                request_round=request_round,
-                screenshot_id=screenshot_id,
-                captured_at=captured_at,
-                scene_generation=scene_generation,
-            )
-        endpoint, api_key, model, api_mode = resolved
-        temperature = self.config.get_float("temperature", 0.7)
-        configured_max = self.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
-        caps = get_capabilities_for_model(model, endpoint, api_mode)
-        # MiMo 等模型即使设了 thinking:disabled 仍可能产生 reasoning_content，
-        # 这些 token 也计入 max_completion_tokens，所以按 thinking 模式分配更大余量。
-        max_tokens = resolve_danmu_max_output_tokens(
-            configured_max, use_thinking=caps.thinking_param,
-        )
-
-        if not api_key:
-            return self._deliver_outcome(
-                emit=emit,
-                signal_name="error",
-                message=tr("ai.error_api_key_missing"),
-                persona_id=persona_id,
-                request_round=request_round,
-                screenshot_id=screenshot_id,
-                captured_at=captured_at,
-                scene_generation=scene_generation,
-            )
-
-        from app.model_providers import model_supports_mic_audio
-
-        mic_audio = audio_data_uri
-        if mic_audio and not model_supports_mic_audio(model, endpoint=endpoint, api_mode=api_mode):
-            mic_audio = None
-
-        http_client = self._get_http_client()
-        adapter = get_openai_adapter_for_model(model, endpoint, api_mode)
-        data: dict[str, object] = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_pt},
-                {
-                    "role": "user",
-                    "content": adapter.build_vision_user_content(
-                        user_pt, image_data_uri, audio_data_uri=mic_audio
-                    ),
-                },
-            ],
-            "temperature": temperature,
-            "stream": True,
-        }
-        adapter.patch_openai_chat_body(data, max_tokens=max_tokens, caps=caps)
-        url = f"{endpoint}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        # 重试策略同 _request_doubao
-        for attempt in range(2):
-            try:
-                text, input_tokens, output_tokens = self._stream_openai(
-                    http_client, url, headers, data, endpoint=endpoint, api_mode=api_mode
-                )
-                if text:
-                    return self._deliver_outcome(
-                        emit=emit,
-                        signal_name="finished",
-                        message=text.strip(),
-                        persona_id=persona_id,
-                        request_round=request_round,
-                        screenshot_id=screenshot_id,
-                        captured_at=captured_at,
-                        scene_generation=scene_generation,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                    )
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=tr("ai.error_empty_response"),
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                )
-            except httpx.TimeoutException:
-                if attempt < 1:
-                    continue
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=tr("ai.error_timeout"),
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-            except httpx.HTTPStatusError as e:
-                msg = format_http_status_error(e)
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=msg,
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-            except Exception as e:
-                if attempt < 1:
-                    if hasattr(self._thread_local, "client") and self._thread_local.client is not None:
-                        try:
-                            self._thread_local.client.close()
-                        except Exception:
-                            pass
-                        with self._client_lock:
-                            self._clients.discard(self._thread_local.client)
-                        self._thread_local.client = None
-                    http_client = self._get_http_client()
-                    continue
-                return self._deliver_outcome(
-                    emit=emit,
-                    signal_name="error",
-                    message=tr("ai.error_request_failed").format(error=e),
-                    persona_id=persona_id,
-                    request_round=request_round,
-                    screenshot_id=screenshot_id,
-                    captured_at=captured_at,
-                    scene_generation=scene_generation,
-                )
-        return self._deliver_outcome(
+        return request_openai(
+            self,
+            image_data_uri,
+            system_pt,
+            user_pt,
+            persona_id,
+            request_round,
+            screenshot_id,
+            captured_at,
+            scene_generation,
+            audio_data_uri=audio_data_uri,
+            resolved=resolved,
             emit=emit,
-            signal_name="error",
-            message=tr("ai.error_empty_response"),
-            persona_id=persona_id,
-            request_round=request_round,
-            screenshot_id=screenshot_id,
-            captured_at=captured_at,
-            scene_generation=scene_generation,
         )
 
     def _stream_openai(
@@ -825,68 +373,16 @@ class AiWorker(QObject):
         endpoint: str = "",
         api_mode: str = "",
     ) -> tuple[str, int, int]:
-        """OpenAI SSE 流式解析：逐行解析 data: 前缀，收集 content delta 和 usage。
+        return stream_openai(
+            self,
+            http_client,
+            url,
+            headers,
+            data,
+            endpoint=endpoint,
+            api_mode=api_mode,
+        )
 
-        遇到 data: [DONE] 结束；usage 在最后一块（DashScope/百炼兼容模式下需 stream_options.include_usage）。
-        _stopping=True 时提前中断循环。
-        """
-        collected: list[str] = []
-        reasoning_parts: list[str] = []
-        input_tokens = 0
-        output_tokens = 0
-        caps = get_capabilities_for_endpoint(endpoint, api_mode)
-        adapter = get_openai_adapter(endpoint, api_mode)
-        with http_client.stream("POST", url, headers=headers, json=data) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if self._stopping:
-                    break
-                if not line or not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                    usage = chunk.get("usage")
-                    if usage:
-                        input_tokens, output_tokens = adapter.normalize_usage(usage, caps=caps)
-                    choice = chunk.get("choices", [{}])[0]
-                    delta = choice.get("delta", {})
-                    content = delta.get("content", "")
-                    if content:
-                        collected.append(content)
-                    reasoning = delta.get("reasoning_content", "")
-                    if reasoning:
-                        reasoning_parts.append(reasoning)
-                    if not content and not reasoning:
-                        message = choice.get("message", {})
-                        message_content = message.get("content", "")
-                        if message_content:
-                            collected.append(message_content)
-                        message_reasoning = message.get("reasoning_content", "")
-                        if message_reasoning:
-                            reasoning_parts.append(message_reasoning)
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    continue
-        text = "".join(collected)
-        if not text and reasoning_parts:
-            reasoning_len = sum(len(p) for p in reasoning_parts)
-            logger.warning(
-                "openai stream 只有 reasoning_content 没有 content "
-                "(thinking:disabled 未生效，已通过增大 max_completion_tokens 缓解): "
-                "input_tokens=%s output_tokens=%s reasoning_chars=%s endpoint=%s",
-                input_tokens, output_tokens, reasoning_len,
-                normalize_endpoint(endpoint) if endpoint else url,
-            )
-        if not text:
-            logger.warning(
-                "openai stream 返回空文本: input_tokens=%s output_tokens=%s "
-                "endpoint=%s",
-                input_tokens, output_tokens,
-                normalize_endpoint(endpoint) if endpoint else url,
-            )
-        return text, input_tokens, output_tokens
 
     def close(self):
         """关闭所有 httpx 客户端连接。DanmuApp.quit() 时调用。"""

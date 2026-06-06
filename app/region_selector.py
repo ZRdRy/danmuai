@@ -177,3 +177,131 @@ def screen_for_index(index: int):
         return None
     idx = max(0, min(int(index), len(screens) - 1))
     return screens[idx]
+
+
+def request_capture_region_selection(
+    danmu_app,
+    *,
+    logger,
+    resolve_screen_index_fn,
+    screen_for_index_fn,
+    close_region_selector_fn,
+    on_finished_fn,
+    on_cancelled_fn,
+    on_destroyed_fn,
+    publish_status_fn,
+) -> None:
+    """启动区域框选覆盖层（从 DanmuApp 迁移）。"""
+    from app.web_api.capture_region import SELECTION_SELECTING
+
+    if danmu_app._region_selection_state == SELECTION_SELECTING and danmu_app._region_selector is not None:
+        logger.debug("capture region selection already in progress")
+        return
+
+    close_region_selector_fn()
+    screen_index = resolve_screen_index_fn()
+    danmu_app._region_selection_screen_index = screen_index
+    screen = screen_for_index_fn(screen_index)
+    if screen is None:
+        danmu_app._region_selection_state = "invalid"
+        logger.warning("capture region selection: no screen available")
+        publish_status_fn()
+        return
+
+    danmu_app._region_selection_state = SELECTION_SELECTING
+    overlay = RegionSelectorOverlay(screen)
+    overlay.selection_finished.connect(on_finished_fn)
+    overlay.selection_cancelled.connect(on_cancelled_fn)
+    overlay.destroyed.connect(on_destroyed_fn)
+    danmu_app._region_selector = overlay
+    overlay.showFullScreen()
+    publish_status_fn()
+
+
+def close_region_selector(danmu_app, *, reassert_topmost_fn) -> None:
+    """关闭区域选择器并清理信号连接（从 DanmuApp 迁移）。"""
+    overlay = danmu_app._region_selector
+    danmu_app._region_selector = None
+    if overlay is None:
+        return
+    try:
+        overlay.selection_finished.disconnect(danmu_app._on_region_selection_finished)
+    except (TypeError, RuntimeError):
+        pass
+    try:
+        overlay.selection_cancelled.disconnect(danmu_app._on_region_selection_cancelled)
+    except (TypeError, RuntimeError):
+        pass
+    try:
+        overlay.destroyed.disconnect(danmu_app._on_region_selector_destroyed)
+    except (TypeError, RuntimeError):
+        pass
+    try:
+        overlay.close()
+    except RuntimeError:
+        pass
+    reassert_topmost_fn()
+
+
+def on_region_selection_finished(
+    danmu_app,
+    rect,
+    *,
+    logger,
+    publish_status_fn,
+    config_changed_fn,
+) -> None:
+    """区域选择完成回调（从 DanmuApp 迁移）。"""
+    from app.web_api.capture_region import (
+        SELECTION_INVALID,
+        SELECTION_SAVED,
+        apply_capture_region,
+    )
+
+    danmu_app._region_selector = None
+    screen_index = danmu_app._region_selection_screen_index
+    if screen_index is None:
+        screen_index = danmu_app.config.get_int("screen_index", 0)
+    screen = screen_for_index(screen_index)
+    if screen is None:
+        danmu_app._region_selection_state = SELECTION_INVALID
+        publish_status_fn()
+        return
+
+    geo = screen.geometry()
+    applied = apply_capture_region(
+        danmu_app.config,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        screen_width=geo.width(),
+        screen_height=geo.height(),
+    )
+    if applied is None:
+        danmu_app._region_selection_state = SELECTION_INVALID
+        logger.info("capture region selection rejected: invalid or too small")
+    else:
+        danmu_app._region_selection_state = SELECTION_SAVED
+        logger.info(
+            "capture region saved "
+            f"x={applied[0]} y={applied[1]} w={applied[2]} h={applied[3]} "
+            f"screen_index={screen_index}"
+        )
+        config_changed_fn()
+    publish_status_fn()
+
+
+def on_region_selection_cancelled(
+    danmu_app,
+    *,
+    logger,
+    publish_status_fn,
+) -> None:
+    """区域选择取消回调（从 DanmuApp 迁移）。"""
+    from app.web_api.capture_region import SELECTION_CANCELLED
+
+    danmu_app._region_selector = None
+    danmu_app._region_selection_state = SELECTION_CANCELLED
+    logger.debug("capture region selection cancelled")
+    publish_status_fn()

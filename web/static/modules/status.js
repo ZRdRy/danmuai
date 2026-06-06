@@ -1,6 +1,7 @@
 /** /api/status snapshot → overview DOM (runtime clocks, session runs, errors). */
 
 let statusHadError = false;
+let lastAppliedStatus = null;
 let applyCaptureRegionFromPayload = () => {};
 let maybePromptErrorReport = async () => {};
 
@@ -11,6 +12,10 @@ export function configureStatus({ applyCaptureRegion, onErrorPrompt }) {
 
 export function getStatusHadError() {
   return statusHadError;
+}
+
+export function getLastAppliedStatus() {
+  return lastAppliedStatus;
 }
 
 export function formatRuntime(sec) {
@@ -152,6 +157,7 @@ function formatTokenCount(n) {
 }
 
 export function applyStatus(st) {
+  lastAppliedStatus = st;
   const running = st.running;
   const dot = document.getElementById('statusDot');
   const pill = document.getElementById('statusPill');

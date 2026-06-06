@@ -15,8 +15,6 @@ if TYPE_CHECKING:
 class GenerationPipelineState:
     """诊断与状态展示用；真实所有权仍在 DanmuApp（Phase 4 冻结，勿迁入本 dataclass 写路径）。"""
 
-    active_scene_probe_size: int = 0
-    scene_generation_bumped_at: float = 0.0
     last_activity_collect_at: float = 0.0
     latest_displayed_round: int = 0
     latest_requested_screenshot_id: int = 0
@@ -26,10 +24,6 @@ class GenerationPipelineState:
     @classmethod
     def from_app(cls, app: "DanmuApp") -> "GenerationPipelineState":
         return cls(
-            active_scene_probe_size=int(getattr(app, "_active_scene_probe_size", 0) or 0),
-            scene_generation_bumped_at=float(
-                getattr(app, "_scene_generation_bumped_at", 0.0) or 0.0
-            ),
             last_activity_collect_at=float(getattr(app, "_last_activity_collect_at", 0.0) or 0.0),
             latest_displayed_round=int(getattr(app, "_latest_displayed_round", 0) or 0),
             latest_requested_screenshot_id=int(

@@ -186,7 +186,7 @@ def test_resolve_model_status_custom_credentials():
 def test_apply_config_patch_rejects_mismatched_model():
     from unittest.mock import MagicMock
 
-    from tests.test_web_console import FakeConfig
+    from tests.fakes import FakeConfig
 
     config = FakeConfig(
         {

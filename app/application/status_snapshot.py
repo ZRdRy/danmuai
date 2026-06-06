@@ -60,7 +60,6 @@ class StatusSnapshotBuilder:
             "live_analyzing": bool(live_snapshot.analyzing) if live_snapshot else False,
             "live_local_fallback": bool(live_snapshot.local_fallback) if live_snapshot else False,
             "live_delay_sec": float(live_snapshot.delay_sec) if live_snapshot else 0.0,
-            "live_stale_drops": int(live_snapshot.stale_drops) if live_snapshot else 0,
             "live_message": (
                 tr("control.status_stopped_desc")
                 if not state.running

@@ -1,0 +1,453 @@
+"""Web console tests: server."""
+
+import asyncio
+import threading
+import time
+from unittest.mock import MagicMock
+
+import pytest
+from app.application.web_runtime_state import WebRuntimeState
+from app.web_console import (
+    WebConsoleBridge,
+)
+
+from tests.fakes import FakeConfig
+from tests.web_console_helpers import make_status_app
+
+
+def test_model_catalog_api_payload():
+    """Contract for GET /api/model-catalog (implemented via list_platform_catalogs)."""
+    from app.model_catalog import list_platform_catalogs
+
+    platforms = list_platform_catalogs()
+    assert len(platforms) == 4
+    by_id = {p["platform_id"]: p for p in platforms}
+
+    doubao = by_id["doubao"]
+    assert doubao["provider_id"] == "doubao"
+    assert len(doubao["models"]) == 5
+    doubao_cheapest = [m for m in doubao["models"] if m["cheapest"]]
+    assert len(doubao_cheapest) == 1
+    assert doubao_cheapest[0]["id"] == "doubao-seed-1-6-flash-250828"
+    doubao_mic = {m["id"] for m in doubao["models"] if m["supports_mic"]}
+    assert doubao_mic == {
+        "doubao-seed-2-0-lite-260428",
+        "doubao-seed-2-0-mini-260428",
+    }
+
+    dashscope = by_id["dashscope"]
+    assert dashscope["provider_id"] == "dashscope"
+    assert len(dashscope["models"]) == 6
+    dash_cheapest = [m for m in dashscope["models"] if m["cheapest"]]
+    assert len(dash_cheapest) == 1
+    assert dash_cheapest[0]["id"] == "qwen3-vl-flash"
+    dash_mic = {m["id"] for m in dashscope["models"] if m["supports_mic"]}
+    assert dash_mic == set()
+
+    siliconflow = by_id["siliconflow"]
+    assert siliconflow["platform_label"] == "硅基流动"
+    assert len(siliconflow["models"]) == 9
+    sf_cheapest = [m for m in siliconflow["models"] if m["cheapest"]]
+    assert len(sf_cheapest) == 1
+    assert sf_cheapest[0]["id"] == "Qwen/Qwen3-VL-8B-Instruct"
+
+    mimo = by_id["mimo"]
+    assert mimo["provider_id"] == "mimo"
+    assert mimo["default_model_id"] == "mimo-v2.5"
+    assert len(mimo["models"]) == 1
+    mimo_ids = {m["id"] for m in mimo["models"]}
+    assert mimo_ids == {"mimo-v2.5"}
+    assert mimo["models"][0]["supports_mic"] is True
+
+
+def test_providers_excludes_deepseek():
+    """GET /api/providers is built from PROVIDERS; DeepSeek is not an official preset."""
+    from app.model_providers import PROVIDERS
+
+    ids = [p.id for p in PROVIDERS]
+    assert "deepseek" not in ids
+    assert "doubao" in ids
+    assert "dashscope" in ids
+    assert "siliconflow" in ids
+    assert "mimo" in ids
+    assert "custom_openai" in ids
+
+
+def test_web_settings_ui_uses_custom_wording_not_manual_fill():
+    from app.bundle_paths import project_root
+
+    root = project_root()
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    settings_js = (root / "web" / "static" / "modules" / "settings.js").read_text(
+        encoding="utf-8"
+    )
+    assert "手动填写" not in html
+    assert "手动输入" not in html
+    assert "手动填写" not in settings_js
+    assert "手动输入" not in settings_js
+    assert 'value="">自定义</option>' in html or ">自定义</option>" in html
+    assert "自定义模型" in settings_js
+    assert '选「自定义」则需自己逐项设置' in settings_js
+
+
+def test_web_app_js_provider_switch_resets_vision_model():
+    from app.bundle_paths import project_root
+
+    settings_js = (
+        project_root() / "web" / "static" / "modules" / "settings.js"
+    ).read_text(encoding="utf-8")
+    assert "function pickDefaultCatalogModelId" in settings_js
+    assert "platform.default_model_id" in settings_js
+    assert "providerSwitch: true" in settings_js
+    assert "function syncProviderPresetFromEndpoint" in settings_js
+    assert "function resolveProviderIdForPicker" in settings_js
+    assert "renderVisionModelPicker(resolveProviderIdForPicker()" in settings_js
+    assert "syncProviderPresetAfterEndpointEdit" in settings_js
+    assert "renderVisionModelPicker(providerId, defaultModelId, { providerSwitch: true })" in settings_js
+    assert "apiKeyEl.value = ''" in settings_js
+
+
+def test_list_recent_logs_filters_by_since_ts():
+    app = make_status_app()
+    app.logger = MagicMock()
+    bridge = WebConsoleBridge(app)
+    bridge._log_ring.append(("INFO", "older", 10.0))
+    bridge._log_ring.append(("WARNING", "newer", 20.0))
+
+    items = bridge.list_recent_logs(15.0)
+
+    assert len(items) == 1
+    assert items[0]["level"] == "WARNING"
+    assert items[0]["message"] == "newer"
+    assert items[0]["ts"] == 20.0
+
+
+def test_register_status_consumer_logs_consumer_count():
+    app = make_status_app()
+    app.logger = MagicMock()
+    bridge = WebConsoleBridge(app)
+    queue = __import__("asyncio").Queue(maxsize=4)
+    bridge.register_status_consumer(queue)
+    bridge.unregister_status_consumer(queue)
+    debug_calls = [str(c) for c in app.logger.debug.call_args_list]
+    assert any("register_status_consumer consumers=1" in c for c in debug_calls)
+    assert any("unregister_status_consumer consumers=0" in c for c in debug_calls)
+
+
+def test_enqueue_ws_replaces_oldest_on_full_queue():
+
+    from app.web_console import _enqueue_ws
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[int] = asyncio.Queue(maxsize=2)
+        queue.put_nowait(1)
+        queue.put_nowait(2)
+        _enqueue_ws(loop, queue, 3)
+        await asyncio.sleep(0.02)
+        first = queue.get_nowait()
+        second = queue.get_nowait()
+        assert first == 2
+        assert second == 3
+
+    asyncio.run(_run())
+
+
+def test_web_console_wait_ready_fails_fast_when_bind_failed():
+
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+
+    def _fail_without_ready() -> None:
+        time.sleep(0.02)
+        server._bind_failed.set()
+
+    server._thread = threading.Thread(target=_fail_without_ready, daemon=True)
+    server._thread.start()
+
+    started = time.monotonic()
+    assert server.wait_ready(timeout=2.0) is False
+    assert time.monotonic() - started < 1.0
+
+
+def test_wait_ready_returns_false_when_thread_dies_before_bind():
+    from app.web_console import WebConsoleBridge, WebConsoleServer
+
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    dead_thread = MagicMock()
+    dead_thread.is_alive.return_value = False
+    server._thread = dead_thread
+
+    started = time.monotonic()
+    assert server.wait_ready(timeout=2.0) is False
+    assert time.monotonic() - started < 0.2
+
+
+def test_notify_wait_ready_timeout_warns_when_thread_still_starting():
+
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        _notify_wait_ready_timeout,
+    )
+
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+
+    def _sleep_forever() -> None:
+        time.sleep(5.0)
+
+    server._thread = threading.Thread(target=_sleep_forever, daemon=True)
+    server._thread.start()
+    try:
+        _notify_wait_ready_timeout(server, danmu_app)
+        danmu_app.logger.warning.assert_called_once()
+        danmu_app.logger.error.assert_not_called()
+        danmu_app.set_web_error_status.assert_not_called()
+        warning_msg = danmu_app.logger.warning.call_args[0][0]
+        assert "启动较慢" in warning_msg
+        assert server.base_url in warning_msg
+    finally:
+        server._bind_failed.set()
+
+
+def test_notify_wait_ready_timeout_errors_when_bind_failed():
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        _notify_wait_ready_timeout,
+    )
+
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+    server._bind_failed.set()
+
+    _notify_wait_ready_timeout(server, danmu_app)
+
+    danmu_app.logger.error.assert_called_once()
+    danmu_app.logger.warning.assert_not_called()
+    danmu_app.set_web_error_status.assert_called_once()
+    error_msg = danmu_app.logger.error.call_args[0][0]
+    assert "未在" in error_msg
+    assert "pip install" in error_msg
+
+
+def test_notify_wait_ready_timeout_errors_when_thread_dead():
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        _notify_wait_ready_timeout,
+    )
+
+    bridge = WebConsoleBridge(MagicMock())
+    server = WebConsoleServer(bridge)
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+    server._thread = None
+
+    _notify_wait_ready_timeout(server, danmu_app)
+
+    danmu_app.logger.error.assert_called_once()
+    danmu_app.set_web_error_status.assert_called_once_with(
+        danmu_app.logger.error.call_args[0][0],
+        is_error=True,
+    )
+    assert server._startup_error_from_attach is True
+
+
+
+
+
+
+
+
+
+
+def test_startup_error_clears_when_uvicorn_started():
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+    )
+
+    danmu_app = MagicMock()
+    danmu_app.web_runtime_state = WebRuntimeState()
+    danmu_app.set_web_error_status = lambda msg, *, is_error: danmu_app.web_runtime_state.set_error_status(
+        msg, is_error=is_error
+    )
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._startup_error_from_attach = True
+    danmu_app.web_runtime_state.set_error_status("startup failed", is_error=True)
+
+    server._on_uvicorn_started()
+
+    assert server._startup_error_from_attach is False
+    assert danmu_app.web_runtime_state.is_error is False
+    assert danmu_app.web_runtime_state.error_message == ""
+
+
+def test_startup_warning_does_not_persist_after_server_ready():
+    from app.web_console import (
+        WebConsoleBridge,
+        WebConsoleServer,
+        classify_web_console_startup,
+        clear_startup_attach_error_if_needed,
+    )
+
+    danmu_app = MagicMock()
+    danmu_app.web_runtime_state = WebRuntimeState()
+    danmu_app.set_web_error_status = lambda msg, *, is_error: danmu_app.web_runtime_state.set_error_status(
+        msg, is_error=is_error
+    )
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._startup_error_from_attach = True
+    danmu_app.web_runtime_state.set_error_status("未就绪", is_error=True)
+
+    server.startup_ok = True
+    server._ready.set()
+    clear_startup_attach_error_if_needed(server)
+
+    assert classify_web_console_startup(server) == "ready"
+    assert danmu_app.web_runtime_state.is_error is False
+    assert server._startup_error_from_attach is False
+
+
+
+
+
+
+
+
+
+def test_announcements_read_state_get_default():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.get("/api/announcements-read-state")
+    assert res.status_code == 200
+    assert res.json() == {
+        "readIds": [],
+        "lastSeenMs": 0,
+        "overviewBannerDismissedId": "",
+    }
+
+
+def test_announcements_read_state_put_roundtrip():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+    def _check_token(_authorization: str | None = None) -> None:
+        if _authorization != "Bearer test-token":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    payload = {
+        "readIds": [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ],
+        "lastSeenMs": 1716969600000,
+        "overviewBannerDismissedId": "33333333-3333-4333-8333-333333333333",
+    }
+    res = client.put(
+        "/api/announcements-read-state",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+    bridge.invoke_on_main.assert_called_once()
+
+    res = client.get("/api/announcements-read-state")
+    assert res.status_code == 200
+    assert res.json() == payload
+
+
+def test_announcements_read_state_put_rejects_invalid_body():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app.config = FakeConfig()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app)
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={"readIds": ["not-a-uuid"], "lastSeenMs": 0},
+    )
+    assert res.status_code == 400
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={"readIds": [], "lastSeenMs": -1},
+    )
+    assert res.status_code == 400
+
+    res = client.put(
+        "/api/announcements-read-state",
+        json={
+            "readIds": [],
+            "lastSeenMs": 0,
+            "overviewBannerDismissedId": "not-a-uuid",
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_announcements_state_normalize_drops_invalid_overview_id():
+    from app.web_api.announcements_state import normalize_state
+
+    state = normalize_state(
+        {
+            "readIds": [],
+            "lastSeenMs": 0,
+            "overviewBannerDismissedId": "not-a-uuid",
+        }
+    )
+    assert state["overviewBannerDismissedId"] == ""
+
+
+def test_announcements_state_validate_payload_rejects_bad_uuid():
+    from app.web_api.announcements_state import validate_payload
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        validate_payload({"readIds": ["not-a-uuid"], "lastSeenMs": 0})
+    assert exc.value.status_code == 400
+

@@ -93,7 +93,7 @@ def send_mic_probe(
     user_pt: str,
     audio_data_uri: str,
 ) -> MicSendProbeResult:
-    resolved = danmu_app.resolve_request_credentials()
+    resolved = danmu_app.ai_worker.resolve_mic_request_credentials()
     if resolved is None:
         return MicSendProbeResult(
             ok=False,

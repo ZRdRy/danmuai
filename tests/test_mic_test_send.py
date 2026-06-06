@@ -41,7 +41,8 @@ def test_run_mic_test_send_unsupported_api():
 
 def test_send_mic_probe_incomplete_credentials():
     app = MagicMock()
-    app.resolve_request_credentials.return_value = None
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = None
 
     result = send_mic_probe(
         app,
@@ -56,7 +57,8 @@ def test_send_mic_probe_incomplete_credentials():
 
 def test_send_mic_probe_unsupported_model():
     app = MagicMock()
-    app.resolve_request_credentials.return_value = (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = (
         "https://ark.cn-beijing.volces.com/api/v3",
         "sk-test",
         "doubao-seed-1-6-flash-250828",
@@ -76,7 +78,8 @@ def test_send_mic_probe_unsupported_model():
 
 def test_send_mic_probe_unsupported_generic_openai():
     app = MagicMock()
-    app.resolve_request_credentials.return_value = (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = (
         "https://example.com/v1",
         "sk-test",
         "gpt-4o",
@@ -96,13 +99,13 @@ def test_send_mic_probe_unsupported_generic_openai():
 
 def test_send_mic_probe_success_mimo(monkeypatch):
     app = MagicMock()
-    app.resolve_request_credentials.return_value = (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = (
         "https://api.xiaomimimo.com/v1",
         "sk-test",
         "mimo-v2.5",
         "openai-compatible",
     )
-    app.ai_worker = MagicMock()
 
     app.run_mic_probe_in_pool = MagicMock(
         return_value=AiProbeResult(
@@ -126,7 +129,8 @@ def test_send_mic_probe_success_mimo(monkeypatch):
 
 def test_send_mic_probe_supports_mimo_v2_5_on_custom_endpoint():
     app = MagicMock()
-    app.resolve_request_credentials.return_value = (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = (
         "https://my-mimo-proxy.com/v1",
         "sk-test",
         "mimo-v2.5",
@@ -156,13 +160,13 @@ def test_send_mic_probe_supports_mimo_v2_5_on_custom_endpoint():
 
 def test_send_mic_probe_success_doubao(monkeypatch):
     app = MagicMock()
-    app.resolve_request_credentials.return_value = (
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials.return_value = (
         "https://ark.cn-beijing.volces.com/api/v3",
         "sk-test",
         "doubao-seed-2-0-mini-260428",
         "doubao",
     )
-    app.ai_worker = MagicMock()
 
     app.run_mic_probe_in_pool = MagicMock(
         return_value=AiProbeResult(
@@ -245,7 +249,7 @@ def test_run_mic_test_send_does_not_block_main_thread(qapp):
     app.ai_worker = MagicMock()
     app.ai_worker.run_mic_audio_probe.side_effect = slow_probe
     app.run_mic_probe_in_pool = DanmuApp.run_mic_probe_in_pool.__get__(app, DanmuApp)
-    app.resolve_request_credentials = MagicMock(
+    app.ai_worker.resolve_mic_request_credentials = MagicMock(
         return_value=(
             "https://ark.cn-beijing.volces.com/api/v3",
             "sk-test",
@@ -271,7 +275,8 @@ def test_run_mic_test_send_does_not_emit_pop_before_reply_warning(monkeypatch):
     app = DanmuApp.__new__(DanmuApp)
     app.logger = FakeLogger()
     app._pending_request_meta = {}
-    app.resolve_request_credentials = MagicMock(
+    app.ai_worker = MagicMock()
+    app.ai_worker.resolve_mic_request_credentials = MagicMock(
         return_value=(
             "https://ark.cn-beijing.volces.com/api/v3",
             "sk-test",
@@ -279,7 +284,6 @@ def test_run_mic_test_send_does_not_emit_pop_before_reply_warning(monkeypatch):
             "doubao",
         )
     )
-    app.ai_worker = MagicMock()
 
     app.run_mic_probe_in_pool = MagicMock(
         return_value=AiProbeResult(

@@ -3,31 +3,15 @@
 import time
 from unittest.mock import Mock
 
-from app.live_freshness import (
-    LiveStatusSnapshot,
-    build_local_fallback_batch,
-    is_model_slow,
-    screenshot_interval_ms,
-    should_backoff_screenshot,
-)
+from app.live_freshness import LiveStatusSnapshot, build_local_fallback_batch, is_model_slow
 from main import DanmuApp
 
-from tests.fakes import FakeConfig, FakeTimer
-from tests.test_p0_main_flow import _make_minimal_app
-
-
-def test_is_reply_stale_never_stale_in_normal_mode():
-    """生产主链路不触发 _log_reply_drop；见 test_on_ai_reply_enqueues_despite_stale_screenshot_id。"""
-    app = _make_minimal_app()
-    app._latest_screenshot_id = 12
-    app._latest_requested_screenshot_id = 10
-    stale, reason = app._is_reply_stale(10, time.monotonic(), 0)
-    assert stale is False
-    assert reason == ""
+from tests.conftest import make_minimal_danmu_app
+from tests.fakes import FakeConfig
 
 
 def test_capture_advances_screenshot_id_even_when_in_flight():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.engine.running = True
     app._latest_screenshot_id = 5
     app.ai_in_flight = 1
@@ -41,7 +25,7 @@ def test_capture_advances_screenshot_id_even_when_in_flight():
 
 
 def test_trigger_api_call_increments_in_flight(monkeypatch):
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.engine.running = True
     app._latest_screenshot = object()
     app._latest_screenshot_id = 3
@@ -63,36 +47,32 @@ def test_trigger_api_call_increments_in_flight(monkeypatch):
     pool.start.assert_called_once()
 
 
-def test_stale_drops_field_is_wired_to_main_pipeline():
-    """BUG-027: dormant 路径 _log_reply_drop → _stale_drop_count → LiveStatusSnapshot.stale_drops。"""
-    app = _make_minimal_app()
+def test_local_fallback_field_is_wired_to_main_pipeline():
+    """BUG-013: slow in-flight → _maybe_inject_local_fallback → local_fallback snapshot + queue."""
+    app = make_minimal_danmu_app()
+    app.config = FakeConfig({"danmu_pool_enabled": "1"})
+    app.engine.running = True
     app._build_live_status_snapshot = DanmuApp._build_live_status_snapshot.__get__(app, DanmuApp)
+    app._maybe_inject_local_fallback = DanmuApp._maybe_inject_local_fallback.__get__(app, DanmuApp)
 
-    app._log_reply_drop("stale_scene_in_flight", screenshot_id=1, request_round=10, scene_generation=0)
-    assert app._stale_scene_inflight_drop_count == 1
-    assert app._stale_scene_consume_drop_count == 0
-    assert app._stale_drop_count == 1
+    app.ai_in_flight = 1
+    app._is_generating = True
+    app._inflight_started_at = time.monotonic() - 5.0
+    app._inflight_screenshot_id = 3
+    app._inflight_scene_generation = 0
+    app.screenshot_round = 10
 
-    app._log_reply_drop("stale_scene", screenshot_id=2, request_round=11, scene_generation=0)
-    assert app._stale_scene_inflight_drop_count == 1
-    assert app._stale_scene_consume_drop_count == 1
-    assert app._stale_drop_count == 2
+    snap_before = app._build_live_status_snapshot()
+    assert snap_before.local_fallback is False
 
-    snap = app._build_live_status_snapshot()
-    assert snap.stale_drops == 2
+    app._maybe_inject_local_fallback()
 
-
-def test_stale_burst_raises_screenshot_interval():
-    app = _make_minimal_app()
-    app._record_stale_drop = DanmuApp._record_stale_drop.__get__(app, DanmuApp)
-    app.config = FakeConfig({"normal_recognition_interval_sec": "5"})
-    app.screenshot_timer = FakeTimer()
-    now = time.monotonic()
-    app._stale_drop_times = [now - i for i in range(4)]
-    app._record_stale_drop()
-    level = app._screenshot_backoff_level
-    assert level >= 1
-    assert app.screenshot_timer._interval == screenshot_interval_ms(5, level)
+    snap_after = app._build_live_status_snapshot()
+    assert snap_after.local_fallback is True
+    queued = list(app.reply_buffer._items)
+    assert queued
+    assert all(item.source == "fallback" for item in queued)
+    assert all(item.is_fallback is True for item in queued)
 
 
 def test_local_fallback_batch_has_five_items():
@@ -103,7 +83,7 @@ def test_local_fallback_batch_has_five_items():
 
 
 def test_local_fallback_is_marked_replaceable():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app._batch_id = 7
     app._enqueue_reply_batch(
         "persona-1",
@@ -123,7 +103,7 @@ def test_local_fallback_is_marked_replaceable():
 
 
 def test_real_ai_reply_appends_after_fallback():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.ai_in_flight = 1
     app.reply_timer.active = True
     app._batch_id = 7
@@ -148,21 +128,12 @@ def test_real_ai_reply_appends_after_fallback():
 
 
 def test_live_status_snapshot_messages():
-    snap = LiveStatusSnapshot(analyzing=True, delay_sec=2.3, stale_drops=4)
-    assert "2.3" in snap.detail_message()
-    assert "4" in snap.detail_message()
+    snap = LiveStatusSnapshot(analyzing=True, delay_sec=2.3)
+    detail = snap.detail_message()
+    assert "2.3" in detail
+    assert "丢弃" not in detail
+    assert "dropped" not in detail.lower()
 
 
 def test_is_model_slow_when_inflight_elapsed():
     assert is_model_slow([], 5.0, in_flight=True) is True
-
-
-def test_screenshot_interval_ms_scales_with_backoff():
-    assert screenshot_interval_ms(2, 0) == 2000
-    assert screenshot_interval_ms(2, 2) == 4000
-
-
-def test_should_backoff_screenshot_after_burst():
-    now = time.monotonic()
-    times = [now - i for i in range(4)]
-    assert should_backoff_screenshot(times, now) is True

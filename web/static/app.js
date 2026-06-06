@@ -9,7 +9,7 @@ import {
   setRealtimeHandlers,
   startRealtimeTransport,
 } from './modules/transport.js';
-import { applyStatus, configureStatus } from './modules/status.js';
+import { applyStatus, configureStatus, getLastAppliedStatus } from './modules/status.js';
 import {
   appendLog,
   bootstrapLogsFromServer,
@@ -44,7 +44,9 @@ import {
   initNormalBatchControls,
   initSidebarNavFloatingHints,
   bindSettingsControls,
+  switchSettingsTab,
 } from './modules/settings.js';
+import { initTheme } from './modules/theme.js';
 import {
   loadAnnouncementsReadState,
   refreshAnnouncementsUnreadBadge,
@@ -567,6 +569,50 @@ async function deleteSelectedCustomDanmuPoolItems() {
 
 let danmuReadConfigCache = null;
 
+function syncDanmuReadCustomFieldsUi() {
+  const provider = document.getElementById('danmuReadProvider')?.value || '';
+  const endpointEl = document.getElementById('danmuReadEndpoint');
+  const modelEl = document.getElementById('danmuReadModelId');
+  const useCustom = provider === 'custom_openai';
+  if (endpointEl) {
+    endpointEl.disabled = !useCustom;
+    if (!useCustom) endpointEl.value = '';
+  }
+  if (modelEl) {
+    modelEl.disabled = !useCustom;
+    if (!useCustom) modelEl.value = '';
+  }
+}
+
+function collectDanmuReadCustomPayload() {
+  const provider = document.getElementById('danmuReadProvider')?.value || '';
+  const endpoint = document.getElementById('danmuReadEndpoint')?.value?.trim() || '';
+  const modelId = document.getElementById('danmuReadModelId')?.value?.trim() || '';
+  const payload = { provider, endpoint, model_id: modelId };
+  if (!provider && !endpoint && !modelId) {
+    return { provider: '', endpoint: '', model_id: '' };
+  }
+  return payload;
+}
+
+function validateDanmuReadCustomFields(payload) {
+  const provider = payload.provider || '';
+  const endpoint = payload.endpoint || '';
+  const modelId = payload.model_id || '';
+  if (!provider && !endpoint && !modelId) {
+    return true;
+  }
+  if (!endpoint) {
+    showToast('请填写 API 地址', true);
+    return false;
+  }
+  if (!modelId) {
+    showToast('请填写模型名称', true);
+    return false;
+  }
+  return true;
+}
+
 function applyDanmuReadForm(cfg) {
   danmuReadConfigCache = cfg;
   const enabledEl = document.getElementById('danmuReadEnabled');
@@ -574,6 +620,9 @@ function applyDanmuReadForm(cfg) {
   const keyEl = document.getElementById('danmuReadApiKey');
   const voiceEl = document.getElementById('danmuReadVoice');
   const styleEl = document.getElementById('danmuReadStylePrompt');
+  const providerEl = document.getElementById('danmuReadProvider');
+  const endpointEl = document.getElementById('danmuReadEndpoint');
+  const modelIdEl = document.getElementById('danmuReadModelId');
   const modelLabel = document.getElementById('danmuReadModelLabel');
   const endpointLabel = document.getElementById('danmuReadEndpointLabel');
   if (enabledEl) enabledEl.checked = Boolean(cfg.enabled);
@@ -581,6 +630,15 @@ function applyDanmuReadForm(cfg) {
   if (keyEl) keyEl.value = cfg.api_key || '';
   if (voiceEl && cfg.voice) voiceEl.value = cfg.voice;
   if (styleEl) styleEl.value = cfg.style_prompt || '';
+  const useCustom = Boolean(cfg.use_custom_model);
+  if (providerEl) {
+    providerEl.value = useCustom
+      ? (cfg.provider || 'custom_openai')
+      : '';
+  }
+  if (endpointEl) endpointEl.value = cfg.custom_endpoint || '';
+  if (modelIdEl) modelIdEl.value = cfg.custom_model_id || '';
+  syncDanmuReadCustomFieldsUi();
   if (modelLabel) modelLabel.textContent = cfg.model || 'mimo-v2.5-tts';
   if (endpointLabel) endpointLabel.textContent = cfg.endpoint || '—';
 }
@@ -593,11 +651,16 @@ async function loadDanmuReadPage() {
 }
 
 async function saveDanmuReadSettings() {
+  const customPayload = collectDanmuReadCustomPayload();
+  if (!validateDanmuReadCustomFields(customPayload)) {
+    return;
+  }
   const body = {
     enabled: Boolean(document.getElementById('danmuReadEnabled')?.checked),
     interval_sec: parseInt(document.getElementById('danmuReadInterval')?.value, 10) || 10,
     voice: document.getElementById('danmuReadVoice')?.value || '冰糖',
     style_prompt: document.getElementById('danmuReadStylePrompt')?.value || '',
+    ...customPayload,
   };
   const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
   if (keyInput && keyInput !== '********') {
@@ -612,9 +675,13 @@ async function saveDanmuReadSettings() {
 }
 
 async function probeDanmuRead() {
+  const customPayload = collectDanmuReadCustomPayload();
+  if (!validateDanmuReadCustomFields(customPayload)) {
+    return;
+  }
   const status = document.getElementById('danmuReadStatus');
   if (status) status.textContent = '试听请求中（约 10–20 秒）…';
-  const body = {};
+  const body = { ...customPayload };
   const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
   if (keyInput && keyInput !== '********') {
     body.api_key = keyInput;
@@ -628,6 +695,7 @@ async function probeDanmuRead() {
 }
 
 function initDanmuReadPage() {
+  document.getElementById('danmuReadProvider')?.addEventListener('change', syncDanmuReadCustomFieldsUi);
   document.getElementById('btnSaveDanmuRead')?.addEventListener('click', () => {
     saveDanmuReadSettings().catch((e) => showToast(e.message, true));
   });
@@ -638,6 +706,7 @@ function initDanmuReadPage() {
       showToast(e.message, true);
     });
   });
+  syncDanmuReadCustomFieldsUi();
 }
 
 function initDanmuPoolPage() {
@@ -746,6 +815,66 @@ async function loadPersonaEditor() {
   if (currentPersonaId) sel.value = currentPersonaId;
   await loadPersonaTemplate();
   await loadPersonaeCheckboxes('personaActiveList');
+  await loadLiveTopic();
+  await loadUserNickname();
+}
+
+
+async function loadLiveTopic() {
+  const input = document.getElementById('liveTopicInput');
+  if (!input) return;
+  try {
+    const cfg = await apiFetch('/api/config');
+    input.value = cfg?.live_topic ?? '';
+  } catch (err) {
+    console.warn('loadLiveTopic failed:', err);
+  }
+}
+
+
+async function saveLiveTopic() {
+  const input = document.getElementById('liveTopicInput');
+  if (!input) return;
+  const value = (input.value || '').trim().slice(0, 200);
+  try {
+    await apiFetch('/api/config', {
+      method: 'PUT',
+      body: JSON.stringify({ live_topic: value }),
+    });
+    input.value = value;
+    showToast(value ? '主题已保存~' : '主题已清空~');
+  } catch (err) {
+    showToast(err.message || '主题保存失败', true);
+  }
+}
+
+
+async function loadUserNickname() {
+  const input = document.getElementById('userNicknameInput');
+  if (!input) return;
+  try {
+    const cfg = await apiFetch('/api/config');
+    input.value = cfg?.user_nickname ?? '';
+  } catch (err) {
+    console.warn('loadUserNickname failed:', err);
+  }
+}
+
+
+async function saveUserNickname() {
+  const input = document.getElementById('userNicknameInput');
+  if (!input) return;
+  const value = (input.value || '').trim().slice(0, 20);
+  try {
+    await apiFetch('/api/config', {
+      method: 'PUT',
+      body: JSON.stringify({ user_nickname: value }),
+    });
+    input.value = value;
+    showToast(value ? '昵称已保存~' : '昵称已清空~');
+  } catch (err) {
+    showToast(err.message || '昵称保存失败', true);
+  }
 }
 
 async function loadPersonaTemplate() {
@@ -991,6 +1120,10 @@ async function initAppVersionAndUpdateCheck() {
 
 
 function navigate(page) {
+  if (page === 'danmu-read') {
+    page = 'settings';
+    switchSettingsTab('danmu-read');
+  }
   document.querySelectorAll('.page-panel').forEach((p) => p.classList.remove('active'));
   document.querySelectorAll('#nav .sidebar-item').forEach((n) => n.classList.remove('active'));
   const panel = document.getElementById(`page-${page}`);
@@ -1004,7 +1137,6 @@ function navigate(page) {
   }
   if (page === 'persona') loadPersonaEditor().catch(console.error);
   if (page === 'danmu-pool') loadDanmuPoolPage().catch((e) => showToast(e.message, true));
-  if (page === 'danmu-read') loadDanmuReadPage().catch((e) => showToast(e.message, true));
   if (page === 'announcements') {
     stopAnnouncementsBadgePolling();
     updateAnnouncementsNavBadge(false);
@@ -1023,6 +1155,7 @@ function navigate(page) {
 }
 
 async function init() {
+  initTheme();
   await refreshSession();
   await loadAnnouncementsReadState();
 
@@ -1058,6 +1191,7 @@ async function init() {
   initNormalBatchControls();
   initDanmuPoolPage();
   initDanmuReadPage();
+  loadDanmuReadPage().catch(console.error);
   initCaptureRegionControls();
   initRestoreDefaultsControls();
 
@@ -1119,8 +1253,8 @@ async function init() {
 
   document.getElementById('btnToggle').addEventListener('click', async () => {
     try {
-      const st = await fetch(`${API.base}/api/status`).then((r) => r.json());
-      if (st.running) {
+      const running = getLastAppliedStatus()?.running ?? false;
+      if (running) {
         await apiFetch('/api/stop', { method: 'POST' });
         showToast('小助手已休息~');
       } else {
@@ -1140,6 +1274,12 @@ async function init() {
     if (e.target.id === 'errorReportModal') dismissErrorReportModal();
   });
   document.getElementById('personaSelect')?.addEventListener('change', () => loadPersonaTemplate());
+  document.getElementById('btnSaveLiveTopic')?.addEventListener('click', () => {
+    saveLiveTopic().catch((err) => showToast(err.message || '主题保存失败', true));
+  });
+  document.getElementById('btnSaveUserNickname')?.addEventListener('click', () => {
+    saveUserNickname().catch((err) => showToast(err.message || '昵称保存失败', true));
+  });
   document.getElementById('btnSavePersona')?.addEventListener('click', async () => {
     const name = document.getElementById('personaSelect').value;
     try {
@@ -1168,6 +1308,10 @@ async function init() {
   document.getElementById('btnNewPersona')?.addEventListener('click', async () => {
     const name = prompt('新人格名称：');
     if (!name?.trim()) return;
+    if (/[/\\%#?]/.test(name)) {
+      showToast('人格名称不能包含 / \\ % # ? 等特殊字符', true);
+      return;
+    }
     try {
       await apiFetch('/api/personae', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
       currentPersonaId = name.trim();

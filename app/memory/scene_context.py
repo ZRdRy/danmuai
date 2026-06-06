@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from app.memory.types import (
     OPEN_THREADS_MAX,
     SCENE_SUMMARY_MAX_LEN,
-    STABLE_CONFIDENCE_THRESHOLD,
     STABLE_FACTS_MAX,
     VOLATILE_FACTS_MAX,
     VisualMemoryUpdate,
@@ -107,30 +106,6 @@ class SceneContextMemory:
             self.confidence = max(self.confidence, min(1.0, update.confidence))
         self.updated_at = time.monotonic()
 
-    def carryover_summary_line(self) -> str:
-        """场景切换时用于 medium/loose 的单行摘要，优先级：summary > last_focus > 末条 stable。
-
-        调用方：SceneMemoryStore.on_scene_change 的 medium/loose 分支。
-        优先级 summary>focus>stable 是因为 summary 最概括、focus 次之、stable 末条最片面。
-        """
-        if self.scene_summary:
-            return self.scene_summary
-        if self.last_focus:
-            return self.last_focus
-        if self.stable_facts:
-            return self.stable_facts[-1]
-        return ""
-
-    def filter_stable_for_medium(self) -> list[str]:
-        """medium 策略保留的 stable：整包 confidence≥0.6，否则仅保留短句（≤40 字）防噪声。
-
-        confidence≥0.6 时整包保留（已确认的事实集可信，丢弃任意一条可能丢失关键信息）；
-        低于阈值时仅保留短句（≤40字），低置信时长句更可能是噪声。
-        """
-        if self.confidence >= STABLE_CONFIDENCE_THRESHOLD:
-            return list(self.stable_facts)
-        return [f for f in self.stable_facts if len(f) <= SCENE_SUMMARY_MAX_LEN]
-
     def reset_for_generation(
         self,
         scene_generation: int,
@@ -144,7 +119,7 @@ class SceneContextMemory:
         last_focus: str = "",
         confidence: float = 0.0,
     ) -> None:
-        """场景代际切换时重建卡片；由 SceneMemoryStore.on_scene_change 写入保留字段。"""
+        """按新代际重建场景卡片（测试/扩展用；主链路运行期代际恒为 0）。"""
         self.scene_generation = scene_generation
         self.scene_type = scene_type
         self.scene_summary = scene_summary

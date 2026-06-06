@@ -1,5 +1,6 @@
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from app.mic_buffer import MicRingBuffer, clamp_mic_window_sec
 from app.mic_capture import MicCaptureService
@@ -67,6 +68,8 @@ def test_try_snapshot_pcm_ms_returns_none_when_lock_held():
 
 def test_sync_mic_service_keeps_capture_when_danmu_pauses(monkeypatch):
     """BUG-032: pausing danmu must not stop mic capture when mic mode stays enabled."""
+    from app.mic_orchestrator import MicOrchestrator
+
     app = DanmuApp.__new__(DanmuApp)
     bind_minimal_danmu_app(
         app,
@@ -83,16 +86,79 @@ def test_sync_mic_service_keeps_capture_when_danmu_pauses(monkeypatch):
     )
     app._mic_service = mic_service
     app._mic_poll_timer = FakeTimer()
-    app._mic_utterance_detector = None
+    app._mic_orchestrator = MicOrchestrator(
+        mic_service=mic_service,
+        on_utterance_end=lambda: None,
+        log_fn=lambda _msg: None,
+    )
     app.engine.running = False
 
-    monkeypatch.setattr("main.mic_audio_supported_for_config", lambda _cfg: True)
-    app._stop_mic_utterance_detector = lambda: None
+    monkeypatch.setattr("main.mic_audio_supported_for_mic_config", lambda _cfg: True)
 
     DanmuApp._sync_mic_service(app)
 
     assert sync_calls == []
     assert stop_called == []
+
+
+def _bind_app_for_stop(app, *, mic_service, mic_orchestrator) -> None:
+    app.screenshot_timer = FakeTimer()
+    app._live_status_timer = FakeTimer()
+    app._pool_topup_timer = FakeTimer()
+    app.ai_worker = SimpleNamespace(mark_stopping=lambda: None)
+    app.overlay = SimpleNamespace(stop_render_loop=lambda: None, hide=lambda: None)
+    app.tray = SimpleNamespace(update_state=lambda **kw: None)
+    app.state_changed = Mock()
+    app._mic_service = mic_service
+    app._mic_orchestrator = mic_orchestrator
+    app._mic_poll_timer = FakeTimer()
+    object.__setattr__(
+        app,
+        "_flush_session_runtime_to_lifetime",
+        DanmuApp._flush_session_runtime_to_lifetime.__get__(app, DanmuApp),
+    )
+    object.__setattr__(app, "_ensure_stats_state", DanmuApp._ensure_stats_state.__get__(app, DanmuApp))
+    object.__setattr__(app, "_sync_mic_service", DanmuApp._sync_mic_service.__get__(app, DanmuApp))
+    object.__setattr__(
+        app,
+        "_get_request_timing_service",
+        DanmuApp._get_request_timing_service.__get__(app, DanmuApp),
+    )
+
+
+def test_stop_keeps_mic_capture_when_mode_enabled(monkeypatch):
+    """BUG-032: stop() must not close mic capture when mic mode stays enabled."""
+    from app.mic_orchestrator import MicOrchestrator
+
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(
+        app,
+        config=FakeConfig({"mic_mode_enabled": "1"}),
+    )
+    sync_calls: list[bool] = []
+    stop_called: list[bool] = []
+
+    mic_service = SimpleNamespace(
+        is_running=lambda: True,
+        sync=lambda *, enabled: sync_calls.append(enabled),
+        stop=lambda: stop_called.append(True),
+        last_error=lambda: "",
+    )
+    mic_orchestrator = MicOrchestrator(
+        mic_service=mic_service,
+        on_utterance_end=lambda: None,
+        log_fn=lambda _msg: None,
+    )
+    app.engine.running = True
+    _bind_app_for_stop(app, mic_service=mic_service, mic_orchestrator=mic_orchestrator)
+
+    monkeypatch.setattr("main.mic_audio_supported_for_mic_config", lambda _cfg: True)
+
+    DanmuApp.stop(app)
+
+    assert stop_called == []
+    assert sync_calls == []
+    assert mic_service.is_running()
 
 
 def test_build_mic_insert_user_pt():

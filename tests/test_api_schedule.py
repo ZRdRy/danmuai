@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 from app.api_schedule import ENGINE_BASE_FPS, min_api_interval_ms, time_to_anchor_boundary
 
-from tests.test_p0_main_flow import FakeLogger, _make_minimal_app
+from tests.conftest import make_minimal_danmu_app
+from tests.fakes import FakeLogger
 
 
 def _bind_schedule(app, **overrides):
@@ -17,10 +18,8 @@ def _bind_schedule(app, **overrides):
         "_latest_screenshot_id": 1,
         "_latest_requested_screenshot_id": 0,
         "_scene_generation": 0,
-        "_last_api_trigger_at": 0.0,
         "_is_generating": False,
         "ai_in_flight": 0,
-        "_rtt_history": [],
         "personae": MagicMock(pick_random=MagicMock(return_value="p1"), get_prompt=MagicMock(return_value=("s", "u"))),
         "_publish_live_status": lambda: None,
         "config": MagicMock(
@@ -39,17 +38,20 @@ def _bind_schedule(app, **overrides):
 
 @pytest.fixture
 def schedule_app():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     calls = []
 
     def _record(source="unknown"):
         block = app._api_schedule_block_reason(enforce_min_interval=True)
         if block:
             return
-        app._last_api_trigger_at = time.monotonic()
+        app.get_request_scheduler().record_trigger_time(now=time.monotonic())
         calls.append(source)
 
     _bind_schedule(app)
+    from main import DanmuApp
+
+    app._api_schedule_block_reason = DanmuApp._api_schedule_block_reason.__get__(app, DanmuApp)
     app._trigger_api_call = _record  # type: ignore[method-assign]
     app.calls = calls
     return app

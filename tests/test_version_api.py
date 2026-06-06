@@ -7,7 +7,7 @@ from app.web_api.routes import register_web_routes
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tests.test_web_console import FakeConfig
+from tests.fakes import FakeConfig
 
 
 def test_get_api_version():

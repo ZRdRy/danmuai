@@ -8,9 +8,8 @@ from app.reply_queue import QueuedReply
 from app.scene_memory import SceneMemoryStore, append_memory_to_user_pt
 from main import DanmuApp
 
-from tests.conftest import bind_minimal_danmu_app
+from tests.conftest import bind_minimal_danmu_app, make_minimal_danmu_app
 from tests.fakes import FakeConfig
-from tests.test_p0_main_flow import _make_minimal_app
 
 
 def _store_with_bullets(*phrases: str, gen: int = 0) -> SceneMemoryStore:
@@ -63,51 +62,6 @@ def test_memory_mode_scene_card_appends_block():
     assert "【当前场景状态】" in result
     assert "延续语境" in result
     assert "必须以当前截图" in result
-
-
-def test_scene_change_strict_clears_memory():
-    store = _store_with_bullets("旧场景弹幕", gen=0)
-    store.update_from_visual_result(
-        VisualMemoryUpdate(scene_generation=0, scene_summary="旧场景", confidence=0.8)
-    )
-    store.on_scene_change(1, "strict")
-    block = store.format_prompt_for_generation(1, "scene_card")
-    assert block == "" or "旧场景弹幕" not in block
-
-
-def test_scene_change_medium_clears_volatile_keeps_stable():
-    store = SceneMemoryStore()
-    store.update_from_visual_result(
-        VisualMemoryUpdate(
-            scene_generation=0,
-            scene_summary="摘要",
-            stable_facts=["稳定事实"],
-            volatile_facts=["易变事实"],
-            confidence=0.8,
-        )
-    )
-    store.on_scene_change(1, "medium", tone_hint="轻松自然")
-    assert store.context.volatile_facts == []
-    assert store.context.scene_summary == ""
-    assert "稳定事实" in store.context.stable_facts
-    block = store.format_prompt_for_generation(1, "scene_card")
-    assert "易变事实" not in block
-    assert "轻松自然" in block
-
-
-def test_scene_change_loose_carries_summary():
-    store = SceneMemoryStore()
-    store.update_from_visual_result(
-        VisualMemoryUpdate(
-            scene_generation=0,
-            scene_summary="第一局打得不错",
-            confidence=0.5,
-        )
-    )
-    store.record_displayed_bullet("第一局打得不错", 0, window=10, angle="scene_0")
-    store.on_scene_change(1, "loose", memory_window=10)
-    block = store.format_prompt_for_generation(1, "scene_card")
-    assert "第一局" in block or "不错" in block
 
 
 def test_record_display_ignores_wrong_generation():
@@ -199,7 +153,7 @@ def test_consume_reply_queue_records_ai_display():
     }.get(key, default)
     cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
 
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.config = cfg
     app._scene_memory = SceneMemoryStore()
     app._record_scene_memory_display = DanmuApp._record_scene_memory_display.__get__(app, DanmuApp)
@@ -235,7 +189,7 @@ def test_consume_reply_queue_records_mic_display():
     }.get(key, default)
     cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
 
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.config = cfg
     app._scene_memory = SceneMemoryStore()
     app._record_scene_memory_display = DanmuApp._record_scene_memory_display.__get__(app, DanmuApp)
@@ -271,7 +225,7 @@ def test_consume_reply_queue_stale_does_not_record():
     }.get(key, default)
     cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
 
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.config = cfg
     app._scene_memory = SceneMemoryStore()
     app._scene_generation = 2
@@ -300,7 +254,7 @@ def test_consume_reply_queue_fallback_not_recorded():
     }.get(key, default)
     cfg.get_int = lambda key, default=0: 10 if key == "memory_window" else default
 
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.config = cfg
     app._scene_memory = SceneMemoryStore()
     app._scene_generation = 0
@@ -329,7 +283,7 @@ def test_append_memory_to_user_pt_no_block_unchanged():
 
 
 def test_enqueue_reply_batch_sets_memory_eligible():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app._batch_id = 1
     app._scene_generation = 0
     app._latest_screenshot_id = 1

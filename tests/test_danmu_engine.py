@@ -139,22 +139,6 @@ def test_drop_pending_below_generation_removes_offscreen_old_items(engine):
     assert track.items[0].content == "visible"
 
 
-def test_drop_items_below_scene_generation_removes_all_old_generation(engine):
-    from app.danmu_engine import DanmuItem
-
-    engine.screen_width = 1000.0
-    track = engine.tracks[0]
-    old = DanmuItem("old", scene_generation=0, x=400.0, width=80.0)
-    new = DanmuItem("new", scene_generation=2, x=500.0, width=80.0)
-    track.items = [old, new]
-
-    dropped = engine.drop_items_below_scene_generation(2)
-
-    assert dropped == 1
-    assert len(track.items) == 1
-    assert track.items[0].content == "new"
-
-
 def test_drop_items_with_batch_id_removes_matching_track_items():
     from app.danmu_engine import DanmuEngine, DanmuItem
 
@@ -173,22 +157,6 @@ def test_drop_items_with_batch_id_removes_matching_track_items():
     assert removed == 1
     assert len(track.items) == 1
     assert track.items[0].content == "keep"
-
-
-def test_drop_items_below_scene_generation_forgets_dedup(engine):
-    from app.danmu_engine import DanmuItem
-
-    engine.screen_width = 1000.0
-    track = engine.tracks[0]
-    old = DanmuItem("old-gen", scene_generation=0, x=400.0, width=80.0)
-    track.items = [old]
-    engine._remember_content("old-gen")
-    engine._rebuild_visibility_counts()
-
-    dropped = engine.drop_items_below_scene_generation(1)
-
-    assert dropped == 1
-    assert engine._is_duplicate("old-gen") is False
 
 
 def test_ai_reply_queue_uses_request_context_and_fifos_results():
@@ -281,8 +249,29 @@ def test_visible_display_count_skips_rebuild_when_counts_fresh(engine):
     assert rebuild_calls == []
 
 
-def test_needs_refill_always_rebuilds_visibility(engine):
-    """Documents BUG-070 hot path: needs_refill() always full-rebuilds today."""
+def test_deficit_below_min_skips_rebuild_when_counts_fresh(engine):
+    """BUG-034: fresh visibility cache must not O(n) rebuild on deficit_below_min."""
+    engine.config.set("min_on_screen", "5")
+    engine.tracks[0].add(DanmuItem(content="on-screen", x=400.0, width=80.0))
+    engine._rebuild_visibility_counts()
+
+    rebuild_calls: list[int] = []
+    original_rebuild = engine._rebuild_visibility_counts
+
+    def counting_rebuild() -> None:
+        rebuild_calls.append(1)
+        return original_rebuild()
+
+    engine._rebuild_visibility_counts = counting_rebuild  # type: ignore[method-assign]
+
+    for _ in range(50):
+        engine.deficit_below_min()
+
+    assert rebuild_calls == []
+
+
+def test_needs_refill_rebuilds_when_visibility_stale(engine):
+    """needs_refill() rebuilds only when visibility counts are stale (BUG-070)."""
     engine.tracks[0].add(DanmuItem(content="one", x=400.0, width=80.0))
     engine._rebuild_visibility_counts()
     assert not engine._visibility_stale
@@ -299,5 +288,8 @@ def test_needs_refill_always_rebuilds_visibility(engine):
     engine.config.set("danmu_pool_enabled", "1")
     engine.config.set("min_on_screen", "5")
     engine.needs_refill()
+    assert rebuild_calls == []
 
+    engine._mark_visibility_stale()
+    engine.needs_refill()
     assert len(rebuild_calls) >= 1

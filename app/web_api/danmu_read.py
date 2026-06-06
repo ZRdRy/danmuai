@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fastapi import HTTPException
+
 from app.application.config_service import MASKED_API_KEY
 from app.danmu_read_service import export_danmu_read_config
 from app.danmu_tts import normalize_tts_voice
+from app.model_providers import normalize_endpoint
+from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -17,18 +21,35 @@ def get_config(app: "DanmuApp") -> dict[str, object]:
 
 
 def save_config(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, object]:
-    return app.apply_danmu_read_config(payload)
+    try:
+        return app.apply_danmu_read_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def run_probe(app: "DanmuApp", payload: dict[str, Any] | None = None) -> dict[str, object]:
-    override = None
+    overrides: dict[str, str | None] = {
+        "api_key_override": None,
+        "provider_override": None,
+        "endpoint_override": None,
+        "model_id_override": None,
+    }
     if payload:
         raw = payload.get("api_key")
         if isinstance(raw, str):
             key = raw.strip()
             if key and key != MASKED_API_KEY:
-                override = key
-    return app.run_danmu_read_probe(api_key_override=override)
+                overrides["api_key_override"] = key
+        if "provider" in payload:
+            provider = str(payload.get("provider") or "").strip()
+            overrides["provider_override"] = provider or TTS_PROVIDER_CUSTOM_OPENAI
+        if "endpoint" in payload:
+            endpoint = normalize_endpoint(str(payload.get("endpoint") or ""))
+            overrides["endpoint_override"] = endpoint
+        if "model_id" in payload:
+            model_id = str(payload.get("model_id") or "").strip()
+            overrides["model_id_override"] = model_id
+    return app.run_danmu_read_probe(**overrides)
 
 
 def normalize_put_payload(body: dict[str, Any]) -> dict[str, Any]:
@@ -45,4 +66,18 @@ def normalize_put_payload(body: dict[str, Any]) -> dict[str, Any]:
         key = str(body.get("api_key") or "").strip()
         if key and key != MASKED_API_KEY:
             out["api_key"] = key
+    if "provider" in body:
+        out["provider"] = str(body.get("provider") or "").strip()
+    if "endpoint" in body:
+        out["endpoint"] = normalize_endpoint(str(body.get("endpoint") or ""))
+    if "model_id" in body:
+        out["model_id"] = str(body.get("model_id") or "").strip()
     return out
+
+
+def safe_read_api(fn, *args, **kwargs):
+    """只读 API：可在 HTTP 线程直接调用（不写入 Config / 不 emit Qt 信号）。"""
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

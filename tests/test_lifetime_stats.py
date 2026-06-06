@@ -14,7 +14,7 @@ from app.lifetime_stats import (
     LifetimeStats,
 )
 
-from tests.test_web_console import FakeConfig
+from tests.fakes import FakeConfig
 
 
 def _make_bridge_status_app(**attrs):
@@ -190,3 +190,15 @@ def test_flush_runtime_persists_before_mutating_memory():
 
     stats2 = LifetimeStats(cfg)
     assert stats2.snapshot()["lifetime_runtime_sec"] == 17.5
+
+
+def test_add_danmu_negative_raises():
+    stats = LifetimeStats(FakeConfig())
+    with pytest.raises(ValueError):
+        stats.add_danmu(-1)
+
+
+def test_add_tokens_negative_raises():
+    stats = LifetimeStats(FakeConfig())
+    with pytest.raises(ValueError):
+        stats.add_tokens(input_tokens=-1)

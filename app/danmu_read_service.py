@@ -11,11 +11,15 @@ from app.application.config_service import MASKED_API_KEY
 from app.danmu_tts import (
     TTS_PROBE_TEXT,
     DanmuTtsError,
+    ResolvedTtsConfig,
     clamp_read_interval_sec,
     normalize_tts_voice,
+    resolve_tts_config,
     synthesize_mimo_tts,
 )
 from app.danmu_tts_playback import DanmuTtsPlayback
+from app.model_providers import normalize_endpoint
+from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI, validate_custom_tts_fields
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -54,6 +58,13 @@ def danmu_read_enabled(config) -> bool:
     return config.get("danmu_read_enabled", "0") == "1"
 
 
+def _normalize_tts_provider(value: object) -> str:
+    raw = str(value or "").strip()
+    if raw in ("", "mimo", TTS_PROVIDER_CUSTOM_OPENAI):
+        return raw
+    return TTS_PROVIDER_CUSTOM_OPENAI
+
+
 class _DanmuTtsRunnable(QRunnable):
     def __init__(
         self,
@@ -63,6 +74,7 @@ class _DanmuTtsRunnable(QRunnable):
         api_key: str,
         voice: str,
         style_prompt: str,
+        resolved: ResolvedTtsConfig,
     ) -> None:
         super().__init__()
         self._service = service
@@ -70,6 +82,7 @@ class _DanmuTtsRunnable(QRunnable):
         self._api_key = api_key
         self._voice = voice
         self._style_prompt = style_prompt
+        self._resolved = resolved
         self.setAutoDelete(True)
 
     def run(self) -> None:
@@ -79,6 +92,7 @@ class _DanmuTtsRunnable(QRunnable):
                 self._text,
                 style_prompt=self._style_prompt,
                 voice=self._voice,
+                resolved=self._resolved,
             )
         except DanmuTtsError as exc:
             _emit_tts_failed(self._service, str(exc))
@@ -171,6 +185,22 @@ class DanmuReadService(QObject):
             items["tts_voice"] = normalize_tts_voice(str(patch.get("voice") or ""))
         if "style_prompt" in patch:
             items["tts_style_prompt"] = str(patch.get("style_prompt", ""))
+
+        provider = _normalize_tts_provider(patch.get("provider", ""))
+        endpoint = normalize_endpoint(str(patch.get("endpoint") or ""))
+        model_id = str(patch.get("model_id") or "").strip()
+        if "provider" in patch or "endpoint" in patch or "model_id" in patch:
+            if provider in ("", "mimo") and not endpoint and not model_id:
+                items["tts_provider"] = ""
+                items["tts_endpoint"] = ""
+                items["tts_model_id"] = ""
+            else:
+                resolved_provider = provider or TTS_PROVIDER_CUSTOM_OPENAI
+                validate_custom_tts_fields(resolved_provider, endpoint, model_id)
+                items["tts_provider"] = resolved_provider
+                items["tts_endpoint"] = endpoint
+                items["tts_model_id"] = model_id
+
         if items:
             config.set_batch(items)
         api_key = patch.get("api_key")
@@ -181,14 +211,22 @@ class DanmuReadService(QObject):
         self._skip_log_flags.discard("no_key")
         self._sync_timer()
         self._app.logger.info(
-            "danmu read: config saved enabled=%s interval=%ss has_key=%s",
+            "danmu read: config saved enabled=%s interval=%ss has_key=%s custom=%s",
             danmu_read_enabled(config),
             config.get("danmu_read_interval_sec", "10"),
             bool(config.get_tts_api_key()),
+            resolve_tts_config(config).is_custom,
         )
         return export_danmu_read_config(config)
 
-    def run_probe(self, *, api_key_override: str | None = None) -> dict[str, object]:
+    def run_probe(
+        self,
+        *,
+        api_key_override: str | None = None,
+        provider_override: str | None = None,
+        endpoint_override: str | None = None,
+        model_id_override: str | None = None,
+    ) -> dict[str, object]:
         config = self._app.config
         api_key = (api_key_override or "").strip() or config.get_tts_api_key()
         if not api_key:
@@ -197,6 +235,15 @@ class DanmuReadService(QObject):
             return {"ok": False, "message": "正在播放或合成，请稍后再试听"}
         voice = normalize_tts_voice(config.get("tts_voice", ""))
         style = config.get("tts_style_prompt", "")
+        try:
+            resolved = resolve_tts_config(
+                config,
+                provider_override=provider_override,
+                endpoint_override=endpoint_override,
+                model_id_override=model_id_override,
+            )
+        except ValueError as exc:
+            return {"ok": False, "message": str(exc)}
         self._tts_in_flight = True
         try:
             wav = synthesize_mimo_tts(
@@ -204,6 +251,7 @@ class DanmuReadService(QObject):
                 TTS_PROBE_TEXT,
                 style_prompt=style,
                 voice=voice,
+                resolved=resolved,
             )
         except DanmuTtsError as exc:
             self._tts_in_flight = False
@@ -242,6 +290,7 @@ class DanmuReadService(QObject):
         self._last_text = text
         voice = normalize_tts_voice(app.config.get("tts_voice", ""))
         style = app.config.get("tts_style_prompt", "")
+        resolved = resolve_tts_config(app.config)
         preview = text if len(text) <= 24 else f"{text[:24]}..."
         app.logger.info("danmu read: synthesizing %s", preview)
         self._tts_in_flight = True
@@ -251,6 +300,7 @@ class DanmuReadService(QObject):
             api_key=api_key,
             voice=voice,
             style_prompt=style,
+            resolved=resolved,
         )
         QThreadPool.globalInstance().start(runnable)
 
@@ -281,9 +331,11 @@ class DanmuReadService(QObject):
 
 
 def export_danmu_read_config(config) -> dict[str, object]:
-    from app.danmu_tts import MIMO_TTS_ENDPOINT, MIMO_TTS_MODEL
-
     key = config.get_tts_api_key()
+    resolved = resolve_tts_config(config)
+    stored_provider = (config.get("tts_provider") or "").strip()
+    stored_endpoint = normalize_endpoint(config.get("tts_endpoint") or "")
+    stored_model_id = (config.get("tts_model_id") or "").strip()
     return {
         "enabled": danmu_read_enabled(config),
         "interval_sec": clamp_read_interval_sec(
@@ -292,6 +344,10 @@ def export_danmu_read_config(config) -> dict[str, object]:
         "voice": normalize_tts_voice(config.get("tts_voice", "")),
         "style_prompt": config.get("tts_style_prompt", ""),
         "api_key": MASKED_API_KEY if key else "",
-        "model": MIMO_TTS_MODEL,
-        "endpoint": MIMO_TTS_ENDPOINT,
+        "provider": stored_provider,
+        "custom_endpoint": stored_endpoint,
+        "custom_model_id": stored_model_id,
+        "model": resolved.model,
+        "endpoint": resolved.endpoint,
+        "use_custom_model": resolved.is_custom,
     }

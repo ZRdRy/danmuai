@@ -257,6 +257,27 @@ def mic_audio_supported_for_config(config) -> bool:
     )
 
 
+def mic_audio_supported_for_mic_config(config) -> bool:
+    """Mic gating based on mic tab credentials (falls back to visual when linked)."""
+    if config.get("mic_use_visual_model", "1") == "1":
+        return mic_audio_supported_for_config(config)
+    endpoint = normalize_endpoint(config.get("mic_api_endpoint", ""))
+    getter = getattr(config, "get_mic_api_key", None)
+    api_key = (getter() if callable(getter) else "").strip()
+    model_id = (config.get("mic_model") or "").strip()
+    api_mode = normalize_mode(config.get("mic_api_mode", "doubao"))
+    if not endpoint or not api_key or not model_id:
+        return False
+    return model_supports_mic_audio(model_id, endpoint=endpoint, api_mode=api_mode)
+
+
+def resolve_mic_model_id(config) -> str:
+    """Model id used for mic runtime logs and support checks."""
+    if config.get("mic_use_visual_model", "1") == "1":
+        return resolve_active_model_id(config)
+    return (config.get("mic_model") or "").strip()
+
+
 def validate_model_config(data: dict) -> list[str]:
     """Return translation keys for validation errors (in order)."""
     errors: list[str] = []

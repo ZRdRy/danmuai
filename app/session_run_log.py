@@ -50,6 +50,8 @@ class SessionRunLog:
         output_tokens: int,
         danmu_count: int,
     ) -> SessionRunRecord | None:
+        if input_tokens < 0 or output_tokens < 0 or danmu_count < 0:
+            raise ValueError("session run counters must be non-negative")
         if self._pending_started_at <= 0:
             return None
         rec = SessionRunRecord(

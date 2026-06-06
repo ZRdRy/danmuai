@@ -96,6 +96,7 @@ def test_web_console_modules_exist():
         "diagnostics.js",
         "settings.js",
         "content-pages.js",
+        "theme.js",
     ):
         path = modules / name
         assert path.is_file(), f"missing {path}"
@@ -167,7 +168,7 @@ def test_status_js_renders_legacy_lifetime_token_note():
 
 
 def test_status_js_apply_status_uses_live_message_not_stale_drops():
-    """BUG-027: applyStatus 仅消费 live_message；live_stale_drops 未接线（生产常为 0）。"""
+    """BUG-027: applyStatus 仅消费 live_message；/api/status 不再暴露 live_stale_drops。"""
     root = project_root()
     status_js = (root / "web" / "static" / "modules" / "status.js").read_text(encoding="utf-8")
     assert "export function applyStatus" in status_js
@@ -196,3 +197,26 @@ def test_api_settings_visible_in_simplified_mode():
         idx = html.index(f'id="{field_id}"')
         chunk = html[max(0, idx - 120) : idx]
         assert "settings-full-only" not in chunk, field_id
+
+
+def test_mic_settings_tab_separate_from_api_panel():
+    html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'data-settings-tab="mic"' in html
+    assert 'id="settingsTab-mic"' in html
+    api_panel_start = html.index('id="settingsTab-api"')
+    api_panel_end = html.index('id="settingsTab-mic"')
+    api_panel = html[api_panel_start:api_panel_end]
+    assert 'id="mic_mode_enabled"' not in api_panel
+    assert 'id="mic_use_visual_model"' not in api_panel
+    assert html.count('id="settingsTab-mic"') == 1
+
+
+def test_tailwind_offline_bundle_packaged():
+    """BUG-059: 控制台使用内置 tailwindcdn.js，不依赖外网 CDN。"""
+    root = project_root()
+    bundle = root / "web" / "static" / "tailwindcdn.js"
+    assert bundle.is_file()
+    assert bundle.stat().st_size > 10_000
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "/static/tailwindcdn.js" in html
+    assert "cdn.tailwindcss.com" not in html

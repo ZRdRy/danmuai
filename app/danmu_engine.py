@@ -1,5 +1,8 @@
 """弹幕引擎：多轨道分配、去重、加速动画与可见性统计。
 
+弹幕显示不再有固定数量上限（默认 danmu_pending_entry_cap / danmu_track_retention_cap 为 0）。
+仅在用户配置 retention cap 时对屏外 pending 做淘汰，避免无限内存增长。
+
 轨道分配策略（_pick_track）：
   1. 空闲轨道优先（随机选一条）
   2. 无空闲时按入口区逆密度加权随机（入口区越空权重越高）
@@ -50,6 +53,10 @@ DANMU_LINES_MIN = 12
 DANMU_LINES_MAX = 20
 DEFAULT_DANMU_LINES = 20
 
+# 0 = 无限制；>0 时仅作性能保护（屏外淘汰，非拒绝上屏）
+DANMU_PENDING_ENTRY_CAP_MAX = 9999
+DANMU_TRACK_RETENTION_CAP_MAX = 9999
+
 LAYOUT_MODE_RATIOS: dict[str, float] = {
     "fullscreen": 1.0,
     "3/4": 0.75,
@@ -70,6 +77,18 @@ def layout_height_ratio(config) -> float:
 
 def clamp_danmu_lines(value: int) -> int:
     return max(DANMU_LINES_MIN, min(int(value), DANMU_LINES_MAX))
+
+
+def resolve_danmu_pending_entry_cap(config) -> int:
+    """入口区 pending 上限；0 表示无限制。"""
+    raw = config.get_int("danmu_pending_entry_cap", 0)
+    return max(0, min(raw, DANMU_PENDING_ENTRY_CAP_MAX))
+
+
+def resolve_danmu_track_retention_cap(config) -> int:
+    """全轨道总保留条数；0 表示无限制。"""
+    raw = config.get_int("danmu_track_retention_cap", 0)
+    return max(0, min(raw, DANMU_TRACK_RETENTION_CAP_MAX))
 
 
 def resolve_danmu_max_chars(config, *, lang: str | None = None) -> int:
@@ -366,22 +385,66 @@ class DanmuEngine(QObject):
         return self.pending_entry_count()
 
     def max_pending_entry(self) -> int:
-        track_count = len(self.tracks)
-        if track_count <= 0:
-            return 0
-        return max(track_count, track_count * 2)
+        """入口区 pending 上限；0 表示无固定上限。"""
+        return resolve_danmu_pending_entry_cap(self.config)
 
     def _offscreen_refill_cap(self) -> int:
-        track_count = len(self.tracks)
-        if track_count <= 0:
-            return 1
-        return max(1, track_count // 2)
+        """池补足时的屏外 pending 参考上限；0 表示不阻塞补足。"""
+        return resolve_danmu_pending_entry_cap(self.config)
 
     def entry_zone_overloaded(self) -> bool:
         cap = self.max_pending_entry()
         if cap <= 0:
             return False
         return self.pending_entry_count() >= cap
+
+    def _track_retention_cap(self) -> int:
+        return resolve_danmu_track_retention_cap(self.config)
+
+    def _evict_furthest_offscreen_pending(self, max_drop: int = 1) -> int:
+        """淘汰 x >= screen_width 中最远的 pending 条目，释放 pixmap/可见性计数。"""
+        if max_drop <= 0:
+            return 0
+        sw = self.screen_width
+        dropped = 0
+        for _ in range(max_drop):
+            best_item: DanmuItem | None = None
+            best_track: Track | None = None
+            best_x = float("-inf")
+            for track in self.tracks:
+                for item in track.items:
+                    if item.x >= sw and item.x > best_x:
+                        best_x = item.x
+                        best_item = item
+                        best_track = track
+            if best_item is None or best_track is None:
+                break
+            self._detach_item_visibility(best_item)
+            best_item._pixmap = None
+            self._forget_content(best_item.content)
+            best_track.items.remove(best_item)
+            dropped += 1
+        if dropped:
+            self._visibility_stale = True
+        return dropped
+
+    def _prepare_capacity_for_new_item(self) -> bool:
+        """超配置 cap 时先屏外淘汰；默认无 cap 时恒 True。"""
+        pending_cap = self.max_pending_entry()
+        retention_cap = self._track_retention_cap()
+        if pending_cap <= 0 and retention_cap <= 0:
+            return True
+        safety = max(self.current_display_count(), pending_cap, retention_cap, 1) + 8
+        for _ in range(safety):
+            pending_over = pending_cap > 0 and self.pending_entry_count() >= pending_cap
+            retention_over = retention_cap > 0 and self.current_display_count() >= retention_cap
+            if not pending_over and not retention_over:
+                return True
+            if self._evict_furthest_offscreen_pending(1) <= 0:
+                break
+        pending_over = pending_cap > 0 and self.pending_entry_count() >= pending_cap
+        retention_over = retention_cap > 0 and self.current_display_count() >= retention_cap
+        return not pending_over and not retention_over
 
     def _item_visible(self, item: DanmuItem) -> bool:
         return item.x < self.screen_width and item.x + item.width > 0
@@ -489,16 +552,17 @@ class DanmuEngine(QObject):
         *,
         skip_dedup: bool = False,
     ) -> DanmuItem | None:
-        """弹幕入轨：截断 → 去重 → 入口区过载检查 → _pick_track → 记入 recent 窗口。
+        """弹幕入轨：截断 → 去重 → 可选屏外淘汰 → _pick_track → 记入 recent 窗口。
 
-        初始 x 在屏幕右缘外（待滚入）；skip_dedup 用于池补齐等已在外层去重的文本。
+        默认无固定上屏数量上限；初始 x 在屏幕右缘外（待滚入）。
+        skip_dedup 用于池补齐等已在外层去重的文本。
         """
         content = normalize_danmu_display_text(content, self.config)
 
         if not skip_dedup and self._is_duplicate(content):
             return None
 
-        if not self._can_accept_more():
+        if not self._prepare_capacity_for_new_item():
             return None
 
         item = DanmuItem(
@@ -547,20 +611,13 @@ class DanmuEngine(QObject):
             weights = [w / total for w in weights]
             return random.choices(acceptable, weights=weights, k=1)[0]
 
-        # 3. 全满 fallback：入口区已过载或队尾过远则拒绝，否则从 rightmost_edge 最小的前 3 条中随机选
-        if self.entry_zone_overloaded():
-            return None
+        # 3. 全满 fallback：允许在任意右侧 x 排队（仅 min_gap 防重叠，无固定数量上限）
         candidates = sorted(self.tracks, key=lambda t: t.rightmost_edge())[:3]
         best_track = random.choice(candidates)
         tail_edge = best_track.rightmost_edge()
-        if tail_edge > self.screen_width + ENTRY_ZONE_PX:
-            return None
         item.x = max(item.x, tail_edge + random.uniform(50.0, 250.0))
         if item.x < tail_edge + min_gap:
             item.x = tail_edge + min_gap
-        cap = self.screen_width + FADE_IN_PX - 1.0
-        if item.x > cap:
-            return None
         return best_track
 
     def danmu_pool_enabled(self) -> bool:
@@ -616,7 +673,8 @@ class DanmuEngine(QObject):
 
     def visible_display_texts(self) -> list[str]:
         """当前在屏可见弹幕正文（去重，供读弹幕 TTS 抽样）。"""
-        self._rebuild_visibility_counts()
+        if self._visibility_stale or not self._visibility_counts_seeded:
+            self._rebuild_visibility_counts()
         seen: set[str] = set()
         texts: list[str] = []
         for track in self.tracks:
@@ -690,37 +748,18 @@ class DanmuEngine(QObject):
             self._visibility_stale = True
         return dropped
 
-    def drop_items_below_scene_generation(self, min_generation: int) -> int:
-        """丢弃 scene_generation < min_generation 的全部弹幕（loose 策略清屏）。"""
-        dropped = 0
-        for track in self.tracks:
-            kept: list[DanmuItem] = []
-            for item in track.items:
-                if item.scene_generation < min_generation:
-                    self._detach_item_visibility(item)
-                    item._pixmap = None
-                    self._forget_content(item.content)
-                    dropped += 1
-                else:
-                    kept.append(item)
-            track.items = kept
-        if dropped:
-            self._visibility_stale = True
-        return dropped
-
     def _can_accept_more(self) -> bool:
-        return not self.entry_zone_overloaded()
+        """兼容调用点：默认无 cap 时恒 True；有 cap 时尝试屏外淘汰后再判定。"""
+        return self._prepare_capacity_for_new_item()
 
     def needs_refill(self) -> bool:
         min_n = self.min_on_screen()
         if min_n <= 0:
             return False
-        if self.entry_zone_overloaded():
+        offscreen_cap = self._offscreen_refill_cap()
+        if offscreen_cap > 0 and self.offscreen_pending_count() >= offscreen_cap:
             return False
-        if self.offscreen_pending_count() >= self._offscreen_refill_cap():
-            return False
-        self._rebuild_visibility_counts()
-        return self._visible_count < min_n
+        return self.visible_display_count() < min_n
 
     def trigger_acceleration(self, duration_frames: int = 60, peak: float = 2.0):
         """场景切换时触发先升后降加速；update() 内按进度在 1.0～peak 间插值。"""

@@ -27,12 +27,16 @@ class LifetimeStats:
         self._dirty = False
 
     def add_danmu(self, count: int = 1) -> None:
+        if count < 0:
+            raise ValueError("count must be non-negative")
         if count <= 0:
             return
         self._danmu += count
         self._dirty = True
 
     def add_tokens(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        if input_tokens < 0 or output_tokens < 0:
+            raise ValueError("token counts must be non-negative")
         changed = False
         if input_tokens > 0:
             self._input_tokens += input_tokens

@@ -10,11 +10,9 @@
 
 三种核心队列语义：
 1. **入队 push**：按到达顺序追加；超出 max_items 时从队首丢弃最旧条目（容量裁剪）。
-2. **代际淘汰（历史兼容）**：push 时若 item.scene_generation>0，先 drop_older_generations。
-   当前普通模式运行期 _scene_generation 恒为 0，该路径通常不触发；字段仍随请求携带供记忆/日志。
-3. **fallback 替换**：本地轻量兜底弹幕（replaceable=True）可被同批次的 AI 回复顶掉。
+2. **fallback 替换**：本地轻量兜底弹幕（replaceable=True）可被同批次的 AI 回复顶掉。
 
-过期回复硬丢弃由 main._is_reply_stale 负责（当前恒为不丢弃）；本队列不做 TTL 判定。
+scene_generation 字段随请求携带供记忆/日志；运行期恒为 0。本队列不做 TTL 判定。
 """
 from collections import deque
 from dataclasses import dataclass
@@ -31,7 +29,7 @@ class QueuedReply:
     screenshot_round: int = 0  # 调度轮次（粗粒度）；purge_before_round 按此淘汰
     screenshot_id: int = 0  # 逐帧 id，随请求/RTT 元数据携带；当前不参与 stale 硬丢弃
     captured_at: float = 0.0  # 截图 monotonic 时间戳（元数据）；当前不参与 TTL 硬丢弃
-    scene_generation: int = 0  # 记忆/日志兼容字段；drop_older_generations 仅在 >0 入队时生效
+    scene_generation: int = 0  # 记忆/日志兼容字段（运行期恒为 0）
     batch_id: int = 0  # drop_replaceable_fallbacks / 批次锚点加速
     request_id: str = ""  # 视觉 vs 麦克风来源；drop_replaceable_fallbacks 匹配
     is_fallback: bool = False  # True=本地轻量兜底批次，非模型输出
@@ -41,23 +39,25 @@ class QueuedReply:
 
 
 class AIReplyFIFOBuffer:
-    """有序 FIFO 缓冲：先入先出消费，容量有界（默认 max_items=8）。
-
-    缓冲 AI/兜底/麦克风插入批次；replaceable fallback 清理与容量裁剪配合，
-    避免低质量条目长期占位。当前主链路不对回复做 scene_generation/TTL 硬丢弃。
-    """
+    """有序 FIFO 缓冲：先入先出消费。max_items=0 表示无容量裁剪（默认由配置 reply_queue_max_items 控制）。"""
 
     def __init__(self, max_items: int = 8):
         self._items = deque()
-        self._max_items = max_items  # 容量上界：过大则消费延迟，过小则易空窗；默认 8
+        self._max_items = max(0, max_items)
+
+    def _trim_overflow(self, *, drop_from_left: bool) -> None:
+        if self._max_items <= 0:
+            return
+        while len(self._items) > self._max_items:
+            if drop_from_left:
+                self._items.popleft()
+            else:
+                self._items.pop()
 
     def push(self, item: QueuedReply):
-        """追加一条到队尾；若 item.scene_generation>0，先 drop_older_generations（兼容路径）。"""
-        if item.scene_generation > 0:
-            self.drop_older_generations(item.scene_generation)
+        """追加一条到队尾。"""
         self._items.append(item)
-        while len(self._items) > self._max_items:
-            self._items.popleft()
+        self._trim_overflow(drop_from_left=True)
 
     def pop(self) -> QueuedReply | None:
         """FIFO 队首取出一条，供 _consume_reply_queue 上屏。"""
@@ -80,9 +80,8 @@ class AIReplyFIFOBuffer:
         return len(self._items)
 
     def set_max_items(self, max_items: int):
-        self._max_items = max(1, max_items)
-        while len(self._items) > self._max_items:
-            self._items.pop()
+        self._max_items = max(0, max_items)
+        self._trim_overflow(drop_from_left=False)
 
     def extend(self, items: list[QueuedReply]):
         """批量 push，每条仍走代际淘汰（若 generation>0）与容量裁剪。"""
@@ -114,8 +113,7 @@ class AIReplyFIFOBuffer:
                     break
 
         self._items = deque([*items, *preserved])
-        while len(self._items) > self._max_items:
-            self._items.pop()
+        self._trim_overflow(drop_from_left=False)
 
     def drop_replaceable_fallbacks(
         self,

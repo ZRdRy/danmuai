@@ -24,6 +24,18 @@ def test_hub_broadcast_batch_without_subscribers():
     assert snap["last_broadcast_at"] is None
 
 
+def test_broadcast_item_default_source():
+    hub = LiveOverlayHub()
+    loop = asyncio.new_event_loop()
+    hub.set_loop(loop)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    hub.register(queue)
+    hub.broadcast_item("hello", y=10.0, screen_width=1920.0, screen_height=1080.0, speed=1.0, source=None)
+    loop.run_until_complete(asyncio.sleep(0.05))
+    item = queue.get_nowait()
+    assert item["source"] == "ai"
+
+
 def test_hub_broadcast_updates_snapshot_when_connected():
     hub = LiveOverlayHub()
     loop = asyncio.new_event_loop()

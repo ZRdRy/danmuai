@@ -1,9 +1,15 @@
-"""Startup argv / env helpers extracted from main.py (W-REFACTOR-MAIN-001)."""
+"""Startup / launch helpers extracted from main.py."""
 
 from __future__ import annotations
 
 import os
 import sys
+import traceback
+
+from PyQt6.QtWidgets import QApplication, QMessageBox
+
+from app.logger import SanitizedLogger
+from app.translations import tr
 
 DEPRECATED_LAUNCH_MSG = (
     "已移除 Qt 主窗（--qt-ui）。请使用: python main.py 或 python main.py --web-browser\n"
@@ -36,3 +42,38 @@ def web_launch_mode_from_argv() -> str:
     if env in ("browser", "webview"):
         return env
     return "webview"
+
+
+def global_exception_hook(exc_type, exc_value, exc_tb) -> None:
+    if exc_type in (KeyboardInterrupt, SystemExit):
+        return
+    message = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    try:
+        logger = SanitizedLogger()
+        logger.error(tr("app.unhandled_exception_log").format(message=message))
+    except Exception:
+        import re
+
+        safe_message = re.sub(r"sk-[A-Za-z0-9_-]{20,}", "sk-****", message)
+        print(f"FATAL: {safe_message}", file=sys.stderr)
+    if issubclass(exc_type, RuntimeError) and "has been deleted" in str(exc_value):
+        return
+    try:
+        if QApplication.instance() is not None:
+            QMessageBox.critical(
+                None,
+                tr("app.error_title"),
+                tr("app.unhandled_exception").format(message=exc_value),
+            )
+    except Exception:
+        pass
+    sys.exit(1)
+
+
+def show_startup_notice_if_needed(config, logger) -> bool:
+    notice = config.get_startup_notice()
+    if not notice:
+        return False
+    logger.info(notice)
+    QMessageBox.information(None, tr("app.window_title"), notice)
+    return True

@@ -10,12 +10,17 @@ from app.danmu_read_service import (
     danmu_read_enabled,
 )
 from app.danmu_tts import (
+    MIMO_TTS_ENDPOINT,
+    MIMO_TTS_MODEL,
     DanmuTtsError,
+    ResolvedTtsConfig,
     clamp_read_interval_sec,
     normalize_tts_voice,
+    resolve_tts_config,
     synthesize_mimo_tts,
 )
 from app.danmu_tts_playback import DanmuTtsPlayback
+from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI
 
 from tests.fakes import FakeConfig
 
@@ -95,9 +100,78 @@ def test_synthesize_mimo_tts_parses_audio(monkeypatch):
             assert json["messages"][-1]["role"] == "assistant"
             return FakeResponse()
 
-    monkeypatch.setattr("app.danmu_tts.httpx.Client", FakeClient)
+    monkeypatch.setattr("app.tts_providers.httpx.Client", FakeClient)
     out = synthesize_mimo_tts("sk-test", "你好", style_prompt="轻快", voice="冰糖")
     assert out == wav
+
+
+def test_resolve_tts_config_defaults():
+    cfg = FakeConfig({})
+    resolved = resolve_tts_config(cfg)
+    assert resolved.model == MIMO_TTS_MODEL
+    assert resolved.endpoint == MIMO_TTS_ENDPOINT
+    assert resolved.is_custom is False
+
+
+def test_resolve_tts_config_custom():
+    cfg = FakeConfig(
+        {
+            "tts_provider": TTS_PROVIDER_CUSTOM_OPENAI,
+            "tts_endpoint": "https://tts.example.com/v1",
+            "tts_model_id": "my-tts-model",
+        }
+    )
+    resolved = resolve_tts_config(cfg)
+    assert resolved.is_custom is True
+    assert resolved.model == "my-tts-model"
+    assert resolved.endpoint == "https://tts.example.com/v1"
+
+
+def test_synthesize_mimo_tts_custom_model(monkeypatch):
+    wav = _fake_wav_bytes()
+    payload = {
+        "choices": [
+            {"message": {"audio": {"data": base64.b64encode(wav).decode("ascii")}}}
+        ]
+    }
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("app.tts_providers.httpx.Client", FakeClient)
+    resolved = ResolvedTtsConfig(
+        provider=TTS_PROVIDER_CUSTOM_OPENAI,
+        endpoint="https://tts.example.com/v1",
+        model="custom-tts-v1",
+        is_custom=True,
+        stored_provider=TTS_PROVIDER_CUSTOM_OPENAI,
+        stored_endpoint="https://tts.example.com/v1",
+        stored_model_id="custom-tts-v1",
+    )
+    out = synthesize_mimo_tts("sk-test", "你好", resolved=resolved)
+    assert out == wav
+    assert captured["json"]["model"] == "custom-tts-v1"
+    assert captured["url"] == "https://tts.example.com/v1/chat/completions"
 
 
 def test_synthesize_mimo_tts_missing_key():

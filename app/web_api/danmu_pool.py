@@ -10,6 +10,7 @@ from app.danmu_pool import (
     custom_pool_size,
     danmu_pool_enabled_from_config,
     danmu_pool_use_custom_from_config,
+    find_duplicates_with_builtin,
     pool_size,
 )
 
@@ -25,6 +26,7 @@ _SKIP_REASON_DUPLICATE = "duplicate"
 _SKIP_REASON_EMPTY = "empty"
 _SKIP_REASON_UNSAFE = "unsafe"
 _SKIP_REASON_LIMIT = "limit_reached"
+_SKIP_REASON_MERGED_DUPLICATE = "merged_duplicate"  # W-DANMU-POOL-002: 与内置池字面重复
 
 
 def _overlay_safe(text: str, *, max_chars: int) -> bool:
@@ -87,6 +89,8 @@ def append_custom(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, Any]:
     existing = list(config.get_custom_danmu_pool())
     existing_set = set(existing)
     max_len = resolve_danmu_max_chars(config)
+    # W-DANMU-POOL-002: 一次性预算与内置池的交集，循环内 O(1) 判定
+    builtin_dup_set = find_duplicates_with_builtin(raw_lines)
 
     added: list[str] = []
     skipped_items: list[dict[str, str]] = []
@@ -98,6 +102,9 @@ def append_custom(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, Any]:
             continue
         if text in existing_set:
             skipped_items.append({"text": text, "reason": _SKIP_REASON_DUPLICATE})
+            continue
+        if text in builtin_dup_set:  # W-DANMU-POOL-002
+            skipped_items.append({"text": text, "reason": _SKIP_REASON_MERGED_DUPLICATE})
             continue
         if len(text) > max_len:
             skipped_items.append({"text": text, "reason": _SKIP_REASON_TOO_LONG})

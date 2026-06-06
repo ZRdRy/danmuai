@@ -25,6 +25,9 @@ WEB_CONFIG_KEYS = (
     "font_size",
     "empty_accel",
     "eviction_mode",
+    "danmu_pending_entry_cap",
+    "danmu_track_retention_cap",
+    "reply_queue_max_items",
     "image_max_width",
     "image_quality",
     "hotkey",
@@ -32,8 +35,21 @@ WEB_CONFIG_KEYS = (
     "memory_window",
     "mic_mode_enabled",
     "mic_window_sec",
+    "mic_use_visual_model",
+    "mic_api_endpoint",
+    "mic_api_mode",
+    "mic_model",
     "normal_recognition_interval_sec",
     "normal_reply_count",
+    "user_nickname",  # W-NICKNAME-001
+    "live_topic",  # W-LIVE-TOPIC-001
+    # W-FP-001：悬浮窗模式与配置
+    "display_mode",
+    "floating_panel_opacity",
+    "floating_panel_font_size",
+    "floating_panel_max_items",
+    "floating_panel_speed",
+    "floating_panel_click_through",
 )
 
 # 助手设置「恢复默认」可恢复的键（= WEB_CONFIG_KEYS；不含 api_key / custom_models / region_*）
@@ -140,6 +156,10 @@ class ConfigService:
         if api_key:
             self._config.set_api_key(api_key)
 
+        mic_api_key = _submitted_api_key(payload.get("mic_api_key", ""))
+        if mic_api_key:
+            self._config.set_mic_api_key(mic_api_key)
+
         if "default_model_id" in payload:
             set_default_model_selection(self._config, payload.get("default_model_id", ""))
 
@@ -161,6 +181,18 @@ class ConfigService:
             api_mode = items.get("api_mode", self._config.get("api_mode", "doubao"))
             transport = resolve_api_transport(endpoint, api_mode)
             items["api_mode"] = "doubao" if transport == "doubao" else "openai"
+
+        if "mic_api_endpoint" in items or "mic_api_mode" in items:
+            from app.model_providers import resolve_api_transport
+
+            endpoint = items.get("mic_api_endpoint", self._config.get("mic_api_endpoint", ""))
+            api_mode = items.get("mic_api_mode", self._config.get("mic_api_mode", "doubao"))
+            transport = resolve_api_transport(endpoint, api_mode)
+            items["mic_api_mode"] = "doubao" if transport == "doubao" else "openai"
+
+        if "mic_use_visual_model" in items:
+            value = str(items["mic_use_visual_model"]).strip()
+            items["mic_use_visual_model"] = "1" if value in ("1", "true", "yes", "on") else "0"
 
         if "mic_window_sec" in items:
             from app.mic_buffer import clamp_mic_window_sec
@@ -187,6 +219,20 @@ class ConfigService:
             except (TypeError, ValueError):
                 items["danmu_lines"] = str(DEFAULT_DANMU_LINES)
 
+        if (
+            "danmu_pending_entry_cap" in items
+            or "danmu_track_retention_cap" in items
+            or "reply_queue_max_items" in items
+        ):
+            from app.danmu_engine import (
+                DANMU_PENDING_ENTRY_CAP_MAX,
+                DANMU_TRACK_RETENTION_CAP_MAX,
+            )
+
+            _clamp_int_key(items, "danmu_pending_entry_cap", 0, 0, DANMU_PENDING_ENTRY_CAP_MAX)
+            _clamp_int_key(items, "danmu_track_retention_cap", 0, 0, DANMU_TRACK_RETENTION_CAP_MAX)
+            _clamp_int_key(items, "reply_queue_max_items", 0, 0, 9999)
+
         if "layout_mode" in items:
             from app.danmu_engine import normalize_layout_mode
 
@@ -208,6 +254,25 @@ class ConfigService:
                 "off",
             )
             _clamp_int_key(items, "memory_window", 10, 1, 20)
+
+        # W-FP-001：悬浮窗模式与基础配置归一化
+        if "display_mode" in items:
+            _clamp_choice(
+                items,
+                "display_mode",
+                ("overlay", "floating_panel", "both"),
+                "overlay",
+            )
+        _clamp_int_key(items, "floating_panel_opacity", 85, 0, 100)
+        _clamp_int_key(items, "floating_panel_font_size", 18, 12, 48)
+        _clamp_int_key(items, "floating_panel_max_items", 60, 5, 200)
+        try:
+            _speed = float(items.get("floating_panel_speed", "1.5"))
+        except (TypeError, ValueError):
+            _speed = 1.5
+        items["floating_panel_speed"] = f"{max(0.5, min(_speed, 5.0)):.3f}"
+        _ct = str(items.get("floating_panel_click_through", "1")).strip().lower()
+        items["floating_panel_click_through"] = "1" if _ct in ("1", "true", "yes", "on") else "0"
 
     def _merge_custom_models(self, payload_models: list[Any]) -> list[dict[str, Any]]:
         from app.web_api.custom_models import MASKED_KEY

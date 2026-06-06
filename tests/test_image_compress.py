@@ -38,7 +38,7 @@ def test_compress_image_bytes_scales_down():
 
 def test_config_image_quality_override():
     """Explicit image_quality in config must override runtime default."""
-    from tests.test_p0_main_flow import FakeConfig
+    from tests.fakes import FakeConfig
 
     cfg = FakeConfig({"image_quality": "100"})
     assert cfg.get_int("image_quality", IMAGE_JPEG_QUALITY) == 100

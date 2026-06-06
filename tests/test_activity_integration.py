@@ -9,9 +9,8 @@ from app.scene_memory import SceneMemoryStore
 from app.window_info import ACTIVITY_TYPE_GAME, ACTIVITY_TYPE_GAME_LAUNCHER, ActivityObservation
 from main import DanmuApp
 
-from tests.conftest import bind_minimal_danmu_app
+from tests.conftest import bind_minimal_danmu_app, make_minimal_danmu_app
 from tests.fakes import FakeConfig
-from tests.test_p0_main_flow import _make_minimal_app
 
 
 def _cfg_with_memory_mode(mode: str) -> FakeConfig:
@@ -261,7 +260,7 @@ class TestThrottle:
 class TestReset:
     def test_reset_clears_activity_state(self):
         cfg = _cfg_with_memory_mode("scene_card")
-        app = _make_minimal_app()
+        app = make_minimal_danmu_app()
         app.config = cfg
         app._activity_state = RecentActivityState()
         app._activity_state.record_observation(_obs_coding())
@@ -277,7 +276,7 @@ class TestReset:
 class TestSceneSwitchRecorded:
     def test_activity_state_records_switch_without_scene_probe(self):
         """普通模式无场景探测；活动状态仍可通过 API 记录切换。"""
-        app = _make_minimal_app()
+        app = make_minimal_danmu_app()
         app._activity_state = RecentActivityState()
         initial_count = app._activity_state.switching_count
         app._activity_state.record_scene_switch()

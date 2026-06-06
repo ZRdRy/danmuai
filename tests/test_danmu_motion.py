@@ -329,7 +329,8 @@ def test_needs_render_tick_false_when_far_off_right(tmp_path):
     assert not engine.needs_render_tick()
 
 
-def test_needs_refill_blocks_when_entry_zone_pending_full(tmp_path, monkeypatch):
+def test_needs_refill_not_blocked_without_pending_cap(tmp_path, monkeypatch):
+    """默认无 pending cap 时，入口区 pending 不阻塞池补足。"""
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
@@ -346,20 +347,39 @@ def test_needs_refill_blocks_when_entry_zone_pending_full(tmp_path, monkeypatch)
     engine.tracks[2].add(DanmuItem(content="visible", x=100.0, width=50.0))
     engine._rebuild_visibility_counts()
 
-    assert engine.current_display_count() == 3
-    assert engine.right_zone_count() == 2
-    assert engine.right_visible_count() == 0
     assert engine.visible_display_count() == 1
     assert engine.pending_entry_count() == 2
-    assert engine.offscreen_pending_count() == 2
+    assert engine.needs_refill() is True
+
+
+def test_needs_refill_blocks_when_pending_cap_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "5")
+    store.set("min_on_screen", "5")
+    store.set("danmu_pending_entry_cap", "2")
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(900.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+
+    engine.tracks[0].add(DanmuItem(content="pending-a", x=950.0, width=50.0))
+    engine.tracks[1].add(DanmuItem(content="pending-b", x=980.0, width=50.0))
+    engine.tracks[2].add(DanmuItem(content="visible", x=100.0, width=50.0))
+    engine._rebuild_visibility_counts()
+
+    assert engine.pending_entry_count() == 2
     assert engine.needs_refill() is False
 
 
-def test_can_accept_more_false_when_pending_entry_overloaded(tmp_path, monkeypatch):
+def test_can_accept_more_false_when_pending_entry_cap_configured(tmp_path, monkeypatch):
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "3")
+    store.set("danmu_pending_entry_cap", "6")
 
     engine = DanmuEngine(store)
     engine.set_screen_width(1000.0)
@@ -378,7 +398,7 @@ def test_can_accept_more_false_when_pending_entry_overloaded(tmp_path, monkeypat
     assert not engine._can_accept_more()
 
 
-def test_pick_track_fallback_rejects_entry_tail_past_limit(config_store, monkeypatch):
+def test_pick_track_fallback_accepts_far_offscreen_tail(config_store, monkeypatch):
     engine = DanmuEngine(config_store)
     engine.set_screen_width(1000.0)
     engine.set_screen_height(400.0)
@@ -390,10 +410,12 @@ def test_pick_track_fallback_rejects_entry_tail_past_limit(config_store, monkeyp
     monkeypatch.setattr("app.danmu_engine.random.uniform", lambda a, b: 100.0)
 
     incoming = DanmuItem(content="incoming", x=1100.0, width=120.0)
-    assert engine._pick_track(incoming) is None
+    track = engine._pick_track(incoming)
+    assert track is not None
+    assert incoming.x > 1300.0
 
 
-def test_add_text_pick_failure_does_not_pollute_dedup(tmp_path, monkeypatch):
+def test_add_text_accepts_when_tracks_have_far_offscreen_tail(tmp_path, monkeypatch):
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
@@ -408,12 +430,10 @@ def test_add_text_pick_failure_does_not_pollute_dedup(tmp_path, monkeypatch):
 
     monkeypatch.setattr("app.danmu_engine.random.uniform", lambda a, b: 100.0)
 
-    text = "retry-after-entry-reject"
-    assert engine.add_text(text) is None
+    text = "queues-far-offscreen"
     assert not engine.is_duplicate(text)
-    engine.tracks[0].items.clear()
-    engine.tracks[1].items.clear()
     assert engine.add_text(text) is not None
+    assert engine.is_duplicate(text)
 
 
 def test_pick_track_fallback_still_accepts_when_tail_within_limit(config_store, monkeypatch):
@@ -570,13 +590,13 @@ def test_high_density_no_same_track_cluster(config_store, monkeypatch):
             content=f"d{i}", width=150.0, x=1920.0 + (i % 10) * 10.0
         )
         track = engine._pick_track(item)
-        if track is None:
-            break
+        assert track is not None
         track.add(item)
 
+    total = engine.current_display_count()
     max_per_track = max(len(t.items) for t in engine.tracks)
-    total_tracks = len(engine.tracks)
-    assert max_per_track <= (60 // total_tracks + 3)
+    assert total == 60
+    assert max_per_track < total
 
 
 def _seed_many_visible(engine: DanmuEngine, n: int) -> None:

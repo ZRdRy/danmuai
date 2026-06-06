@@ -76,6 +76,22 @@ def test_delete_custom_by_texts(pool_app):
     assert result["items"] == ["保留"]
 
 
+def test_append_custom_rejects_merged_duplicate_with_builtin(pool_app):
+    """W-DANMU-POOL-002: 与内置池字面重复应返回 merged_duplicate 而非静默丢弃。"""
+    from app.danmu_pool import load_danmu_pool
+
+    builtin = load_danmu_pool()
+    if "懂了" not in builtin:
+        pytest.skip("built-in pool missing fixture '懂了'")
+
+    result = pool_api.append_custom(pool_app, {"items": ["懂了", "全新自定义句A"]})
+    assert result["added"] == 1
+    assert result["skipped"] == 1
+    reasons = {item["reason"] for item in result["skipped_items"]}
+    assert "merged_duplicate" in reasons
+    assert pool_app.config.get_custom_danmu_pool() == ["全新自定义句A"]
+
+
 def test_danmu_pool_routes_registered(tmp_path):
     from app.web_api.routes import register_web_routes
     from fastapi import FastAPI

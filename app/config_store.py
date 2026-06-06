@@ -31,7 +31,13 @@ from app.translations import tr
 logger = logging.getLogger(__name__)
 
 _SENSITIVE_CONFIG_KEYS = frozenset(
-    {"api_key_encrypted", "tts_api_key_encrypted", "custom_models", "api_key"}
+    {
+        "api_key_encrypted",
+        "mic_api_key_encrypted",
+        "tts_api_key_encrypted",
+        "custom_models",
+        "api_key",
+    }
 )
 
 
@@ -81,6 +87,17 @@ class ConfigStore:
             self._load_cache()
         self._fernet = self._init_fernet()
         self._repair_stale_region_if_needed()
+        self._normalize_legacy_display_mode()
+
+    def _normalize_legacy_display_mode(self) -> None:
+        from app.application.config_service import normalize_legacy_display_mode
+
+        legacy_mode = str(self.get("danmu_display_mode", ""))
+        items = {"danmu_display_mode": legacy_mode}
+        normalize_legacy_display_mode(items)
+        normalized_mode = str(items.get("danmu_display_mode", "")).strip().lower()
+        if normalized_mode and normalized_mode != legacy_mode.strip().lower():
+            self.set("danmu_display_mode", normalized_mode)
 
     def get_startup_notice(self) -> str:
         """首装会话返回本地化引导文案；config.db 已存在时恒为空（二次启动不误弹）。"""
@@ -272,6 +289,48 @@ class ConfigStore:
             logger.warning(tr("config.insecure_store"))
             encoded = b64encode(key.encode("utf-8")).decode("utf-8")
             self.set("tts_api_key_encoded", encoded)
+
+    def get_mic_api_key(self) -> str:
+        """读麦克风专用 API Key（mic_api_key_encrypted）。"""
+        encrypted = self.get("mic_api_key_encrypted", "")
+        if encrypted and _HAS_CRYPTO and self._fernet:
+            try:
+                return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+            except Exception:
+                logger.warning(tr("config.decrypt_failed"))
+        encoded = self.get("mic_api_key_encoded", "")
+        if not encoded:
+            return ""
+        try:
+            return b64decode(encoded).decode("utf-8")
+        except Exception:
+            return ""
+
+    def set_mic_api_key(self, key: str) -> None:
+        """写入麦克风专用 API Key（加密存储）。"""
+        if _HAS_CRYPTO and self._fernet:
+            encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
+            with self._write_lock:
+                try:
+                    self.conn.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        ("mic_api_key_encrypted", encrypted),
+                    )
+                    if "mic_api_key_encoded" in self._cache:
+                        self.conn.execute(
+                            "DELETE FROM config WHERE key=?", ("mic_api_key_encoded",)
+                        )
+                        self._cache.pop("mic_api_key_encoded", None)
+                    self.conn.commit()
+                    self._cache["mic_api_key_encrypted"] = encrypted
+                except sqlite3.OperationalError as e:
+                    self.conn.rollback()
+                    logger.error(tr("config.api_key_write_failed").format(error=e))
+                    raise
+        else:
+            logger.warning(tr("config.insecure_store"))
+            encoded = b64encode(key.encode("utf-8")).decode("utf-8")
+            self.set("mic_api_key_encoded", encoded)
 
     # --- 选区持久化 ---
 

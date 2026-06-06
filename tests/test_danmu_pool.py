@@ -134,3 +134,77 @@ def test_sample_danmu_unique():
     picked = sample_danmu(20)
     assert len(picked) == 20
     assert len(set(picked)) == 20
+
+
+def test_pool_topup_returns_0_when_entry_zone_overloaded(qapp, workspace_tmp):
+    """W-DANMU-POOL-003: 用户配了 danmu_pending_entry_cap 时，入口区满则池补足早返 0。"""
+    from unittest.mock import MagicMock
+
+    from app.config_store import ConfigStore
+    from app.danmu_engine import DanmuEngine
+    from app.danmu_pool import maybe_pool_topup
+
+    store = ConfigStore(db_path=workspace_tmp / "pool_topup_overload.db")
+    store.set("danmu_pool_use_custom", "1")
+    store.set("min_on_screen", "5")
+    store.set_custom_danmu_pool(["句1", "句2", "句3", "句4", "句5", "句6"])
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks()
+    engine.running = True
+    # 模拟入口过载
+    engine.entry_zone_overloaded = MagicMock(return_value=True)
+    add_text_calls: list[str] = []
+    original_add_text = engine.add_text
+    engine.add_text = MagicMock(side_effect=lambda *a, **kw: add_text_calls.append(a[0]) or original_add_text(*a, **kw))
+
+    added = maybe_pool_topup(engine, store, scene_generation=0)
+
+    assert added == 0
+    assert engine.add_text.call_count == 0
+    assert add_text_calls == []
+
+
+def test_pool_topup_skips_recent_dedup_window(qapp, workspace_tmp):
+    """W-DANMU-POOL-001: 池补足 add_text(skip_dedup=True) 不受 deque(30) 窗口误伤。
+
+    模拟"自定义句与最近 30 条历史字面相同"场景：先 engine.add_text 30 条占满窗口，
+    再写入 custom_danmu_pool["撞车句"]，调 maybe_pool_topup，断言实际入轨。
+    """
+    from app.config_store import ConfigStore
+    from app.danmu_engine import DanmuEngine
+    from app.danmu_pool import maybe_pool_topup
+
+    store = ConfigStore(db_path=workspace_tmp / "pool_topup_skip_dedup.db")
+    store.set("danmu_pool_use_custom", "1")
+    store.set("danmu_pool_enabled", "0")
+    store.set("min_on_screen", "3")
+    store.set_custom_danmu_pool(["撞车句"])
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks()
+    engine.running = True
+    engine.recent.clear()
+    engine.recent_exact_set.clear()
+
+    # 预占 deque(30)：让"撞车句"在 recent_exact_set 中
+    for i in range(30):
+        engine._remember_content("history-" + str(i))
+    engine._remember_content("撞车句")
+    assert "撞车句" in engine.recent_exact_set
+
+    # 取 min_on_screen=3，屏空 → deficit=3 → 抽样最多 3 条 → 但合并池只有 1 条
+    added = maybe_pool_topup(engine, store, scene_generation=0)
+
+    assert added == 1
+    all_texts = [
+        item.content
+        for track in engine.tracks
+        for item in track.items
+    ]
+    assert "撞车句" in all_texts
+

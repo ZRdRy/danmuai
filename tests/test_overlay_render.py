@@ -1,9 +1,12 @@
 """DanmuOverlay render loop lifecycle and adaptive timer."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from app.config_store import ConfigStore
 from app.danmu_engine import DanmuEngine, DanmuItem
 from app.overlay import _INTERVAL_MAX_MS, DanmuOverlay
+from PyQt6.QtCore import QRect
 from PyQt6.QtWidgets import QApplication
 
 
@@ -41,6 +44,36 @@ def _seed_visible_item(engine):
 def test_overlay_timer_not_started_on_init(overlay_stack):
     _, _, overlay = overlay_stack
     assert not overlay.timer.isActive()
+
+
+def test_show_for_screen_invalid_index_starts_render_with_content(
+    overlay_stack, qapp, monkeypatch
+):
+    _, engine, overlay = overlay_stack
+    mock_screen = MagicMock()
+    mock_screen.geometry.return_value = QRect(0, 0, 1920, 1080)
+    monkeypatch.setattr("app.overlay.QApplication.screens", lambda: [mock_screen])
+    engine.running = True
+    _seed_visible_item(engine)
+
+    overlay.show_for_screen(99)
+    qapp.processEvents()
+
+    assert overlay.isVisible()
+    overlay.ensure_render_loop()
+    assert overlay.timer.isActive()
+
+
+def test_show_event_starts_loop_when_content_queued_while_hidden(overlay_stack, qapp):
+    _, engine, overlay = overlay_stack
+    overlay.setGeometry(0, 0, 800, 600)
+    engine.running = True
+    _seed_visible_item(engine)
+    assert not overlay.isVisible()
+
+    _show_overlay(overlay, qapp)
+
+    assert overlay.timer.isActive()
 
 
 def test_start_render_loop_noop_when_overlay_hidden(overlay_stack):

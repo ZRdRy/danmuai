@@ -17,7 +17,6 @@ class RequestScheduler:
         self,
         *,
         has_visual_request_in_flight: bool,
-        scene_block_reason: str,
         enforce_min_interval: bool,
         last_trigger_at: float | None = None,
         min_interval_elapsed: Callable[[float], bool],
@@ -25,8 +24,6 @@ class RequestScheduler:
         trigger_at = self.last_api_trigger_at if last_trigger_at is None else float(last_trigger_at)
         if has_visual_request_in_flight:
             return "in_flight"
-        if scene_block_reason:
-            return scene_block_reason
         if enforce_min_interval and not min_interval_elapsed(trigger_at):
             return "min_api_interval"
         return ""
@@ -35,7 +32,6 @@ class RequestScheduler:
         self,
         *,
         has_visual_request_in_flight: bool,
-        scene_block_reason: str,
         enforce_min_interval: bool,
         last_trigger_at: float | None = None,
         min_interval_elapsed: Callable[[float], bool],
@@ -43,7 +39,6 @@ class RequestScheduler:
         return (
             self.block_reason(
                 has_visual_request_in_flight=has_visual_request_in_flight,
-                scene_block_reason=scene_block_reason,
                 enforce_min_interval=enforce_min_interval,
                 last_trigger_at=last_trigger_at,
                 min_interval_elapsed=min_interval_elapsed,

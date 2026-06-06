@@ -10,6 +10,8 @@ from app.memory.types import MEMORY_MODE_OFF
 from app.personae import persona_display_name
 
 VISUAL_INFLIGHT_WARN_SEC = 45.0
+MAX_IN_FLIGHT = 1
+MAX_MIC_IN_FLIGHT = 1
 
 
 class BatchTracker:
@@ -25,40 +27,18 @@ class BatchTracker:
         self.next_generation_time: float = 0.0
 
 
-def reply_request_id(request_round: int, screenshot_id: int, scene_generation: int) -> str:
-    return f"{request_round}:{screenshot_id}:{scene_generation}"
+def reply_request_id(
+    request_round: int,
+    screenshot_id: int,
+    scene_generation: int,
+) -> tuple[int, int, int]:
+    return (int(request_round), int(screenshot_id), int(scene_generation))
 
 
 def density_right_target(min_n: int) -> int:
     if min_n <= 0:
         return 2
     return max(1, min_n // 3)
-
-
-def scene_api_block_reason() -> str:
-    return ""
-
-
-def scene_api_blocked() -> bool:
-    return bool(scene_api_block_reason())
-
-
-def is_reply_stale(
-    screenshot_id: int,
-    captured_at: float,
-    scene_generation: int,
-    *,
-    source: str = "ai",
-) -> tuple[bool, str]:
-    """普通模式与 mic：当前均不做过期回复硬丢弃。
-
-    产品策略：不比较 screenshot_id / captured_at TTL / scene_generation 来丢弃在途或
-    队列中的回复；慢模型下允许轻微滞后，优先保证弹幕连续性。
-    保留为 _on_ai_reply / _consume_reply_queue 的兼容调用点及未来策略扩展入口；
-    当前固定返回 (False, "")。
-    """
-    del screenshot_id, captured_at, scene_generation, source
-    return False, ""
 
 
 def memory_tone_hint(persona_id: str) -> str:
@@ -76,5 +56,46 @@ def memory_enabled(mode: str) -> bool:
     return mode != MEMORY_MODE_OFF
 
 
-def queue_capacity(normal_reply_count: int) -> int:
-    return max(8, normal_reply_count * 2)
+def queue_capacity(config, normal_reply_count: int) -> int:
+    """回复队列容量；reply_queue_max_items=0 表示无裁剪，否则 clamp 到 1..9999。"""
+    configured = config.get_int("reply_queue_max_items", 0)
+    if configured <= 0:
+        return 0
+    return max(1, min(configured, 9999))
+
+
+def log_api_schedule(
+    logger,
+    *,
+    decision: str,
+    source: str,
+    block_reason: str = "",
+    batch,
+    rtt_avg: float,
+    buffer_size: int,
+    visible_count: int,
+    in_flight: bool,
+    scene_gen: int = 0,
+) -> None:
+    """API 调度 debug 日志（纯函数，无状态修改）。"""
+    from app.api_schedule import api_schedule_debug_enabled, format_api_schedule_log
+
+    if not api_schedule_debug_enabled():
+        return
+    batch_id = batch.batch_id if batch else None
+    next_gen = batch.next_generation_time if batch else 0.0
+    logger.debug(
+        format_api_schedule_log(
+            decision=decision,
+            source=source,
+            batch_id=batch_id,
+            next_generation_time=next_gen,
+            rtt_avg=rtt_avg,
+            buffer_size=buffer_size,
+            visible_count=visible_count,
+            in_flight=in_flight,
+            block_reason=block_reason,
+            scene_gen=scene_gen,
+            cooldown_left_ms=0,
+        )
+    )

@@ -27,6 +27,8 @@ _NAV_POLL_SEC = 0.25
 _BROWSER_PROBE_SEC = 3.0
 _HANDSHAKE_POLL_MS = 50
 _SPAWN_MAX_ATTEMPTS = 3
+_WEBVIEW_ATTACH_MAX_ATTEMPTS = 2
+_WEBVIEW_ATTACH_RETRY_MS = 1200
 _SIGNAL_CREATED = "created"
 _SIGNAL_LOADED = "loaded"
 _PHASE_SIGNALS = frozenset({_SIGNAL_CREATED, _SIGNAL_LOADED})
@@ -85,6 +87,8 @@ def notify_web_console_failure(danmu_app, reason_key: str, *, detail: str = "") 
         detail=detail,
     )
     def _show() -> None:
+        from PyQt6.QtWidgets import QApplication
+
         tray = _tray_icon_for_notify(danmu_app)
         if tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             tray.showMessage(
@@ -93,6 +97,9 @@ def notify_web_console_failure(danmu_app, reason_key: str, *, detail: str = "") 
                 QSystemTrayIcon.MessageIcon.Warning,
                 5000,
             )
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
         QMessageBox.warning(None, tr("app.error_title"), message)
     QTimer.singleShot(0, _show)
 def _ensure_server_ready(server: WebConsoleServer) -> bool:
@@ -544,3 +551,158 @@ def attach_webview_shell(
             log_startup("attach_webview_shell.end", ok=False)
     QTimer.singleShot(0, _begin)
     return shell
+
+
+def retry_webview_attach(
+    danmu_app,
+    path: str,
+    schedule_attempt: int,
+) -> None:
+    """重试 WebView attach（从 DanmuApp 迁移）。"""
+    from PyQt6.QtCore import QTimer
+
+    if schedule_attempt >= _WEBVIEW_ATTACH_MAX_ATTEMPTS:
+        shell = getattr(danmu_app, "webview_shell", None)
+        if shell is not None:
+            shell.finalize_handshake_failure(
+                "pywebview attach retries exhausted",
+                path,
+            )
+        return
+    shell = getattr(danmu_app, "webview_shell", None)
+    if shell is not None:
+        shell.destroy()
+    danmu_app.webview_shell = None
+    log_startup("webview_shell.attach_retry", attempt=schedule_attempt + 1)
+    QTimer.singleShot(
+        _WEBVIEW_ATTACH_RETRY_MS,
+        lambda: schedule_webview_attach(
+            danmu_app, path, attempt=schedule_attempt + 1
+        ),
+    )
+
+
+def schedule_webview_attach(
+    danmu_app,
+    initial_path: str,
+    *,
+    attempt: int = 0,
+) -> None:
+    """等待 HTTP ready 后 attach pywebview（从 DanmuApp 迁移）。"""
+    from PyQt6.QtCore import QTimer
+
+    if danmu_app.web_launch_mode != "webview" or not danmu_app.web_server:
+        return
+    from app.web_console import classify_web_console_startup
+
+    if classify_web_console_startup(danmu_app.web_server) == "failed":
+        return
+    shell = getattr(danmu_app, "webview_shell", None)
+    if shell and (shell.is_running() or shell.is_handshake_pending()):
+        return
+    if attempt == 0:
+        from app.bundle_paths import is_frozen
+
+        delay_ms = 400 if is_frozen() else 800
+        log_startup("webview_shell.scheduled", delay_ms=delay_ms)
+        QTimer.singleShot(
+            delay_ms,
+            lambda: schedule_webview_attach(danmu_app, initial_path, attempt=1),
+        )
+        return
+    open_web_console_when_ready(
+        danmu_app,
+        initial_path,
+        use_browser=False,
+        attempt=0,
+        on_webview_handshake_failed=lambda: retry_webview_attach(
+            danmu_app, initial_path, attempt
+        ),
+    )
+
+
+def open_web_console_when_ready(
+    danmu_app,
+    path: str = "/",
+    *,
+    use_browser: bool = False,
+    attempt: int = 0,
+    on_webview_handshake_failed=None,
+) -> None:
+    """等待 HTTP server ready 后打开 Web 控制台（从 DanmuApp 迁移）。"""
+    from PyQt6.QtCore import QTimer
+
+    server = danmu_app.web_server
+    if not server:
+        return
+    from app.web_console import (
+        classify_web_console_startup,
+        clear_startup_attach_error_if_needed,
+        open_web_console_browser,
+    )
+
+    if classify_web_console_startup(server) == "failed":
+        if not server._startup_failure_user_notified:
+            notify_web_console_failure(danmu_app, "web_console.startup_failed")
+            server._startup_failure_user_notified = True
+        return
+
+    if use_browser:
+        if not getattr(server, "_browser_launch_opened", False):
+            open_web_console_browser(server, path)
+            server._browser_launch_opened = True
+        http_ready = server.startup_ok or wait_for_http_server(
+            server.base_url, timeout=0.25
+        )
+        if http_ready:
+            clear_startup_attach_error_if_needed(server)
+            return
+        if attempt < 40:
+            QTimer.singleShot(
+                500,
+                lambda: open_web_console_when_ready(
+                    danmu_app,
+                    path,
+                    use_browser=True,
+                    attempt=attempt + 1,
+                ),
+            )
+            return
+        if not server._startup_failure_user_notified:
+            notify_web_console_failure(danmu_app, "web_console.startup_failed")
+            server._startup_failure_user_notified = True
+        return
+
+    if not server.startup_ok and not wait_for_http_server(
+        server.base_url, timeout=1.0
+    ):
+        if attempt < 40:
+            QTimer.singleShot(
+                500,
+                lambda: open_web_console_when_ready(
+                    danmu_app,
+                    path,
+                    use_browser=use_browser,
+                    attempt=attempt + 1,
+                ),
+            )
+            return
+        if not server._startup_failure_user_notified:
+            notify_web_console_failure(danmu_app, "web_console.startup_failed")
+            server._startup_failure_user_notified = True
+        return
+    clear_startup_attach_error_if_needed(server)
+
+    shell = getattr(danmu_app, "webview_shell", None)
+    if shell and shell.is_running():
+        shell.open(path)
+        return
+    if shell and shell.is_handshake_pending():
+        shell.request_navigate(path)
+        return
+    attach_webview_shell(
+        danmu_app,
+        server,
+        initial_path=path,
+        on_handshake_failed=on_webview_handshake_failed,
+    )

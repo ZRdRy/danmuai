@@ -1,14 +1,15 @@
-"""Screenshot capture and reply freshness in normal-only mode."""
+"""Screenshot capture in normal-only mode."""
 
 import time
 
 from app.reply_queue import QueuedReply
 
-from tests.test_p0_main_flow import FakeCapturer, FakePixmap, _make_minimal_app
+from tests.conftest import make_minimal_danmu_app
+from tests.fakes import FakeCapturer, FakePixmap
 
 
 def test_capture_increments_screenshot_id_without_scene_bump():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.engine.running = True
     app.capturer = FakeCapturer(FakePixmap(0))
 
@@ -19,7 +20,7 @@ def test_capture_increments_screenshot_id_without_scene_bump():
 
 
 def test_capture_always_advances_screenshot_id_even_when_in_flight():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.engine.running = True
     app.ai_in_flight = 1
     app._is_generating = True
@@ -32,10 +33,10 @@ def test_capture_always_advances_screenshot_id_even_when_in_flight():
     assert app._latest_screenshot_id == 4
 
 
-def test_on_ai_reply_does_not_drop_stale_scene_generation(monkeypatch):
+def test_on_ai_reply_enqueues_despite_mismatched_scene_generation(monkeypatch):
     import main as main_mod
 
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app.ai_in_flight = 1
     app._scene_generation = 2
     app._register_request_meta(10, 10, 1, "visual")
@@ -47,12 +48,11 @@ def test_on_ai_reply_does_not_drop_stale_scene_generation(monkeypatch):
 
     app._on_ai_reply('["ok"]', "persona-1", 10, 10, time.monotonic(), 1)
 
-    assert app._stale_scene_inflight_drop_count == 0
     assert not app.reply_buffer.is_empty()
 
 
 def test_consume_does_not_drop_older_scene_generation():
-    app = _make_minimal_app()
+    app = make_minimal_danmu_app()
     app._scene_generation = 3
     app.reply_buffer.push(
         QueuedReply("p", 1, 0, "queued old", screenshot_id=5, scene_generation=1)
@@ -61,9 +61,3 @@ def test_consume_does_not_drop_older_scene_generation():
     app._consume_reply_queue()
 
     assert len(app.engine.calls) == 1
-    assert app._stale_scene_consume_drop_count == 0
-
-
-def test_scene_api_never_blocked():
-    app = _make_minimal_app()
-    assert app._scene_api_blocked() is False

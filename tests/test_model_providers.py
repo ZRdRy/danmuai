@@ -7,11 +7,13 @@ from app.model_providers import (
     is_model_config_complete,
     is_valid_endpoint,
     mic_audio_supported_for_config,
+    mic_audio_supported_for_mic_config,
     model_likely_supports_mic_audio,
     normalize_endpoint,
     normalize_mode,
     resolve_active_model_id,
     resolve_api_transport,
+    resolve_mic_model_id,
     resolve_openai_provider_id,
     validate_model_config,
 )
@@ -105,9 +107,17 @@ def test_resolve_api_transport_siliconflow_uses_openai_even_when_mode_doubao():
 class _Cfg:
     def __init__(self, **kwargs):
         self._data = kwargs
+        self._api_key = kwargs.pop("api_key", "sk-visual")
+        self._mic_api_key = kwargs.pop("mic_api_key", "sk-mic")
 
     def get(self, key, default=""):
         return self._data.get(key, default)
+
+    def get_api_key(self):
+        return self._api_key
+
+    def get_mic_api_key(self):
+        return self._mic_api_key
 
     def get_default_model_id(self):
         return self.get("default_model_id", self.get("model", ""))
@@ -173,6 +183,38 @@ def test_resolve_openai_provider_id_mimo_v25_custom_endpoint():
     ep = "https://my-mimo-proxy.com/v1"
     assert resolve_openai_provider_id("mimo-v2.5", ep, "openai-compatible") == "mimo"
     assert resolve_openai_provider_id("gpt-4o", ep, "openai-compatible") == DEFAULT_PROVIDER_ID
+
+
+def test_mic_audio_supported_for_mic_config_falls_back_to_visual():
+    cfg = _Cfg(
+        mic_use_visual_model="1",
+        model="doubao-seed-2-0-mini-260428",
+        api_endpoint="https://ark.cn-beijing.volces.com/api/v3",
+        api_mode="doubao",
+    )
+    assert mic_audio_supported_for_mic_config(cfg) is True
+
+
+def test_mic_audio_supported_for_mic_config_uses_independent_credentials():
+    cfg = _Cfg(
+        mic_use_visual_model="0",
+        model="doubao-seed-1-6-flash-250828",
+        api_endpoint="https://ark.cn-beijing.volces.com/api/v3",
+        api_mode="doubao",
+        mic_model="doubao-seed-2-0-mini-260428",
+        mic_api_endpoint="https://ark.cn-beijing.volces.com/api/v3",
+        mic_api_mode="doubao",
+    )
+    assert mic_audio_supported_for_mic_config(cfg) is True
+
+
+def test_resolve_mic_model_id_prefers_mic_model_when_unlinked():
+    cfg = _Cfg(
+        mic_use_visual_model="0",
+        model="doubao-seed-1-6-flash-250828",
+        mic_model="doubao-seed-2-0-mini-260428",
+    )
+    assert resolve_mic_model_id(cfg) == "doubao-seed-2-0-mini-260428"
 
 
 def test_mic_audio_supported_for_config_custom_mimo_proxy():

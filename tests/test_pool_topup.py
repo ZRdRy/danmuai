@@ -36,7 +36,7 @@ def test_maybe_pool_topup_fills_deficit(tmp_path, monkeypatch):
     engine.running = True
 
     pool_lines = [f"pool-{i}" for i in range(8)]
-    monkeypatch.setattr("main.sample_danmu_for_config", lambda _cfg, n: pool_lines[:n])
+    monkeypatch.setattr("app.danmu_pool.sample_danmu_for_config", lambda _cfg, n: pool_lines[:n])
 
     app = DanmuApp.__new__(DanmuApp)
     app.engine = engine
@@ -57,7 +57,7 @@ def test_maybe_pool_topup_disabled_when_min_zero(tmp_path, monkeypatch):
     engine.reload_tracks()
     engine.running = True
 
-    monkeypatch.setattr("main.sample_danmu_for_config", lambda _cfg, n: ["x"] * n)
+    monkeypatch.setattr("app.danmu_pool.sample_danmu_for_config", lambda _cfg, n: ["x"] * n)
 
     app = DanmuApp.__new__(DanmuApp)
     app.engine = engine
@@ -77,7 +77,7 @@ def test_maybe_pool_topup_disabled_when_pool_off(tmp_path, monkeypatch):
     engine.reload_tracks()
     engine.running = True
 
-    monkeypatch.setattr("main.sample_danmu_for_config", lambda _cfg, n: ["x"] * n)
+    monkeypatch.setattr("app.danmu_pool.sample_danmu_for_config", lambda _cfg, n: ["x"] * n)
 
     app = DanmuApp.__new__(DanmuApp)
     app.engine = engine
@@ -104,7 +104,7 @@ def test_maybe_pool_topup_custom_only(tmp_path, monkeypatch):
     engine.running = True
 
     monkeypatch.setattr(
-        "main.sample_danmu_for_config",
+        "app.danmu_pool.sample_danmu_for_config",
         lambda _cfg, n: store.get_custom_danmu_pool()[:n],
     )
 
@@ -139,3 +139,40 @@ def test_deficit_below_min_many_items_bounded(tmp_path, monkeypatch):
 
     assert elapsed < DEFICIT_BUDGET_SEC
     assert engine.deficit_below_min() == 0
+
+
+def test_maybe_pool_topup_calls_deficit_at_most_once(tmp_path, monkeypatch):
+    """BUG-034: maybe_pool_topup must not call deficit_below_min inside the add loop."""
+    monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
+    store = ConfigStore(db_path=tmp_path / "deficit_once.db")
+    store.set("danmu_pool_enabled", "1")
+    store.set("min_on_screen", "8")
+    store.set("danmu_speed", "2.0")
+    store.set("danmu_lines", "5")
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(900.0)
+    engine.set_screen_height(400.0)
+    engine.reload_tracks()
+    engine.running = True
+
+    pool_lines = [f"pool-{i}" for i in range(8)]
+    monkeypatch.setattr("app.danmu_pool.sample_danmu_for_config", lambda _cfg, n: pool_lines[:n])
+
+    deficit_calls: list[int] = []
+    original = engine.deficit_below_min
+
+    def counting_deficit() -> int:
+        deficit_calls.append(1)
+        return original()
+
+    engine.deficit_below_min = counting_deficit  # type: ignore[method-assign]
+
+    app = DanmuApp.__new__(DanmuApp)
+    app.engine = engine
+    app.config = store
+    app._scene_generation = 0
+
+    added = app._maybe_pool_topup()
+    assert added >= 1
+    assert len(deficit_calls) == 1

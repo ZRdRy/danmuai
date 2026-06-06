@@ -81,6 +81,17 @@ def load_danmu_pool_for_config(config) -> list[str]:
     return _dedupe_lines(items)
 
 
+def find_duplicates_with_builtin(items) -> set[str]:
+    """Return the subset of ``items`` that already exist in the built-in pool.
+
+    Used by the Web API to surface ``merged_duplicate`` rejections instead of
+    silently dropping the entry. W-DANMU-POOL-002: kept as a helper so callers
+    can compute the set once before iterating; does not mutate state.
+    """
+    builtin = set(load_danmu_pool())
+    return {str(item).strip() for item in items if str(item).strip() in builtin}
+
+
 def sample_danmu_for_config(
     config,
     count: int,
@@ -168,3 +179,40 @@ def pool_metadata() -> dict:
         "sources": payload.get("sources"),
         "path": str(_POOL_PATH),
     }
+
+
+def maybe_pool_topup(engine, config, scene_generation: int) -> int:
+    """从合并池抽样补足同屏密度。
+
+    Returns the number of items actually added.
+    """
+    if not engine.running:
+        return 0
+    if not any_danmu_pool_source_enabled(config):
+        return 0
+    # W-DANMU-POOL-003: 用户配了 danmu_pending_entry_cap 时，避免入口区被池句占满
+    # entry_zone_overloaded 仅在 pending_cap > 0 时返回 True（danmu_engine.py:395-399）
+    # 用 getattr 兜底：FakeEngine 等测试桩未实现此方法时按"未过载"处理
+    if getattr(engine, "entry_zone_overloaded", lambda: False)():
+        return 0
+    deficit = engine.deficit_below_min()
+    if deficit <= 0:
+        return 0
+    limit = min(deficit, 8)
+    texts = sample_danmu_for_config(config, limit)
+    if not texts:
+        return 0
+    added = 0
+    for text in texts:
+        if added >= limit:
+            break
+        item = engine.add_text(
+            text,
+            persona="",
+            batch_id=0,
+            scene_generation=scene_generation,
+            skip_dedup=True,  # W-DANMU-POOL-001: 合并池自身已 _dedupe_lines，不再走 deque(30) 窗口
+        )
+        if item:
+            added += 1
+    return added

@@ -19,7 +19,7 @@ from app.reply_queue import QueuedReply
 from main import DanmuApp
 
 from tests.conftest import bind_minimal_danmu_app
-from tests.test_p0_main_flow import FakeLogger
+from tests.fakes import FakeLogger
 
 
 @pytest.fixture()
@@ -289,7 +289,7 @@ def test_normalize_danmu_display_text_matches_add_text_truncation(engine):
 def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
     from app.config_store import ConfigStore
 
-    from tests.test_p0_main_flow import FakeConfig
+    from tests.fakes import FakeConfig
 
     store = ConfigStore(db_path=workspace_tmp / "start_dedup.db")
     eng = DanmuEngine(store)
@@ -314,7 +314,11 @@ def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
     def _noop(*_args, **_kwargs):
         pass
 
-    overlay = type("O", (), {"show_for_screen": _noop, "start_render_loop": _noop})()
+    overlay = type(
+        "O",
+        (),
+        {"show_for_screen": _noop, "start_render_loop": _noop, "ensure_render_loop": _noop},
+    )()
     tray = type("T", (), {"update_state": _noop})()
     timer = type("TM", (), {"stop": _noop, "start": _noop, "setInterval": _noop, "isActive": lambda *a, **k: False})()
     reply_buffer = type("B", (), {"set_max_items": _noop, "is_empty": lambda *a, **k: True})()

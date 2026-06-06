@@ -557,6 +557,9 @@ class DanmuOverlay(QWidget):
         show 后必须 _apply_win32_click_through，否则 Windows 上可能拦截点击。
         """
         screens = QApplication.screens()
+        if not screens:
+            return
+        screen_index = max(0, min(int(screen_index), len(screens) - 1))
         if screen_index < len(screens):
             geo = screens[screen_index].geometry()
             layout_mode = normalize_layout_mode(self.config.get("layout_mode", "fullscreen"))
@@ -593,4 +596,3 @@ class DanmuOverlay(QWidget):
         self._apply_font_from_config()
         self.show()
         self._apply_win32_click_through()
-        self.reassert_topmost_zorder()

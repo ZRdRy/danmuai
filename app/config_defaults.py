@@ -35,6 +35,9 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "min_on_screen": "5",
     "empty_accel": "1",
     "eviction_mode": "natural",
+    "danmu_pending_entry_cap": "0",
+    "danmu_track_retention_cap": "0",
+    "reply_queue_max_items": "0",
     "image_max_width": "768",
     "image_quality": "85",
     "hotkey": "Ctrl+Shift+B",
@@ -43,15 +46,31 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "memory_window": "10",
     "mic_mode_enabled": "0",
     "mic_window_sec": "5",
+    "mic_use_visual_model": "1",
+    "mic_api_mode": "doubao",
+    "mic_model": "doubao-seed-2-0-mini-260428",
     "normal_recognition_interval_sec": "5",
     "normal_reply_count": str(DEFAULT_NORMAL_REPLY_COUNT),
     "danmu_read_enabled": "0",
     "danmu_read_interval_sec": "10",
+    "user_nickname": "",  # W-NICKNAME-001
+    "live_topic": "",  # W-LIVE-TOPIC-001
     "tts_voice": "冰糖",
     "tts_style_prompt": (
         "温柔微颤语气，1.0倍速，温暖音色，独白式表达，"
         "句尾轻收配合自然呼吸停顿，情绪克制有层次，适配泪目治愈类弹幕"
     ),
+    "tts_provider": "",
+    "tts_endpoint": "",
+    "tts_model_id": "",
+    "console_theme": "light",
+    # W-FP-001：悬浮窗（弹幕姬式）显示模式与配置；默认 overlay 保证向后兼容
+    "display_mode": "overlay",
+    "floating_panel_opacity": "85",
+    "floating_panel_font_size": "18",
+    "floating_panel_max_items": "60",
+    "floating_panel_speed": "1.5",
+    "floating_panel_click_through": "1",
 }
 
 # 首装工厂默认服务商（与 model_providers doubao 预设一致）
@@ -82,6 +101,7 @@ def export_web_config_defaults() -> dict[str, str]:
     defaults["api_endpoint"] = _default_api_endpoint()
     default_model = _default_model_id()
     defaults["model"] = default_model
+    defaults["mic_api_endpoint"] = _default_api_endpoint()
     return defaults
 
 
