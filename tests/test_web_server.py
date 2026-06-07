@@ -73,21 +73,28 @@ def test_providers_excludes_deepseek():
     assert "custom_openai" in ids
 
 
-def test_web_settings_ui_uses_custom_wording_not_manual_fill():
+def test_web_settings_ui_provider_naming_unified():
     from app.bundle_paths import project_root
 
     root = project_root()
     html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    providers_js = (
+        root / "web" / "static" / "modules" / "settings-providers.js"
+    ).read_text(encoding="utf-8")
+    hints_js = (root / "web" / "static" / "modules" / "settings-hints.js").read_text(
+        encoding="utf-8"
+    )
     settings_js = (root / "web" / "static" / "modules" / "settings.js").read_text(
         encoding="utf-8"
     )
-    assert "手动填写" not in html
-    assert "手动输入" not in html
-    assert "手动填写" not in settings_js
-    assert "手动输入" not in settings_js
-    assert 'value="">自定义</option>' in html or ">自定义</option>" in html
-    assert "自定义模型" in settings_js
-    assert '选「自定义」则需自己逐项设置' in settings_js
+    assert "手动填写" in html
+    assert "模型配置档案" in html
+    assert 'value="">自定义</option>' not in html
+    assert ">自定义</option>" not in html
+    assert "MANUAL_PROVIDER_LABEL" in providers_js
+    assert "MIC_LABEL_SUFFIX" in providers_js
+    assert "选「手动填写」则不套用预设" in hints_js
+    assert "模型配置档案" in settings_js
 
 
 def test_web_app_js_provider_switch_resets_vision_model():

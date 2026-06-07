@@ -12,12 +12,6 @@ def test_project_root_is_repo_in_dev():
     assert (root / "web" / "static" / "index.html").is_file()
 
 
-def test_resource_path_data_pool():
-    pool = resource_path("data", "danmu_pool_zh.json")
-    assert pool.is_file()
-    assert pool.parent == project_root() / "data"
-
-
 def test_feedback_static_images_packaged():
     root = project_root()
     _ensure_feedback_static_images()
@@ -217,6 +211,10 @@ def test_pet_page_in_index_html():
     assert 'id="page-pet"' in html
     assert 'id="petEnabled"' in html
     assert 'id="btnPetSave"' in html
+    assert 'id="petVisible"' not in html
+    assert 'id="btnPetShow"' not in html
+    assert 'id="btnPetHide"' not in html
+    assert 'id="btnPetClose"' not in html
     app_js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "initPetPage" in app_js
     assert "loadPetPage" in app_js

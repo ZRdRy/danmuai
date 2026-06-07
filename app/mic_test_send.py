@@ -27,7 +27,7 @@ def _mic_unsupported_config_message(model_id: str = "") -> str:
     return (
         "当前配置未声明 mic_audio 支持。"
         "开麦请使用火山方舟豆包全模态模型（如 doubao-seed-2-0-mini-260428）"
-        "或小米 MiMo 的 mimo-v2.5，或在自定义模型中勾选「支持麦克风」。"
+        "或小米 MiMo 的 mimo-v2.5，或在模型配置档案中勾选「支持麦克风」。"
     )
 @dataclass(frozen=True)
 class MicSendProbeResult:

@@ -50,7 +50,8 @@ def test_trigger_api_call_increments_in_flight(monkeypatch):
 def test_local_fallback_field_is_wired_to_main_pipeline():
     """BUG-013: slow in-flight → _maybe_inject_local_fallback → local_fallback snapshot + queue."""
     app = make_minimal_danmu_app()
-    app.config = FakeConfig({"danmu_pool_enabled": "1"})
+    app.config = FakeConfig({"danmu_pool_use_custom": "1"})
+    app.config.set_custom_danmu_pool([f"兜底句{i}" for i in range(10)])
     app.engine.running = True
     app._build_live_status_snapshot = DanmuApp._build_live_status_snapshot.__get__(app, DanmuApp)
     app._maybe_inject_local_fallback = DanmuApp._maybe_inject_local_fallback.__get__(app, DanmuApp)
@@ -76,7 +77,9 @@ def test_local_fallback_field_is_wired_to_main_pipeline():
 
 
 def test_local_fallback_batch_has_five_items():
-    items = build_local_fallback_batch()
+    cfg = FakeConfig({"danmu_pool_use_custom": "1"})
+    cfg.set_custom_danmu_pool([f"兜底句{i}" for i in range(10)])
+    items = build_local_fallback_batch(config=cfg)
     assert len(items) == 5
     assert len(items) == len(set(items))
     assert all(isinstance(x, str) and x for x in items)

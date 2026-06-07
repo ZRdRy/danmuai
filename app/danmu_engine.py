@@ -480,9 +480,9 @@ class DanmuEngine(QObject):
         return best_track
 
     def danmu_pool_enabled(self) -> bool:
-        from app.danmu_pool import danmu_pool_enabled_from_config
+        from app.danmu_pool import danmu_pool_use_custom_from_config
 
-        return danmu_pool_enabled_from_config(self.config)
+        return danmu_pool_use_custom_from_config(self.config)
 
     def min_on_screen(self) -> int:
         from app.danmu_pool import effective_min_on_screen

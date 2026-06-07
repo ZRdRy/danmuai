@@ -56,7 +56,7 @@ def build_local_fallback_batch(
 
     模型响应慢或节奏空窗时，若不上屏会造成画面长时间无弹幕；本地兜底用池内短句
     快速填充视觉空白，且标记为 replaceable fallback，后续 AI 回复可顶掉。
-    策略：从已启用的公式化弹幕库抽样；两库皆关或池为空则返回空批次。
+    策略：从已启用的自定义公式化弹幕库抽样；未开启或池为空则返回空批次。
     由 main._maybe_inject_local_fallback 在 is_model_slow 为真时调用。
     """
     from app.danmu_pool import load_danmu_pool_for_config, sample_danmu_for_config

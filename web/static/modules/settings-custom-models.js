@@ -31,7 +31,7 @@ export async function loadCustomModels() {
   if (!list) return;
   list.innerHTML = '';
   if (!data.items.length) {
-    list.innerHTML = '<p class="text-sm text-gray-400">暂无自定义模型，点击上方新增~</p>';
+    list.innerHTML = '<p class="text-sm text-gray-400">暂无模型配置档案，点击上方新增~</p>';
     return;
   }
   data.items.forEach((model, index) => {

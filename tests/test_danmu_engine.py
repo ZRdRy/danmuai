@@ -285,7 +285,7 @@ def test_needs_refill_rebuilds_when_visibility_stale(engine):
 
     engine._rebuild_visibility_counts = counting_rebuild  # type: ignore[method-assign]
 
-    engine.config.set("danmu_pool_enabled", "1")
+    engine.config.set("danmu_pool_use_custom", "1")
     engine.config.set("min_on_screen", "5")
     engine.needs_refill()
     assert rebuild_calls == []

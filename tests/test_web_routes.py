@@ -639,6 +639,16 @@ def test_pet_settings_and_command_routes():
     assert show.status_code == 200
     bridge.danmu_app.show_pet.assert_called_once()
 
+    save = client.post(
+        "/api/pet/settings",
+        json={"enabled": False, "visible": True, "scale": 1.0},
+        headers={"Authorization": "Bearer pet-secret"},
+    )
+    assert save.status_code == 200
+    patch_payload = bridge.danmu_app.apply_pet_settings_patch.call_args[0][0]
+    assert patch_payload.get("pet_enabled") is False
+    assert "pet_visible" not in patch_payload
+
 
 def test_delete_font_removes_from_list():
     reg = _mock_registry()

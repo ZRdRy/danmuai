@@ -41,7 +41,6 @@ import {
 import { initTheme } from './modules/theme.js';
 import {
   bindContentPageControls,
-  initAiButlerPage,
   initFeedbackPage,
   loadAnnouncementsPage,
   loadAnnouncementsReadState,
@@ -250,7 +249,6 @@ function navigate(page) {
   const btn = document.querySelector(`#nav [data-page="${page}"]`);
   if (btn) btn.classList.add('active');
 
-  if (page === 'ai-butler') initAiButlerPage();
   if (page === 'settings') {
     loadScreens().catch(console.error);
     loadCustomModels().catch(console.error);

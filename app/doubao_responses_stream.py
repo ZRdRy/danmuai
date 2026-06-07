@@ -5,7 +5,7 @@
 - 增量文本事件 ``response.output_text.delta`` / ``response.output_text.done``；思考事件
   ``response.reasoning_*`` 仅在 ``summary_parts`` 兜底收集，不混入最终弹幕。
 - 终结事件 ``response.completed`` / ``response.incomplete`` / ``response.failed`` 携带 ``usage`` 字段。
-- 本模块被 ``ai_client.py`` 与 ``ai_butler`` 路由调用；调用方在主线程或 HTTP 线程均可
+- 本模块被 ``ai_client.py`` 调用；调用方在主线程或 HTTP 线程均可
   （纯函数，不持有 Qt 状态）。
 """
 

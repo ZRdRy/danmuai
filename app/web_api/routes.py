@@ -21,7 +21,6 @@ from urllib.parse import unquote
 from fastapi import Header, HTTPException
 from pydantic import BaseModel
 
-from app.web_api import ai_butler as butler_api
 from app.web_api import announcements_state
 from app.web_api import app_update_state as app_update_state_api
 from app.web_api import console_theme as console_theme_api
@@ -77,7 +76,6 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         api_mode: str = "doubao"
 
     class DanmuPoolSettingsPayload(BaseModel):
-        builtin_enabled: bool | None = None
         custom_enabled: bool | None = None
         min_on_screen: int | None = None
 
@@ -123,29 +121,12 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
     class ConsoleThemePayload(BaseModel):
         theme: str = "light"
 
-    class AiButlerChatPayload(BaseModel):
-        message: str
-        history: list[dict[str, str]] = []
-
     def _invoke_main(fn, *args, **kwargs):
         """写 API：经 WebConsoleBridge.invoke_on_main 在主线程执行。"""
         try:
             return bridge.invoke_on_main(fn, *args, **kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/ai-butler/chat")
-    def post_ai_butler_chat(
-        body: AiButlerChatPayload,
-        authorization: str | None = Header(default=None),
-    ):
-        check_token(authorization)
-        return read_api.safe_read_api(
-            butler_api.chat,
-            bridge.danmu_app,
-            body.message,
-            body.history,
-        )
 
     @app.get("/api/diagnostics")
     def get_diagnostics():
@@ -472,7 +453,6 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         raw = body.model_dump(exclude_none=True)
         payload = {
             "pet_enabled": raw.get("enabled"),
-            "pet_visible": raw.get("visible"),
             "pet_asset_source": raw.get("asset_source"),
             "pet_asset_path": raw.get("asset_path"),
             "pet_scale": raw.get("scale"),

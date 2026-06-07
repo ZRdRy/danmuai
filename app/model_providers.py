@@ -91,8 +91,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         id="custom_openai",
-        label_zh="自定义（OpenAI 兼容）",
-        label_en="Custom (OpenAI compatible)",
+        label_zh="自定义 OpenAI 兼容接口",
+        label_en="Custom OpenAI-compatible endpoint",
         default_endpoint="",
         mode="openai-compatible",
         model_id_hint_zh="填写服务商文档中的模型 ID",
@@ -102,8 +102,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         id="custom_doubao",
-        label_zh="自定义（豆包 Responses）",
-        label_en="Custom (Doubao Responses)",
+        label_zh="自定义豆包 Responses 接口",
+        label_en="Custom Doubao Responses endpoint",
         default_endpoint="",
         mode="doubao",
         model_id_hint_zh="填写豆包 Responses API 的模型或接入点 ID",
@@ -306,7 +306,7 @@ def mic_audio_unsupported_message(model_id: str) -> str:
     mid = (model_id or "").strip() or "?"
     return (
         f"当前 provider/model「{mid}」未声明 mic_audio 支持。"
-        "请在自定义模型中勾选「支持麦克风」，或改用豆包全模态 / MiMo mimo-v2.5。"
+        "请在模型配置档案中勾选「支持麦克风」，或改用豆包全模态 / MiMo mimo-v2.5。"
     )
 
 

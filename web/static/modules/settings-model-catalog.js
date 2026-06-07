@@ -296,7 +296,7 @@ export function renderVisionModelPicker(providerId, selectedModelId, options = {
   });
   const otherLabel = document.createElement('span');
   otherLabel.className = 'vision-model-id';
-  otherLabel.textContent = '自定义模型';
+  otherLabel.textContent = '手动输入模型 ID';
   otherRow.append(otherRadio, otherLabel);
   picker.appendChild(otherRow);
 
@@ -437,7 +437,7 @@ export function renderMicModelPicker(providerId, selectedModelId, options = {}) 
   });
   const otherLabel = document.createElement('span');
   otherLabel.className = 'vision-model-id';
-  otherLabel.textContent = '自定义模型';
+  otherLabel.textContent = '手动输入模型 ID';
   otherRow.append(otherRadio, otherLabel);
   picker.appendChild(otherRow);
 

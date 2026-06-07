@@ -8,7 +8,7 @@
 畸形 JSON 容错：流式截断导致 ``][`` 拼接时，只解析第一个完整数组段。
 
 normalize_reply_batch 将 AI 条数补齐到 scene_count + filler_count：
-  不足时从公式化弹幕库（danmu_pool_zh.json / 自定义句）轮换去重填充；池为空则保留短批次。
+  不足时从自定义公式化弹幕库轮换去重填充；池为空则保留短批次。
   上屏截断在 danmu_engine.normalize_danmu_display_text（中文默认 15 字 / 英文 40 字符 + ``...``）。
 
 调用方：DanmuApp._on_ai_reply() → parse_ai_reply_with_memory → normalize_reply_batch

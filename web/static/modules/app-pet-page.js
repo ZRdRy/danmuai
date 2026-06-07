@@ -19,7 +19,6 @@ function setAssetText(text) {
 
 function fillPetForm(data) {
   const enabled = document.getElementById('petEnabled');
-  const visible = document.getElementById('petVisible');
   const scale = document.getElementById('petScale');
   const opacity = document.getElementById('petOpacity');
   const alwaysOnTop = document.getElementById('petAlwaysOnTop');
@@ -31,7 +30,6 @@ function fillPetForm(data) {
   const assetPath = document.getElementById('petAssetPath');
 
   if (enabled) enabled.checked = Boolean(data.enabled);
-  if (visible) visible.checked = Boolean(data.visible);
   if (scale) scale.value = String(data.scale ?? 1);
   if (opacity) opacity.value = String(data.opacity ?? 1);
   if (alwaysOnTop) alwaysOnTop.checked = Boolean(data.always_on_top);
@@ -45,12 +43,12 @@ function fillPetForm(data) {
   const pending = data.pending_command;
   if (data.has_pending_command && pending?.preview) {
     setStatusText(`已启用 · 待注入指令：${pending.preview}`);
-  } else if (data.enabled && data.visible) {
-    setStatusText('已启用 · 桌面显示中');
-  } else if (data.enabled) {
-    setStatusText('已启用 · 已隐藏');
-  } else {
+  } else if (!data.enabled) {
     setStatusText('未启用');
+  } else if (data.visible) {
+    setStatusText('已启用');
+  } else {
+    setStatusText('已启用 · 已隐藏（可在桌宠右键菜单显示）');
   }
 
   const asset = data.asset || {};
@@ -66,7 +64,6 @@ function fillPetForm(data) {
 function collectPetPayload() {
   return {
     enabled: Boolean(document.getElementById('petEnabled')?.checked),
-    visible: Boolean(document.getElementById('petVisible')?.checked),
     scale: parseFloat(document.getElementById('petScale')?.value) || 1,
     opacity: parseFloat(document.getElementById('petOpacity')?.value) || 1,
     always_on_top: Boolean(document.getElementById('petAlwaysOnTop')?.checked),
@@ -94,11 +91,6 @@ async function savePetSettings() {
   showToast('桌宠设置已保存');
 }
 
-async function petAction(path) {
-  await apiFetch(path, { method: 'POST', body: '{}' });
-  await loadPetPage();
-}
-
 async function submitPetCommand() {
   const input = document.getElementById('petCommandInput');
   const text = input?.value || '';
@@ -122,15 +114,6 @@ export function initPetPage(deps = {}) {
 
   document.getElementById('btnPetSave')?.addEventListener('click', () => {
     savePetSettings().catch((error) => showToast(error.message, true));
-  });
-  document.getElementById('btnPetShow')?.addEventListener('click', () => {
-    petAction('/api/pet/show').catch((error) => showToast(error.message, true));
-  });
-  document.getElementById('btnPetHide')?.addEventListener('click', () => {
-    petAction('/api/pet/hide').catch((error) => showToast(error.message, true));
-  });
-  document.getElementById('btnPetClose')?.addEventListener('click', () => {
-    petAction('/api/pet/close').catch((error) => showToast(error.message, true));
   });
   document.getElementById('btnPetCommandSubmit')?.addEventListener('click', () => {
     submitPetCommand().catch((error) => showToast(error.message, true));

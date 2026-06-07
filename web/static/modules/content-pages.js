@@ -2,7 +2,7 @@
  * 模块：content-pages - 内容页兼容导出层。
  *
  * 该文件保留统一依赖注入、reward modal 绑定和历史导出名，
- * 公告 / 反馈 / AI 管家的具体实现已下沉到独立子模块。
+ * 公告 / 反馈的具体实现已下沉到独立子模块。
  *
  * Compatibility anchors for static bundle tests:
  * danmu_announcements_overview_banner_dismissed_id
@@ -26,11 +26,6 @@ import {
   configureFeedbackBindings,
   initFeedbackPage,
 } from './content-feedback.js';
-import {
-  bindAiButlerControls,
-  configureAiButlerBindings,
-  initAiButlerPage,
-} from './content-ai-butler.js';
 
 let bindDeps = { showToast: () => {}, navigate: () => {} };
 
@@ -41,7 +36,6 @@ export function configureContentPageBindings(deps) {
     navigate: bindDeps.navigate,
   };
   configureFeedbackBindings(childDeps);
-  configureAiButlerBindings(childDeps);
 }
 
 function showToast(msg, isError = false) {
@@ -83,7 +77,6 @@ export function startAnnouncementsBadgePolling(...args) {
 }
 
 export {
-  initAiButlerPage,
   initFeedbackPage,
   loadAnnouncementsPage,
   loadAnnouncementsReadState,
@@ -94,7 +87,6 @@ export {
 export function bindContentPageControls(deps = {}) {
   configureContentPageBindings(deps);
 
-  bindAiButlerControls();
   bindAnnouncementsControls(showToast);
 
   document.querySelectorAll('.js-reward-fab').forEach((btn) => {

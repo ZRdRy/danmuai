@@ -55,7 +55,6 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "danmu_font_bold": "1",
     "floating_panel_font_family": "Microsoft YaHei",
     "floating_panel_font_bold": "1",
-    "danmu_pool_enabled": "1",
     "danmu_pool_use_custom": "0",
     "min_on_screen": "5",
     "empty_accel": "1",

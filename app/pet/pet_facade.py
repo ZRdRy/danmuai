@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.pet.pet_animation_mapper import resolve_pet_animation_hint
 from app.pet.pet_assets import validate_pet_pack_dir
-from app.pet.pet_state import PetSettings
+from app.pet.pet_state import PetSettings, _truthy
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -83,6 +83,12 @@ def apply_pet_settings_patch(app: "DanmuApp", payload: dict[str, object]) -> dic
             from pathlib import Path
 
             validate_pet_pack_dir(Path(str(path).strip()))
+
+    if "pet_enabled" in items:
+        old_enabled = _truthy(app.config.get("pet_enabled", "0"))
+        new_enabled = _truthy(items["pet_enabled"])
+        if new_enabled != old_enabled:
+            items["pet_visible"] = items["pet_enabled"]
 
     if items:
         app.config.set_batch(items)

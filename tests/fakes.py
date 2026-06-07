@@ -88,6 +88,15 @@ class FakeConfig:
     def set_custom_models(self, models):
         self.values["custom_models"] = models
 
+    def get_custom_danmu_pool(self):
+        raw = self.values.get("custom_danmu_pool", [])
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def set_custom_danmu_pool(self, items):
+        self.values["custom_danmu_pool"] = list(items)
+
     def get_region(self):
         region = self.values.get("region")
         if region is not None:
@@ -191,7 +200,7 @@ class FakeEngine:
           但不真正创建 QGraphicsItem（避免起 QApplication）
         - ``calls`` 列表记录每次 ``add_text`` 的 ``(content, persona)``
         - ``running`` / ``dropped_pending`` 让 stop/clear 路径可断言
-        - ``min_on_screen`` / ``danmu_pool_enabled`` 来自 ``_config_values``
+        - ``min_on_screen`` / ``danmu_pool_use_custom`` 来自 ``_config_values``
     """
 
     def __init__(self):
@@ -233,7 +242,7 @@ class FakeEngine:
         return self._config_values.get("min_on_screen", 5)
 
     def danmu_pool_enabled(self):
-        return bool(self._config_values.get("danmu_pool_enabled", False))
+        return bool(self._config_values.get("danmu_pool_use_custom", False))
 
     def deficit_below_min(self):
         return 0

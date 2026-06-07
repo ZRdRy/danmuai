@@ -26,7 +26,7 @@ def test_maybe_pool_topup_fills_deficit(tmp_path, monkeypatch):
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "5")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "3")
 
     engine = DanmuEngine(store)
@@ -69,7 +69,6 @@ def test_maybe_pool_topup_disabled_when_min_zero(tmp_path, monkeypatch):
 
 def test_maybe_pool_topup_disabled_when_pool_off(tmp_path, monkeypatch):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "0")
     store.set("danmu_pool_use_custom", "0")
     store.set("min_on_screen", "5")
     engine = DanmuEngine(store)
@@ -92,7 +91,6 @@ def test_maybe_pool_topup_custom_only(tmp_path, monkeypatch):
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "5")
-    store.set("danmu_pool_enabled", "0")
     store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "3")
     store.set_custom_danmu_pool(["自定义1", "自定义2", "自定义3", "自定义4"])
@@ -122,7 +120,7 @@ def test_deficit_below_min_many_items_bounded(tmp_path, monkeypatch):
     """BUG-034: deficit_below_min with ~1000 items must not regress to multi-second scans."""
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(4, int(v)))
     store = ConfigStore(db_path=tmp_path / "deficit_bulk.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "5")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "8")
@@ -145,7 +143,7 @@ def test_maybe_pool_topup_calls_deficit_at_most_once(tmp_path, monkeypatch):
     """BUG-034: maybe_pool_topup must not call deficit_below_min inside the add loop."""
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
     store = ConfigStore(db_path=tmp_path / "deficit_once.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "8")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "5")

@@ -60,7 +60,7 @@ def test_pick_track_prefers_least_congested_track(config_store, monkeypatch):
 
 def test_min_on_screen_default_0_when_pool_disabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "0")
     store.set("danmu_pool_use_custom", "0")
     engine = DanmuEngine(store)
     assert engine.min_on_screen() == 0
@@ -68,7 +68,7 @@ def test_min_on_screen_default_0_when_pool_disabled(tmp_path):
 
 def test_min_on_screen_when_custom_only_enabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "0")
     store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "5")
     engine = DanmuEngine(store)
@@ -77,14 +77,14 @@ def test_min_on_screen_when_custom_only_enabled(tmp_path):
 
 def test_min_on_screen_default_5_when_pool_enabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     engine = DanmuEngine(store)
     assert engine.min_on_screen() == 5
 
 
 def test_deficit_below_min(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "5")
     engine = DanmuEngine(store)
     engine.set_screen_width(900.0)
@@ -133,7 +133,7 @@ def test_entry_zone_single_pending_still_accepts(tmp_path):
 
 def test_min_on_screen_zero_when_pool_disabled(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "0")
+    store.set("danmu_pool_use_custom", "0")
     store.set("min_on_screen", "5")
     engine = DanmuEngine(store)
     assert engine.min_on_screen() == 0
@@ -142,7 +142,7 @@ def test_min_on_screen_zero_when_pool_disabled(tmp_path):
 
 def test_min_on_screen_zero_disables_needs_refill(tmp_path):
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "0")
     engine = DanmuEngine(store)
     engine.set_screen_width(900.0)
@@ -284,7 +284,7 @@ def test_drop_pending_items_keeps_visible_danmu(tmp_path):
 def test_needs_refill_when_visible_below_min(tmp_path, monkeypatch):
     monkeypatch.setattr("app.danmu_engine.clamp_danmu_lines", lambda v: max(2, int(v)))
     store = ConfigStore(db_path=tmp_path / "config.db")
-    store.set("danmu_pool_enabled", "1")
+    store.set("danmu_pool_use_custom", "1")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "5")
     store.set("min_on_screen", "5")
@@ -335,6 +335,7 @@ def test_needs_refill_not_blocked_without_pending_cap(tmp_path, monkeypatch):
     store = ConfigStore(db_path=tmp_path / "config.db")
     store.set("danmu_speed", "2.0")
     store.set("danmu_lines", "5")
+    store.set("danmu_pool_use_custom", "1")
     store.set("min_on_screen", "5")
 
     engine = DanmuEngine(store)

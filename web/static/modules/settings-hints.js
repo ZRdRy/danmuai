@@ -2,7 +2,7 @@ import { showFloatingTooltip, wireFloatingTooltipButton } from './settings-model
 
 const SETTINGS_FIELD_TIPS = {
   providerPreset:
-    '选一个常见 AI 平台，会自动填好接口地址和模式；选「自定义」则需自己逐项设置。',
+    '选一个常见 AI 平台，会自动填好接口地址和模式；选「手动填写」则不套用预设，需自己逐项设置。',
   api_endpoint:
     '视觉模型服务的网址。火山方舟豆包一般填到 /api/v3；多数 OpenAI 兼容服务填到 /v1。',
   api_mode:
@@ -10,7 +10,7 @@ const SETTINGS_FIELD_TIPS = {
   mic_use_visual_model:
     '开启时开麦与识图共用上方「API 与模型」的接口与模型；关闭后可在本标签单独配置支持麦克风的模型。',
   micProviderPreset:
-    '为麦克风接话选择服务商预设，会自动填入麦克风 API 地址与模式。',
+    '为麦克风接话选择服务商预设，会自动填入麦克风 API 地址与模式。OpenAI 兼容类预设不保证支持音频，需模型声明支持或在模型配置档案中勾选「支持麦克风」。',
   mic_api_endpoint:
     '麦克风专用 API 地址。豆包一般填到 /api/v3；MiMo 等 OpenAI 兼容服务填到 /v1。',
   mic_api_mode:
@@ -20,7 +20,7 @@ const SETTINGS_FIELD_TIPS = {
   mic_api_key:
     '麦克风专用 API 密钥，与识图密钥分开加密保存。留空保存不会覆盖已有密钥。',
   model:
-    '实际调用的模型名称或接入点 ID。也可在下方「自定义模型」里保存多套配置。',
+    '实际调用的模型名称或接入点 ID。也可在下方「模型配置档案」里保存多套 endpoint/密钥/模型。',
   screen_index:
     '截图和弹幕叠在哪块显示器上。编号无效时会自动改用主屏。',
   temperature:
@@ -105,7 +105,7 @@ const SETTINGS_FIELD_TIPS = {
 
 const SETTINGS_HEADING_TIPS = {
   'custom-models':
-    '为不同接口地址、模型、密钥保存多套配置，可指定默认；这里的密钥与上方全局密钥分开管理。',
+    '模型配置档案：为不同接口地址、模型、密钥保存多套配置，可指定默认；这里的密钥与上方全局密钥分开管理。',
   'compress-preview':
     '上传一张样图，预览当前「最大宽度」和「JPEG 质量」下的压缩效果。图片只在内存里处理，不会保存到硬盘。',
 };

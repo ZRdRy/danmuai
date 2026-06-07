@@ -18,6 +18,16 @@ export function guessProviderIdFromEndpoint(endpoint, apiMode) {
   return '';
 }
 
+const MANUAL_PROVIDER_LABEL = '手动填写';
+
+// Mic tab only: suffix clarifies audio capability; API tab uses plain provider labels.
+const MIC_LABEL_SUFFIX = {
+  doubao: '（支持部分全模态模型）',
+  mimo: '（mimo-v2.5）',
+  custom_openai: '（需模型支持音频输入）',
+  custom_doubao: '（需模型支持 input_audio）',
+};
+
 let providersDeps = {
   showToast: () => {},
   pickDefaultCatalogModelId: () => '',
@@ -33,17 +43,30 @@ export function configureSettingsProviders(deps) {
   providersDeps = { ...providersDeps, ...deps };
 }
 
+function appendManualProviderOption(sel) {
+  const opt = document.createElement('option');
+  opt.value = '';
+  opt.textContent = MANUAL_PROVIDER_LABEL;
+  sel.appendChild(opt);
+}
+
+function fillProviderPresetSelect(sel, { mic = false } = {}) {
+  sel.innerHTML = '';
+  providersCache.forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    const suffix = mic ? (MIC_LABEL_SUFFIX[p.id] || '') : '';
+    opt.textContent = `${p.label}${suffix}`;
+    sel.appendChild(opt);
+  });
+  appendManualProviderOption(sel);
+}
+
 export async function loadProviders() {
   providersCache = await fetch(`${API.base}/api/providers`).then((r) => r.json());
   const sel = document.getElementById('providerPreset');
   if (sel) {
-    sel.innerHTML = '<option value="">自定义</option>';
-    providersCache.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.label;
-      sel.appendChild(opt);
-    });
+    fillProviderPresetSelect(sel);
   }
   const modelProv = document.getElementById('modelProvider');
   if (modelProv) {
@@ -57,13 +80,7 @@ export async function loadProviders() {
   }
   const micSel = document.getElementById('micProviderPreset');
   if (micSel) {
-    micSel.innerHTML = '<option value="">自定义</option>';
-    providersCache.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.label;
-      micSel.appendChild(opt);
-    });
+    fillProviderPresetSelect(micSel, { mic: true });
   }
 }
 

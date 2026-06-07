@@ -66,7 +66,7 @@ def test_validate_rejects_global_save_when_model_id_reserved_for_custom():
             "mode": "openai",
         }
     ]
-    with pytest.raises(ValueError, match="自定义模型|Custom Models"):
+    with pytest.raises(ValueError, match="模型配置档案|Model Profiles"):
         validate_global_model_selection(
             "https://ark.cn-beijing.volces.com/api/v3",
             "doubao",

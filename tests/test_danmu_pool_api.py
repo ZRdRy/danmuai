@@ -19,24 +19,22 @@ def pool_app(tmp_path):
 
 def test_get_meta_defaults(pool_app):
     meta = pool_api.get_meta(pool_app)
-    assert meta["builtin_enabled"] is True
     assert meta["custom_enabled"] is False
     assert meta["min_on_screen"] == 5
     assert meta["custom_count"] == 0
-    assert meta["effective_pool_enabled"] is True
-    assert meta["builtin_count"] >= 0
+    assert meta["effective_pool_enabled"] is False
+    assert "builtin_enabled" not in meta
+    assert "builtin_count" not in meta
 
 
 def test_save_settings_maps_keys(pool_app):
     pool_api.save_settings(
         pool_app,
         {
-            "builtin_enabled": True,
             "custom_enabled": True,
             "min_on_screen": 7,
         },
     )
-    assert pool_app.config.get("danmu_pool_enabled") == "1"
     assert pool_app.config.get("danmu_pool_use_custom") == "1"
     assert pool_app.config.get("min_on_screen") == "7"
     pool_app.config_changed.emit.assert_called_once()
@@ -76,22 +74,6 @@ def test_delete_custom_by_texts(pool_app):
     assert result["items"] == ["保留"]
 
 
-def test_append_custom_rejects_merged_duplicate_with_builtin(pool_app):
-    """W-DANMU-POOL-002: 与内置池字面重复应返回 merged_duplicate 而非静默丢弃。"""
-    from app.danmu_pool import load_danmu_pool
-
-    builtin = load_danmu_pool()
-    if "懂了" not in builtin:
-        pytest.skip("built-in pool missing fixture '懂了'")
-
-    result = pool_api.append_custom(pool_app, {"items": ["懂了", "全新自定义句A"]})
-    assert result["added"] == 1
-    assert result["skipped"] == 1
-    reasons = {item["reason"] for item in result["skipped_items"]}
-    assert "merged_duplicate" in reasons
-    assert pool_app.config.get_custom_danmu_pool() == ["全新自定义句A"]
-
-
 def test_danmu_pool_routes_registered(tmp_path):
     from app.web_api.routes import register_web_routes
     from fastapi import FastAPI
@@ -112,11 +94,13 @@ def test_danmu_pool_routes_registered(tmp_path):
 
     meta = client.get("/api/danmu-pool/meta")
     assert meta.status_code == 200
-    assert "builtin_enabled" in meta.json()
+    body = meta.json()
+    assert "builtin_enabled" not in body
+    assert "builtin_count" not in body
 
     settings = client.put(
         "/api/danmu-pool/settings",
-        json={"builtin_enabled": True, "custom_enabled": False, "min_on_screen": 4},
+        json={"custom_enabled": True, "min_on_screen": 4},
     )
     assert settings.status_code == 200
 

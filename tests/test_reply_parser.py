@@ -61,21 +61,37 @@ def test_parse_ai_reply_payload_splits_duplicated_json_arrays():
     assert items == ["终于搞定这个bug啦", "修复方案挺清晰啊", "这代码界面好专业"]
 
 
-def test_normalize_reply_batch_pads_to_default_five_items():
+def test_normalize_reply_batch_pads_to_default_five_items(monkeypatch):
+    monkeypatch.setattr(
+        "app.reply_parser._scene_fillers",
+        lambda config=None: ["场景A", "场景B", "场景C"],
+    )
+    monkeypatch.setattr(
+        "app.reply_parser._generic_fillers",
+        lambda config=None: ["泛用1", "泛用2", "泛用3"],
+    )
     items = normalize_reply_batch(["强相关1", "强相关2"])
     assert len(items) == 5
     assert items[:2] == ["强相关1", "强相关2"]
     assert len(items) == len(set(items))
 
 
-def test_normalize_reply_batch_custom_partition():
+def test_normalize_reply_batch_custom_partition(monkeypatch):
+    monkeypatch.setattr(
+        "app.reply_parser._scene_fillers",
+        lambda config=None: ["场景A", "场景B", "场景C", "场景D"],
+    )
+    monkeypatch.setattr(
+        "app.reply_parser._generic_fillers",
+        lambda config=None: ["泛用1", "泛用2", "泛用3", "泛用4"],
+    )
     items = normalize_reply_batch(["a"], scene_count=3, filler_count=4)
     assert len(items) == 7
     assert items[0] == "a"
 
 
 def test_normalize_reply_batch_shortfall_when_pool_disabled():
-    cfg = FakeConfig({"danmu_pool_enabled": "0", "danmu_pool_use_custom": "0"})
+    cfg = FakeConfig({"danmu_pool_use_custom": "0"})
     items = normalize_reply_batch(["only"], config=cfg)
     assert items == ["only"]
 
@@ -103,22 +119,24 @@ def test_build_local_fallback_batch_no_intra_batch_duplicates():
 
 
 def test_build_local_fallback_batch_shortfall_when_pool_exhausted(monkeypatch):
-    monkeypatch.setattr("app.danmu_pool.load_danmu_pool", lambda: ["兜底A", "兜底B", "兜底C"])
+    pool = ["兜底A", "兜底B", "兜底C"]
+    monkeypatch.setattr("app.danmu_pool.load_danmu_pool_for_config", lambda _cfg: pool)
     monkeypatch.setattr(
-        "app.danmu_pool.sample_danmu",
-        lambda n, rng=None: ["兜底A", "兜底B", "兜底C"][:n],
+        "app.danmu_pool.sample_danmu_for_config",
+        lambda _cfg, n, rng=None: pool[:n],
     )
-    items = build_local_fallback_batch(scene_count=5, filler_count=5)
+    cfg = FakeConfig({"danmu_pool_use_custom": "1"})
+    items = build_local_fallback_batch(scene_count=5, filler_count=5, config=cfg)
     assert len(items) < 10
     assert len(items) == len(set(items))
 
 
 def test_build_local_fallback_batch_empty_when_pool_disabled(monkeypatch):
     monkeypatch.setattr(
-        "app.danmu_pool.load_danmu_pool",
-        lambda: ["句库不应出现"] * 20,
+        "app.danmu_pool.load_danmu_pool_for_config",
+        lambda _cfg: ["句库不应出现"] * 20,
     )
-    cfg = FakeConfig({"danmu_pool_enabled": "0", "danmu_pool_use_custom": "0"})
+    cfg = FakeConfig({"danmu_pool_use_custom": "0"})
     items = build_local_fallback_batch(scene_count=2, filler_count=3, config=cfg)
     assert items == []
 

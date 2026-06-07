@@ -352,7 +352,7 @@ export function updateMicModeHint() {
     return;
   }
   if (apiMode !== 'doubao' && providerId !== 'doubao') {
-    hint.textContent = `当前模型「${modelId || '未选'}」未声明 mic_audio 支持。请在自定义模型中勾选「支持麦克风」，或改用豆包/MiMo，或在麦克风标签单独配置。`;
+    hint.textContent = `当前模型「${modelId || '未选'}」未声明 mic_audio 支持。请在模型配置档案中勾选「支持麦克风」，或改用豆包/MiMo，或在麦克风标签单独配置。`;
     return;
   }
   hint.textContent = `当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），保存后再开始弹幕。`;
@@ -370,7 +370,7 @@ function updateModelActiveSourceBanner(cfg) {
   const name = cfg.model_display_name || cfg.active_model_id || '';
   const id = cfg.active_model_id || '';
   banner.textContent =
-    `当前默认模型来自自定义模型「${name}」（${id}）。助手设置中的 API 地址与密钥不用于生成弹幕，请在自定义模型列表中维护。`;
+    `当前默认模型来自模型配置档案「${name}」（${id}）。助手设置中的 API 地址与密钥不用于生成弹幕，请在模型配置档案列表中维护。`;
   banner.classList.remove('hidden');
   if (cfg.provider_model_mismatch) {
     banner.textContent +=

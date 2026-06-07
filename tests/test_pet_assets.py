@@ -173,6 +173,48 @@ def test_sync_pet_window_visibility_hides_pet_when_visible_zero():
     assert window.hide_calls == 1
 
 
+def _make_patch_app(config_values):
+    from unittest.mock import MagicMock
+
+    app = type("StubApp", (), {})()
+    app.config = FakeConfig(config_values)
+    app.config_changed = MagicMock()
+    window = MagicMock()
+    app.__dict__["pet_window"] = window
+    return app
+
+
+def test_apply_pet_settings_patch_disabling_syncs_visible(qapp):
+    from app.pet.pet_facade import apply_pet_settings_patch
+
+    app = _make_patch_app({"pet_enabled": "1", "pet_visible": "1"})
+    apply_pet_settings_patch(app, {"pet_enabled": False})
+
+    assert app.config.get("pet_enabled") == "0"
+    assert app.config.get("pet_visible") == "0"
+
+
+def test_apply_pet_settings_patch_enabling_syncs_visible(qapp):
+    from app.pet.pet_facade import apply_pet_settings_patch
+
+    app = _make_patch_app({"pet_enabled": "0", "pet_visible": "0"})
+    apply_pet_settings_patch(app, {"pet_enabled": True})
+
+    assert app.config.get("pet_enabled") == "1"
+    assert app.config.get("pet_visible") == "1"
+
+
+def test_apply_pet_settings_patch_enabled_unchanged_keeps_visible(qapp):
+    from app.pet.pet_facade import apply_pet_settings_patch
+
+    app = _make_patch_app({"pet_enabled": "1", "pet_visible": "0", "pet_scale": "1.0"})
+    apply_pet_settings_patch(app, {"pet_enabled": True, "pet_scale": "1.5"})
+
+    assert app.config.get("pet_enabled") == "1"
+    assert app.config.get("pet_visible") == "0"
+    assert app.config.get("pet_scale") == "1.5"
+
+
 def test_sync_pet_window_visibility_noop_when_window_missing():
     """PET-009: 启动期 _init_core_subsystems 顺序保证 pet_window 已创建；
     但若缺失（如旧路径装配失败），façade 必须安全 no-op，不能抛异常。"""

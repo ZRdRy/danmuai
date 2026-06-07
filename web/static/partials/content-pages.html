@@ -1,17 +1,12 @@
     <section id="page-danmu-pool" class="page-panel">
       <header class="mb-8">
         <h2 class="text-2xl font-bold text-warmText">公式化弹幕库</h2>
-        <p class="text-gray-500 mt-1">管理内置与自定义公式化短句，用于同屏不足时自动补足</p>
+        <p class="text-gray-500 mt-1">管理自定义公式化短句，用于同屏不足时自动补足</p>
       </header>
       <div class="card p-8 space-y-8 danmu-pool-page">
         <div class="danmu-pool-section">
           <p class="settings-section-title">弹幕库来源</p>
           <div class="space-y-4">
-            <label class="flex items-center gap-2 font-semibold text-warmText">
-              <input type="checkbox" id="poolBuiltinEnabled" class="accent-warmPink">
-              内置公式化弹幕库
-            </label>
-            <p class="settings-section-hint">启用后，系统会从内置公式化弹幕库中抽取短句，用于弹幕不足时补足。<span id="poolBuiltinCountHint" class="ml-1"></span></p>
             <label class="flex items-center gap-2 font-semibold text-warmText">
               <input type="checkbox" id="poolCustomEnabled" class="accent-warmPink">
               自定义公式化弹幕库
@@ -25,8 +20,8 @@
             <label for="poolMinOnScreen" class="settings-field-label">最小同屏条数</label>
             <input type="number" id="poolMinOnScreen" min="0" max="50" value="5" class="settings-field-control">
           </div>
-          <p class="settings-section-hint">当屏幕上的弹幕少于该数量时，会从已启用的公式化弹幕库中抽取短句补足。</p>
-          <p id="poolBothOffHint" class="settings-section-hint hidden">如果两个弹幕库都关闭，则不会进行公式化弹幕补足。</p>
+          <p class="settings-section-hint">当屏幕上的弹幕少于该数量时，会从自定义公式化弹幕库中抽取短句补足。</p>
+          <p id="poolBothOffHint" class="settings-section-hint hidden">关闭自定义公式化弹幕库后，不会进行公式化弹幕补足。</p>
           <button type="button" id="btnSavePoolSettings" class="btn-primary mt-4 px-6 py-2 text-white rounded-xl font-bold shadow-warm">保存设置</button>
         </div>
         <div class="danmu-pool-section">
@@ -72,14 +67,7 @@
           <label class="flex items-center gap-2 font-semibold text-warmText">
             <input type="checkbox" id="petEnabled" class="accent-warmPink"> 启用桌宠
           </label>
-          <label class="flex items-center gap-2 font-semibold text-warmText">
-            <input type="checkbox" id="petVisible" class="accent-warmPink"> 桌面显示
-          </label>
-          <div class="flex flex-wrap gap-3">
-            <button type="button" id="btnPetShow" class="btn-primary px-5 py-2 text-white rounded-xl font-bold shadow-warm">显示</button>
-            <button type="button" id="btnPetHide" class="px-5 py-2 border border-gray-200 rounded-xl font-semibold text-warmText">隐藏</button>
-            <button type="button" id="btnPetClose" class="px-5 py-2 border border-gray-200 rounded-xl font-semibold text-warmText">关闭桌宠</button>
-          </div>
+          <p class="settings-section-hint">开启后桌宠将显示在桌面；临时隐藏请使用桌宠右键菜单。</p>
         </div>
         <div class="space-y-4">
           <p class="settings-section-title">显示设置</p>
@@ -140,54 +128,6 @@
           <p class="settings-section-hint">兼容 <a href="https://petdex.dev/zh" target="_blank" rel="noopener noreferrer" class="text-warmPink underline">PetDex</a> 8×9 spritesheet 格式；社区素材需自行下载导入。</p>
         </div>
         <button type="button" id="btnPetSave" class="btn-primary px-6 py-2 text-white rounded-xl font-bold shadow-warm">保存设置</button>
-      </div>
-    </section>
-
-    <!-- ========== 区域：AI 管家 ========== -->
-    <!-- section: 自然语言辅助助手设置（POST /api/ai-butler/chat；返回可审阅 patch，用户确认后 PUT /api/config） -->
-    <section id="page-ai-butler" class="page-panel" aria-label="AI 管家">
-      <header class="mb-8">
-        <h2 class="text-2xl font-bold text-warmText">AI 管家</h2>
-        <p class="text-gray-500 mt-1">可咨询使用说明、模型与连接问题，也可自然语言调整「助手设置」；复用你已保存的 API，不会自动改配置</p>
-      </header>
-      <div class="card p-8 space-y-6 ai-butler-page">
-        <div id="aiButlerApiHint" class="hidden bg-softPeach/40 border border-softPeach rounded-xl p-4 text-sm text-warmText">
-          <p>请先在「助手设置」中配置 API Endpoint、API Key 与视觉模型，保存后再回来对话。</p>
-          <button type="button" id="btnAiButlerGoSettings" class="mt-3 text-warmPink font-semibold underline">前往助手设置</button>
-        </div>
-        <p class="text-sm text-gray-500">示例：「为什么不能用 DeepSeek？」「测试连接 401 怎么办？」「帮我把弹幕调慢一点」——仅配置建议需你点「应用修改」后才会写入。</p>
-        <div id="aiButlerMessages" class="ai-butler-messages" aria-live="polite"></div>
-        <div id="aiButlerSuggestionPanel" class="ai-butler-suggestion hidden" aria-label="配置修改建议">
-          <h3 class="text-lg font-semibold text-warmText mb-3">建议修改配置</h3>
-          <div class="overflow-x-auto">
-            <table class="ai-butler-patch-table w-full text-sm">
-              <thead>
-                <tr>
-                  <th class="text-left py-2 pr-3">字段</th>
-                  <th class="text-left py-2 pr-3">当前值</th>
-                  <th class="text-left py-2 pr-3">建议值</th>
-                  <th class="text-left py-2">原因</th>
-                </tr>
-              </thead>
-              <tbody id="aiButlerPatchBody"></tbody>
-            </table>
-          </div>
-          <p id="aiButlerDiscardedHint" class="hidden text-xs text-gray-500 mt-2"></p>
-          <div class="flex flex-wrap gap-3 mt-4">
-            <button type="button" id="btnAiButlerApply" class="px-5 py-2.5 bg-warmPink hover:bg-warmPinkHover text-white rounded-xl font-semibold shadow-warm">应用修改</button>
-            <button type="button" id="btnAiButlerCancel" class="px-5 py-2.5 border border-gray-200 rounded-xl font-semibold text-warmText">取消建议</button>
-          </div>
-        </div>
-        <div class="flex flex-col sm:flex-row gap-3">
-          <textarea
-            id="aiButlerInput"
-            class="ai-butler-input flex-1 min-h-[88px] px-4 py-3 bg-cream rounded-xl text-warmText border border-transparent resize-y"
-            rows="3"
-            maxlength="2000"
-            placeholder="可问模型/连接/功能说明，或描述希望如何调整弹幕、节奏、图像压缩等设置…"
-          ></textarea>
-          <button type="button" id="btnAiButlerSend" class="px-6 py-3 bg-warmPink hover:bg-warmPinkHover text-white rounded-xl font-semibold shadow-warm shrink-0 self-end sm:self-auto">发送</button>
-        </div>
       </div>
     </section>
 

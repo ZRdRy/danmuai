@@ -129,16 +129,6 @@
   background-color: rgba(var(--color-primary-rgb), 0.12);
 }
 
-[data-theme="dark"] .ai-butler-messages {
-  background: var(--color-bg-subtle);
-  border-color: var(--border);
-}
-
-[data-theme="dark"] .ai-butler-suggestion {
-  background: var(--color-bg-subtle);
-  border-color: var(--border);
-}
-
 [data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
 [data-theme="dark"] select,
 [data-theme="dark"] textarea {

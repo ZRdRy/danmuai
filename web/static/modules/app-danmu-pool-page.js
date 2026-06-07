@@ -9,9 +9,7 @@ function showToast(message, isError = false) {
 }
 
 function poolEffectiveEnabledLocal() {
-  const builtin = document.getElementById('poolBuiltinEnabled')?.checked;
-  const custom = document.getElementById('poolCustomEnabled')?.checked;
-  return Boolean(builtin || custom);
+  return Boolean(document.getElementById('poolCustomEnabled')?.checked);
 }
 
 function updatePoolMinOnScreenControl() {
@@ -54,23 +52,16 @@ export async function loadDanmuPoolPage() {
     apiFetch('/api/danmu-pool/custom'),
   ]);
   danmuPoolMeta = meta;
-  const builtinEl = document.getElementById('poolBuiltinEnabled');
   const customEl = document.getElementById('poolCustomEnabled');
   const minEl = document.getElementById('poolMinOnScreen');
-  const countHint = document.getElementById('poolBuiltinCountHint');
-  if (builtinEl) builtinEl.checked = Boolean(meta.builtin_enabled);
   if (customEl) customEl.checked = Boolean(meta.custom_enabled);
   if (minEl) minEl.value = String(meta.min_on_screen ?? 5);
-  if (countHint) {
-    countHint.textContent = meta.builtin_count ? `(内置约 ${meta.builtin_count} 条)` : '';
-  }
   renderCustomDanmuPoolList(custom.items || []);
   updatePoolMinOnScreenControl();
 }
 
 async function saveDanmuPoolSettings() {
   const body = {
-    builtin_enabled: Boolean(document.getElementById('poolBuiltinEnabled')?.checked),
     custom_enabled: Boolean(document.getElementById('poolCustomEnabled')?.checked),
     min_on_screen: parseInt(document.getElementById('poolMinOnScreen')?.value, 10) || 0,
   };
@@ -146,12 +137,10 @@ export function initDanmuPoolPage(deps = {}) {
       cb.checked = checked;
     });
   });
-  ['poolBuiltinEnabled', 'poolCustomEnabled'].forEach((id) => {
-    document.getElementById(id)?.addEventListener('change', () => {
-      if (danmuPoolMeta) {
-        danmuPoolMeta.effective_pool_enabled = poolEffectiveEnabledLocal();
-      }
-      updatePoolMinOnScreenControl();
-    });
+  document.getElementById('poolCustomEnabled')?.addEventListener('change', () => {
+    if (danmuPoolMeta) {
+      danmuPoolMeta.effective_pool_enabled = poolEffectiveEnabledLocal();
+    }
+    updatePoolMinOnScreenControl();
   });
 }

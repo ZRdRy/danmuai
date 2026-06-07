@@ -20,7 +20,7 @@
       <form id="settingsForm" class="card p-8 space-y-0">
         <div class="settings-tabs-bar">
           <div class="settings-tabs" role="tablist" aria-label="助手设置分类">
-            <!-- tab: API 与模型 — 服务商/Key/视觉模型/温度/Token/记忆模式/自定义模型 -->
+            <!-- tab: API 与模型 — 服务商/Key/视觉模型/温度/Token/记忆模式/模型配置档案 -->
             <button type="button" role="tab" class="settings-tab active" data-settings-tab="api" aria-selected="true">API 与模型</button>
             <!-- tab: 麦克风模式 — 开麦/与视觉同模型/独立 mic 服务商 -->
             <button type="button" role="tab" class="settings-tab" data-settings-tab="mic" aria-selected="false">麦克风模式</button>
@@ -49,7 +49,7 @@
             <div class="md:col-span-2">
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-tag"></use></svg>服务商预设</label>
               <select id="providerPreset" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                <option value="">自定义</option>
+                <option value="">手动填写</option>
               </select>
             </div>
             <div>
@@ -83,7 +83,7 @@
                 <p id="modelActiveSourceBanner" class="hidden text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-2" role="status"></p>
                 <div id="visionModelPicker" class="vision-model-picker" role="radiogroup" aria-label="视觉模型"></div>
                 <div id="visionModelCustom" class="vision-model-custom hidden">
-                  <input type="text" id="modelCustom" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="自定义模型 ID" autocomplete="off">
+                  <input type="text" id="modelCustom" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="输入模型 ID" autocomplete="off">
                 </div>
               </div>
             </div>
@@ -112,7 +112,7 @@
           </div>
           <div id="customModelsSection" class="settings-full-only space-y-3">
             <div class="flex justify-between items-center">
-              <h4 class="text-md font-bold text-warmText">自定义模型</h4>
+              <h4 class="text-md font-bold text-warmText">模型配置档案</h4>
               <button type="button" id="btnAddCustomModel" class="btn-primary px-4 py-2 text-white rounded-xl text-sm font-bold">新增模型</button>
             </div>
             <div id="customModelsList" class="space-y-2"></div>
@@ -145,7 +145,7 @@
               <div class="md:col-span-2">
                 <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-tag"></use></svg>麦克风服务商预设</label>
                 <select id="micProviderPreset" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                  <option value="">自定义</option>
+                  <option value="">手动填写</option>
                 </select>
               </div>
               <div>
@@ -174,7 +174,7 @@
                   <input type="hidden" name="mic_model" id="mic_model" value="">
                   <div id="micModelPicker" class="vision-model-picker" role="radiogroup" aria-label="麦克风模型"></div>
                   <div id="micModelCustom" class="vision-model-custom hidden">
-                    <input type="text" id="micModelCustomInput" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="自定义模型 ID（须支持麦克风）" autocomplete="off">
+                    <input type="text" id="micModelCustomInput" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="输入模型 ID（须支持麦克风）" autocomplete="off">
                   </div>
                 </div>
                 <p class="text-xs text-gray-400 mt-1">仅列出目录中带「支持麦克风」标识的模型；豆包全模态或小米 MiMo 的 mimo-v2.5。</p>

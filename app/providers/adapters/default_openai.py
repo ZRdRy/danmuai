@@ -6,7 +6,7 @@
 - 视觉 user content 顺序为 ``[text, image]``（部分 provider 期望文本先于图片）。
 - ``stream_options`` 注入条件：仅当 ``caps.stream_usage_in_final_chunk`` 为真
   且请求 ``stream: true`` 时注入 ``{"include_usage": True}``，避免百炼在非流式下 400（见 W-021）。
-- 麦克风音频（``audio_data_uri``）不直接附加到 user content；上层走 ``ai_butler`` 等独立路由。
+- 麦克风音频（``audio_data_uri``）不直接附加到 user content；由麦克风专用路由处理。
 """
 
 from __future__ import annotations
