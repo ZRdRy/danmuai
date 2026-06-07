@@ -1,4 +1,8 @@
-"""Web console websocket helpers extracted from app.web_console."""
+"""Web 控制台 WebSocket 端点：/ws/status 状态推送、/ws/logs 日志推送。
+
+协议：1008 关闭码 → 前端 refreshSession()（token 失效或连接数已满）。
+主线程通过 _enqueue_ws 线程安全入队，asyncio 事件循环推送给客户端。
+"""
 
 from __future__ import annotations
 

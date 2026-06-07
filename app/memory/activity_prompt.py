@@ -1,4 +1,8 @@
-"""Format activity state as a single-line prompt injection."""
+"""Format activity state as a single-line prompt injection.
+
+仅在 ``memory_mode == "strong"`` 模式下被 ``memory_prompt_builder`` 消费；
+输出形如 ``近期状态：用户在写代码（IDE）`` 的单行，附加到用户提示词末尾。
+"""
 
 from __future__ import annotations
 

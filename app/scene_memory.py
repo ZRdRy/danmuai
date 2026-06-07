@@ -1,4 +1,10 @@
-"""Compatibility facade for scene memory (see app.memory package)."""
+"""Compatibility facade for scene memory (see app.memory package).
+
+历史说明：早期记忆实现集中在 ``app/scene_memory.py``；重构后拆分为 ``app/memory/``
+子包（store/scene_context/activity/bullet_dedup/types/visual_update/activity_prompt）。
+本文件**仅**作为 re-export 兼容层，供老 import 路径（``from app.scene_memory import
+SceneMemoryStore``）继续工作。**新代码应直接导入 ``app.memory``**。
+"""
 
 from app.memory import (
     SceneMemoryStore,

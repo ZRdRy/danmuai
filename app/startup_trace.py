@@ -1,4 +1,11 @@
-"""Startup phase timing for cold-start diagnosis (dev log + frozen startup.log)."""
+"""Startup phase timing for cold-start diagnosis (dev log + frozen startup.log).
+
+``mark(phase)`` / ``elapsed(phase)`` 记录冷启动各阶段耗时（import / Qt 初始化 / 截图线程启动 / Web
+终端绑定等），开发模式写到 stderr，冻结模式下追加到 ``%APPDATA%/DanmuAI/startup.log``。
+
+调用方式：``main.py`` 在每个阶段首尾包 ``t0 = time.monotonic()`` + ``startup_trace.mark("phase_name", t0)``；
+**不**在每次启动累积（一次性，仅本进程内有效）。
+"""
 
 from __future__ import annotations
 

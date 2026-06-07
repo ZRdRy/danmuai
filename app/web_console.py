@@ -164,7 +164,12 @@ class WebConsoleBridge(QObject):
         danmu_app.state_changed.connect(self._on_state_changed)
 
     def invoke_on_main(self, fn, /, *args, **kwargs):
-        """在 bridge 所在线程（Qt 主线程）同步执行 fn；从 uvicorn 线程调用时阻塞直至完成。"""
+        """在 bridge 所在线程（Qt 主线程）同步执行 fn；从 uvicorn 线程调用时阻塞直至完成。
+
+        线程安全机制：sync_invoke_requested 信号经 BlockingQueuedConnection 连接 _on_sync_invoke，
+        HTTP 线程阻塞等待主线程完成才返回回执。若改为 QueuedConnection，PUT /api/config 会在
+        保存完成前返回 "ok"，导致前端读到旧配置。
+        """
         if QThread.currentThread() is self.thread():
             return fn(*args, **kwargs)
 
@@ -291,6 +296,7 @@ class WebConsoleBridge(QObject):
 
     @pyqtSlot(object)
     def _on_save_config(self, payload: object) -> None:
+        """配置保存信号槽（主线程）：先写回执再释放事件，避免 HTTP 线程读到旧超时结果。"""
         handle_save_config_request(self, payload)
 
 

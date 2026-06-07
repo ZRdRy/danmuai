@@ -1,4 +1,11 @@
-"""图像压缩预览路由：POST /api/preview/compress。"""
+"""图像压缩预览路由：POST /api/preview/compress。
+
+Web「设置→图像」页上传一张图片预览压缩后的 Base64 data URI；
+max_width 768 / quality 85 是运行时主链路截图压缩的默认值，本路由复用
+``app.image_compress.compress_image_bytes`` 让用户看到压缩后效果再保存设置。
+
+注册方式：``app.web_api.routes`` 调用 ``register_preview_compress_route(app, check_token)``。
+"""
 
 from __future__ import annotations
 

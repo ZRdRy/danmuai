@@ -72,6 +72,7 @@ class ConfigStore:
         self._key_file = db_path.parent / ".key"
         self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         # WAL：读不阻塞写、写不阻塞读；Web/主线程并发读配置时减少 database is locked
+        # 选择原因：主线程读配置 + HTTP 线程写配置并发场景，WAL 比 DELETE 模式更适合
         self.conn.execute("PRAGMA journal_mode=WAL")
         # 写冲突时等待最多 5s 而非立即失败（与 _write_lock 双保险）
         self.conn.execute("PRAGMA busy_timeout=5000")

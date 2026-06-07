@@ -16,6 +16,12 @@ from app.translations import tr
 
 
 class AiRunnable(QRunnable):
+    """QThreadPool 执行单元：压缩截图 → 调 AiWorker._request() → 信号回传主线程。
+
+    W-015 异常兜底：_request() 最终异常时经 error 信号释放 ai_in_flight/mic_in_flight，
+    防止主链路卡死。禁止在此修改 DanmuApp 运行态或触碰 QWidget。
+    """
+
     def __init__(
         self,
         worker: AiWorker,
@@ -49,6 +55,7 @@ class AiRunnable(QRunnable):
         self.setAutoDelete(True)
 
     def run(self):
+        """QThreadPool 工作线程入口：压缩截图 → _request() → finished/error 信号回主线程。"""
         if self.worker._stopping:
             return
 

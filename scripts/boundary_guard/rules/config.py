@@ -1,3 +1,18 @@
+"""配置 / 模型选择连通性边界规则。
+
+检查项：
+    - check_config_service_delegation
+        路由（``app/web_console.py``）写配置必须经 ``ConfigService``，禁止
+        直接调 ``ConfigStore``。
+    - check_config_conn_spread
+        ``app/`` 内不允许散落 ``requests.post`` / ``httpx.post`` 等原始 HTTP
+        调用（仅 ``app/ai_client.py``、``app/api_probe.py``、``app/live_freshness.py``
+        白名单）。
+    - check_default_model_selection_guard
+        ``WEB_CONSOLE_PATH`` 的 GET /api/config/defaults 返回必须来自
+        ``CONFIG_DEFAULTS``，禁止就地硬编码；保证「恢复默认」行为可追溯。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

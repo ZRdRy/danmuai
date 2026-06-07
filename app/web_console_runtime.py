@@ -1,4 +1,8 @@
-"""FastAPI / uvicorn runtime assembly extracted from app.web_console."""
+"""FastAPI / uvicorn 运行时组装：路由注册、静态文件挂载、生命周期管理。
+
+线程模型：run_uvicorn_locked() 在非主线程执行（由 WebConsoleServer.start 启动），
+内部 asyncio 事件循环处理所有 HTTP/WebSocket 请求。
+"""
 
 from __future__ import annotations
 

@@ -1,0 +1,88 @@
+"""Web 控制台配置：danmu_render_mode 与悬浮窗 V2 键。"""
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+from app.application.config_service import WEB_CONFIG_KEYS, apply_web_config_patch
+from app.config_defaults import CONFIG_DEFAULTS, export_web_config_defaults, resolve_danmu_render_mode
+from app.config_store import ConfigStore
+
+
+def _stub_app(store):
+    class _PersonaeStub:
+        def set_active(self, _active):
+            return None
+
+    class _DanmuAppStub:
+        config_changed = MagicMock()
+
+    app = _DanmuAppStub()
+    app.config = store
+    app.personae = _PersonaeStub()
+    return app
+
+
+def test_danmu_render_mode_in_web_config_keys():
+    assert "danmu_render_mode" in WEB_CONFIG_KEYS
+    assert "display_mode" not in WEB_CONFIG_KEYS
+
+
+def test_danmu_render_mode_defaults_exported():
+    defaults = export_web_config_defaults()
+    assert defaults["danmu_render_mode"] == "scrolling"
+    assert defaults["floating_panel_width"] == "360"
+    assert defaults["floating_panel_lifetime_sec"] == "7"
+
+
+def test_danmu_render_mode_persists_via_config_service(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    app = _stub_app(store)
+    apply_web_config_patch(app, {"danmu_render_mode": "floating_panel"})
+    assert store.get("danmu_render_mode") == "floating_panel"
+
+
+def test_danmu_render_mode_invalid_falls_back_to_scrolling(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    app = _stub_app(store)
+    apply_web_config_patch(app, {"danmu_render_mode": "both"})
+    assert store.get("danmu_render_mode") == "scrolling"
+
+
+def test_legacy_display_mode_migrates_when_render_mode_blank(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("display_mode", "floating_panel")
+    store.set("danmu_render_mode", "")
+    assert resolve_danmu_render_mode(store) == "floating_panel"
+
+
+def test_legacy_both_migrates_to_scrolling(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    store.set("display_mode", "both")
+    store.set("danmu_render_mode", "")
+    assert resolve_danmu_render_mode(store) == "scrolling"
+
+
+def test_floating_panel_v2_keys_round_trip(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    app = _stub_app(store)
+    payload = {
+        "floating_panel_width": "400",
+        "floating_panel_max_items": "8",
+        "floating_panel_lifetime_sec": "10",
+        "floating_panel_x_offset": "30",
+        "floating_panel_y_offset": "60",
+        "floating_panel_opacity": "90",
+        "floating_panel_font_size": "22",
+    }
+    apply_web_config_patch(app, payload)
+    for key, expected in payload.items():
+        assert store.get(key) == expected
+
+
+def test_config_defaults_include_v2_keys():
+    for key in (
+        "danmu_render_mode",
+        "floating_panel_width",
+        "floating_panel_lifetime_sec",
+    ):
+        assert key in CONFIG_DEFAULTS

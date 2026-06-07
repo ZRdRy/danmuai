@@ -1,6 +1,14 @@
-"""Pure helpers and small data types extracted from main.py (W-REFACTOR-MAIN-001).
+"""纯辅助函数与小数据类型（W-REFACTOR-MAIN-001）。
 
-No Qt imports and no DanmuApp dependency — safe for unit tests and scheduling logic.
+职责边界：
+- 主链路常量定义（VISUAL_INFLIGHT_WARN_SEC=45s、MAX_IN_FLIGHT=1、MAX_MIC_IN_FLIGHT=1）
+- BatchTracker 数据类（视觉批次锚点元数据）
+- 纯函数辅助（reply_request_id、density_right_target、memory_tone_hint 等）
+
+与 DanmuApp 关系：本模块不依赖 DanmuApp，可安全用于单元测试。
+DanmuApp 通过 from app.main_helpers import ... 使用这些常量和函数。
+
+代码归属判断：无 Qt 导入、无 DanmuApp 依赖的纯逻辑代码放这里。
 """
 
 from __future__ import annotations

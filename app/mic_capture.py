@@ -1,4 +1,15 @@
-"""Microphone capture via sounddevice (background thread, memory-only)."""
+"""Microphone capture via sounddevice (background thread, memory-only).
+
+线程模型：
+- ``MicCaptureService.start()`` 在调用线程（主线程）创建 ``sounddevice.InputStream`` 并
+  由 ``sounddevice`` 内部回调线程持续写入 ``MicRingBuffer``。
+- ``try_snapshot_pcm_ms`` / ``snapshot_pcm`` 在任意线程读取缓冲；``MicRingBuffer`` 内部
+  ``threading.Lock`` 保护读写。
+- 关闭麦克风/切模式时 ``stop()`` 显式关闭 stream，避免 callback 句柄泄漏。
+
+约束：音频仅驻留内存，**不**写磁盘；超过 ``capacity_sec``（默认 10s）的旧 PCM 自动滚出。
+``try_snapshot_pcm_ms`` 在 stream 未启动时返回 None，调用方需自己判定。
+"""
 
 from __future__ import annotations
 

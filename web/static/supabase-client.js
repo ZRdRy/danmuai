@@ -1,4 +1,26 @@
-/** Thin PostgREST client for DanmuAI announcements, feedback, and error reports. */
+/*
+ * Supabase 前端集成（PostgREST 直接调，不经后端转发）：
+ *
+ * 1) 公告（announcements 表）：
+ *    - fetchAnnouncements()：拉取 published_at <= now 的列表，按 published_at 降序
+ *    - readState 仅本机维护（announcements_read_state，存 config.db）
+ * 2) 用户反馈（feedback_messages 表）：
+ *    - submitFeedback()：标题 + 详情 + 联系方式；24h 限 2 条（FEEDBACK_RATE_LIMIT）
+ * 3) 错误报告（error_reports 表，W-ERROR-REPORT-001 引入）：
+ *    - submitErrorReport()：fingerprint + summary + logs_excerpt + diagnostics；
+ *      24h 同 fingerprint 去重（W-ERROR-REPORT-006 已迁 localStorage）
+ *    - rate limit 3 条/3h（ERROR_REPORT_RATE_LIMIT）
+ *
+ * 配置：window.DANMU_SUPABASE = {url, anonKey}（参见 supabase-config.example.js
+ * 复制为 supabase-config.js）。isConfigured() 返回 false 时所有 submit* 直接抛
+ * "未配置 Supabase" — 静默失败，避免误把错误反馈给本地而非云端。
+ *
+ * 版本号：window.DANMU_APP_VERSION 由 app.js 在 GET /api/version 后写入，用于
+ * 错误报告 / 反馈的 app_version 字段（运维按版本排障）。
+ *
+ * IIFE 模式：自包含，挂在 window.DanmuSupabase = {fetchAnnouncements,
+ * submitFeedback, submitErrorReport, isConfigured, getClientId}。
+ */
 (function initDanmuSupabase(global) {
   const STORAGE_CLIENT_ID = 'danmu_feedback_client_id';
   const FEEDBACK_RATE_LIMIT_MSG = '每 3 小时最多提交 2 条反馈，请稍后再试';

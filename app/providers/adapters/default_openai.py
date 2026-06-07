@@ -1,4 +1,13 @@
-"""Default OpenAI-compatible adapter (text before image, max_tokens, stream usage)."""
+"""Default OpenAI-compatible adapter (text before image, max_tokens, stream usage).
+
+适用范围：除小米 MiMo 之外的所有 OpenAI 兼容 provider（火山方舟/百炼/智谱/Moonshot/硅基流动/自定义 OpenAI）。
+
+关键差异（与 ``MimoOpenAIAdapter`` 对比）：
+- 视觉 user content 顺序为 ``[text, image]``（部分 provider 期望文本先于图片）。
+- ``stream_options`` 注入条件：仅当 ``caps.stream_usage_in_final_chunk`` 为真
+  且请求 ``stream: true`` 时注入 ``{"include_usage": True}``，避免百炼在非流式下 400（见 W-021）。
+- 麦克风音频（``audio_data_uri``）不直接附加到 user content；上层走 ``ai_butler`` 等独立路由。
+"""
 
 from __future__ import annotations
 
@@ -25,6 +34,7 @@ class DefaultOpenAIAdapter:
     ) -> None:
         if max_tokens > 0:
             data[caps.max_tokens_field] = max_tokens
+        # 仅 stream: true 时才注入 stream_options；非流式下百炼会返回 400
         if caps.stream_usage_in_final_chunk and data.get("stream"):
             data["stream_options"] = {"include_usage": True}
         else:

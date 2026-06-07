@@ -1,5 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for DanmuAI (Web console + pywebview + Qt overlay)."""
+"""
+PyInstaller spec for DanmuAI（Web 控制台 + pywebview + Qt overlay）。
+
+构建命令（项目根）：``pyinstaller DanmuAI.spec --noconfirm``。
+
+重要约定：
+    - 仅 PyQt6；``EXCLUDES`` 中显式排除 PyQt5 / PySide2 / PySide6 与开发工具
+      （matplotlib / jupyter / pytest / pygments / jedi / parso），避免
+      PyQt5 通过传递依赖被错误地拖入
+    - ``datas`` 显式列出 ``web/static``（含控制台 UI 与 supabase 客户端）
+      与 ``data/danmu_pool_zh.json``（公式化弹幕库）
+    - ``hiddenimports`` 中：uvicorn 必须 ``collect_submodules`` + 显式列
+      ``uvicorn.protocols.http.auto`` / ``uvicorn.protocols.websockets.auto``
+      / ``uvicorn.lifespan.on``（PyInstaller 静态分析不到协议自动选择）
+    - 我们的 app 子模块（``app.web_console`` / ``app.webview_shell`` /
+      ``app.startup_trace`` / ``app.web_api.*`` / ``app.bundle_paths``）
+      也显式列出 — 这些模块用 importlib 动态 import，PyInstaller 扫描不到
+    - ``console=False``：发布为 GUI 应用（无控制台窗口）；debug 关闭
+
+产物路径：``dist/DanmuAI/DanmuAI.exe``（Windows）。
+"""
 
 from pathlib import Path
 

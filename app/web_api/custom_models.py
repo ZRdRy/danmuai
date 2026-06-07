@@ -1,4 +1,14 @@
-"""自定义模型 CRUD；默认模型切换须复用 set_default_model_selection 双写规则。"""
+"""自定义模型 CRUD；默认模型切换须复用 set_default_model_selection 双写规则。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/custom-models``：返回全部自定义模型，``apiKey`` 字段**掩码**为 ``MASKED_KEY``。
+- ``POST /api/custom-models`` / ``PUT /api/custom-models/{id}``：写入前经
+  ``validate_model_config`` 校验 name/modelId/endpoint/apiKey 完整性。
+- ``DELETE /api/custom-models/{id}``：删除后若 id 是默认模型，重置为「未设置默认」。
+
+设计约束：GET 必须返回掩码 apiKey（防泄漏）；**不**在 ``web_api/custom_models.py`` 内
+直接读 ``DanmuApp._config`` 私有字段，统一经 ``app.config`` 公开 façade。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +20,7 @@ from app.model_providers import is_model_config_complete, validate_model_config
 if TYPE_CHECKING:
     from main import DanmuApp
 
+# 掩码：前端拿到的 apiKey 都是这个常量；原始 key 只在写入时使用，不对外暴露
 MASKED_KEY = "********"
 
 

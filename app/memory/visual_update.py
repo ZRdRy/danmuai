@@ -1,4 +1,9 @@
-"""Parse optional AI scene_memory envelope and infer updates from reply batches."""
+"""Parse optional AI scene_memory envelope and infer updates from reply batches.
+
+AI 回复可包含 ``scene_memory`` 信封（顶层 JSON 字段）描述当前场景状态；
+本模块负责解析并构造 ``VisualMemoryUpdate``，由 ``SceneMemoryStore.update_from_visual_result``
+合并到当前代际的 ``SceneContextMemory``。代际不匹配时由 store 静默忽略。
+"""
 
 from __future__ import annotations
 

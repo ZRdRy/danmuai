@@ -1,8 +1,18 @@
 """扩展 FastAPI 路由：协议适配层，委托 DanmuApp 公开 façade 与 web_api 子模块。
 
-- /api/status 在 web_console 内注册，本文件不重复
-- /api/diagnostics 必须 build_diagnostic_snapshot()，与 status 分离
-- 写操作需 Bearer；须经 bridge.invoke_on_main（勿在 HTTP 线程直接写 Config / emit config_changed）
+线程模型：
+- GET 路由：HTTP 线程直接执行（只读快照）
+- PUT /api/config：经 save_config_requested.emit 异步信号到主线程
+- 其他写路由：经 bridge.invoke_on_main（BlockingQueuedConnection）同步到主线程
+
+边界约束：必须使用 DanmuApp 公开 façade，禁止访问内部私有属性：
+- build_status_snapshot() / build_diagnostic_snapshot()
+- apply_web_config_payload() / start() / stop()
+- get/set_persona, get/set_custom_models, probe_model_config 等
+
+/api/status 在 web_console 内注册，本文件不重复。
+/api/diagnostics 必须 build_diagnostic_snapshot()，与 status 分离。
+写操作需 Bearer；须经 bridge.invoke_on_main（勿在 HTTP 线程直接写 Config / emit config_changed）。
 """
 
 from typing import TYPE_CHECKING, Callable
@@ -18,6 +28,7 @@ from app.web_api import console_theme as console_theme_api
 from app.web_api import custom_models as cm_api
 from app.web_api import danmu_pool as pool_api
 from app.web_api import danmu_read as read_api
+from app.web_api import font_registry as font_registry_api  # W-FONT-002
 from app.web_api import mic_test as mic_test_api
 from app.web_api import persona as persona_api
 from app.web_api.preview_compress import register_preview_compress_route
@@ -420,6 +431,8 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         check_token(authorization)
         bridge.region_reset_requested.emit()
         return {"ok": True}
+
+    font_registry_api.register_font_registry_routes(app, bridge, check_token)  # W-FONT-002
 
 
 def register_diagnostics_sse_route(app, diagnostics_hub, bridge, check_token) -> None:

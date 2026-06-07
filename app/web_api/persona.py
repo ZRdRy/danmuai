@@ -1,4 +1,14 @@
-"""人格/模板 Web 逻辑；由 routes 调用，写配置经 DanmuApp/ConfigStore 既有入口。"""
+"""人格/模板 Web 逻辑；由 routes 调用，写配置经 DanmuApp/ConfigStore 既有入口。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/personae``：列出内置 + 自定义人格清单。
+- ``GET /api/personae/{name}``：返回 ``system_pt`` + ``user_pt``（中文/英文按当前语言）。
+- ``POST/PUT /api/personae``：写入自定义人格；落 ``custom_personae`` JSON 字符串。
+- ``DELETE /api/personae/{name}``：删除自定义人格；同步从 ``active_personae`` 剔除。
+
+与 ``PersonaManager`` 的关系：本模块只做 Web 入参与出参转换，业务逻辑全部委托
+``app.personae.PersonaManager``；不直接读写 ConfigStore 内部字段。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,14 @@
-"""OpenAI Chat Completions adapter protocol."""
+"""OpenAI Chat Completions adapter protocol.
+
+``ProviderAdapter`` 协议定义了所有 Chat Completions 适配器必须实现的四个钩子：
+- ``build_vision_user_content``：构造 user content 列表（text/image/audio parts）。
+- ``patch_openai_chat_body``：就地修改请求体（max_tokens/stream_options/thinking 等）。
+- ``patch_probe_body``：``api_probe`` 轻量探活请求的特殊 body 调整。
+- ``normalize_usage``：把各家差异的 usage 字段归一为 ``(prompt, completion)``。
+
+新增 provider：实现一个子类并注册到 ``app.providers.__init__._DEFAULT_ADAPTER``
+（如 MiMo 的 ``MimoOpenAIAdapter``），再在 ``registry.py`` 添加 HostEntry。
+"""
 
 from __future__ import annotations
 

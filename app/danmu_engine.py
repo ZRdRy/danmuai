@@ -21,16 +21,15 @@
 调用方：DanmuOverlay._tick() → engine.update()；DanmuApp.add_text() → engine.add_text()
 """
 
-import os
 import random
-import time
 from collections import deque
-from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QObject
-from PyQt6.QtGui import QColor, QPixmap
 
+from app import danmu_engine_dedup as dedup_profile
 from app.api_schedule import ENGINE_BASE_FPS
+from app.danmu_engine_dedup import DedupProfileStats, dedup_profile_enabled, log_dedup_profile_summary, reset_dedup_profile_for_tests, snapshot_dedup_profile
+from app.danmu_engine_models import DanmuItem, Track
 from app.translations import Translator
 
 # 与 app.config_defaults 保持同步（避免循环导入）
@@ -107,158 +106,14 @@ def normalize_danmu_display_text(content: str, config, *, lang: str | None = Non
     if len(content) > max_len:
         return content[:max_len] + "..."
     return content
-
-_LEVENSHTEIN_RATIO = None
-_LEVENSHTEIN_UNAVAILABLE = object()
-_DEDUP_PROFILE_FLAG: bool | None = None
-
-
-@dataclass
-class DedupProfileStats:
-    duplicate_checks: int = 0
-    duplicate_hits: int = 0
-    exact_set_hits: int = 0
-    length_pruned: int = 0
-    similarity_calls: int = 0
-    similarity_fallback_calls: int = 0
-    is_duplicate_ns: int = 0
-    similarity_ns: int = 0
-
-
-_dedup_profile_stats = DedupProfileStats()
-
-
-def dedup_profile_enabled() -> bool:
-    global _DEDUP_PROFILE_FLAG
-    if _DEDUP_PROFILE_FLAG is None:
-        value = os.environ.get("DANMU_DEDUP_PROFILE", "").strip().lower()
-        _DEDUP_PROFILE_FLAG = value in ("1", "true", "yes", "on")
-    return _DEDUP_PROFILE_FLAG
-
-
-def reset_dedup_profile_for_tests(clear_env_cache: bool = True) -> None:
-    global _DEDUP_PROFILE_FLAG, _dedup_profile_stats
-    if clear_env_cache:
-        _DEDUP_PROFILE_FLAG = None
-    _dedup_profile_stats = DedupProfileStats()
-
-
-def snapshot_dedup_profile() -> dict:
-    stats = _dedup_profile_stats
-    checks = max(stats.duplicate_checks, 1)
-    similarity_calls = max(stats.similarity_calls, 1)
-    return {
-        "enabled": dedup_profile_enabled(),
-        "duplicate_checks": stats.duplicate_checks,
-        "duplicate_hits": stats.duplicate_hits,
-        "exact_set_hits": stats.exact_set_hits,
-        "length_pruned": stats.length_pruned,
-        "similarity_calls": stats.similarity_calls,
-        "similarity_fallback_calls": stats.similarity_fallback_calls,
-        "avg_is_duplicate_us": round(stats.is_duplicate_ns / checks / 1000, 3),
-        "avg_similarity_us": round(stats.similarity_ns / similarity_calls / 1000, 3)
-        if stats.similarity_calls
-        else 0.0,
-        "is_duplicate_total_ms": round(stats.is_duplicate_ns / 1_000_000, 3),
-        "similarity_total_ms": round(stats.similarity_ns / 1_000_000, 3),
-    }
-
-
-def log_dedup_profile_summary(logger) -> None:
-    if not dedup_profile_enabled():
-        return
-    logger.debug(f"dedup profile: {snapshot_dedup_profile()}")
-
-
+_LEVENSHTEIN_UNAVAILABLE = dedup_profile._LEVENSHTEIN_UNAVAILABLE
+_LEVENSHTEIN_RATIO = dedup_profile._LEVENSHTEIN_RATIO
 def _get_levenshtein_ratio():
     global _LEVENSHTEIN_RATIO
-    if _LEVENSHTEIN_RATIO is None:
-        try:
-            from Levenshtein import ratio as _ratio
-
-            _LEVENSHTEIN_RATIO = _ratio
-        except ImportError:
-            _LEVENSHTEIN_RATIO = _LEVENSHTEIN_UNAVAILABLE
-    if _LEVENSHTEIN_RATIO is _LEVENSHTEIN_UNAVAILABLE:
-        return None
-    return _LEVENSHTEIN_RATIO
-
-
-@dataclass
-class DanmuItem:
-    """单条弹幕条目，包含位置/速度/可见性/渲染缓存等动画状态。"""
-    content: str
-    persona: str = ""
-    color: QColor = field(default_factory=lambda: QColor(255, 255, 255))
-    x: float = 0.0
-    y: float = 0.0
-    speed: float = 3.0
-    width: float = 0.0
-    batch_id: int = 0
-    scene_generation: int = 0
-    _pixmap: QPixmap | None = field(default=None, repr=False, compare=False)  # 预渲染后的弹幕像素图缓存
-    _opacity_cache_bucket: int | None = field(default=None, repr=False, compare=False)  # 不透明度分桶缓存键
-    _cached_opacity: float | None = field(default=None, repr=False, compare=False)  # 不透明度分桶缓存值
-    _vis_on_screen: bool = field(default=False, repr=False, compare=False)  # 是否在可见区域内
-    _right_vis_on_screen: bool = field(default=False, repr=False, compare=False)  # 是否在右侧 2/3 区域内
-    _in_fade_zone: bool = field(default=False, repr=False, compare=False)  # 是否在淡入淡出区内
-
-
-class Track:
-    """单条水平轨道：持有该行的 DanmuItem 列表，负责间距与入口区密度统计。"""
-
-    def __init__(self, y: float):
-        self.y = y
-        self.items: list[DanmuItem] = []
-
-    def can_accept(self, item: DanmuItem, screen_width: float, min_gap: float = 150.0) -> bool:
-        """队尾弹幕右缘 + min_gap 仍小于屏宽则可接新条；与 entry_zone_overloaded 分工不同。"""
-        if not self.items:
-            return True
-        last = self.items[-1]
-        w = last.width if last.width > 0 else (len(last.content) * 25.0)
-        return last.x + w + min_gap < screen_width
-
-    def entry_zone_count(self, screen_width: float, zone: float = ENTRY_ZONE_PX) -> int:
-        zone_left = screen_width - zone
-        return sum(1 for it in self.items if it.x + it.width > zone_left and it.x < screen_width)
-
-    def rightmost_edge(self) -> float:
-        if not self.items:
-            return float('-inf')
-        return max(it.x + (it.width if it.width > 0 else len(it.content) * 25.0) for it in self.items)
-
-    def add(self, item: DanmuItem):
-        item.y = self.y
-        self.items.append(item)
-
-    def update(self, speed_factor: float, dt_sec: float, engine: "DanmuEngine"):
-        scale = dt_sec / (1.0 / 60.0)
-        i = 0
-        while i < len(self.items):
-            item = self.items[i]
-            item.x -= item.speed * speed_factor * scale
-            if item.x + item.width <= 0:
-                engine._detach_item_visibility(item)
-                item._pixmap = None
-                self.items.pop(i)
-            else:
-                engine._refresh_item_visibility(item)
-                i += 1
-
-    def drop_pending(self, screen_width: float) -> int:
-        kept: list[DanmuItem] = []
-        dropped = 0
-        for item in self.items:
-            if item.x >= screen_width:
-                item._pixmap = None
-                dropped += 1
-            else:
-                kept.append(item)
-        self.items = kept
-        return dropped
-
-
+    dedup_profile._LEVENSHTEIN_RATIO = _LEVENSHTEIN_RATIO
+    ratio = dedup_profile._get_levenshtein_ratio()
+    _LEVENSHTEIN_RATIO = dedup_profile._LEVENSHTEIN_RATIO
+    return ratio
 class DanmuEngine(QObject):
     """弹幕引擎核心：多轨道列表、deque(30) 去重窗口、可见性惰性计数与加速动画状态。
 
@@ -593,6 +448,10 @@ class DanmuEngine(QObject):
         return max(80.0, item.width * 0.5)
 
     def _pick_track(self, item: DanmuItem) -> Track | None:
+        """加权随机选轨道（非轮询）：避免弹幕机械均匀分布，模拟自然错落感。
+
+        优先级：1) 空闲轨道随机选 → 2) 入口区逆密度加权 → 3) 全满 fallback（rightmost_edge 最小前 3 条随机）。
+        """
         if not self.tracks:
             return None
 
@@ -776,11 +635,11 @@ class DanmuEngine(QObject):
     def _is_duplicate(self, content: str) -> bool:
         """去重：recent_exact_set O(1) → 长度预剪枝 → Levenshtein > dedup_threshold。"""
         profile = dedup_profile_enabled()
-        started = time.perf_counter_ns() if profile else 0
+        started = dedup_profile.time.perf_counter_ns() if profile else 0
 
         if content in self.recent_exact_set:
             if profile:
-                _dedup_profile_stats.exact_set_hits += 1
+                dedup_profile._dedup_profile_stats.exact_set_hits += 1
             result = True
         elif not self.recent:
             result = False
@@ -799,23 +658,25 @@ class DanmuEngine(QObject):
                 max_len = max(len(content), len(prev))
                 if max_len > 0 and len_diff / max_len > (1 - threshold):
                     if profile:
-                        _dedup_profile_stats.length_pruned += 1
+                        dedup_profile._dedup_profile_stats.length_pruned += 1
                     continue
                 if self._similarity(content, prev) > threshold:
                     result = True
                     break
 
         if profile:
-            _dedup_profile_stats.duplicate_checks += 1
+            dedup_profile._dedup_profile_stats.duplicate_checks += 1
             if result:
-                _dedup_profile_stats.duplicate_hits += 1
-            _dedup_profile_stats.is_duplicate_ns += time.perf_counter_ns() - started
+                dedup_profile._dedup_profile_stats.duplicate_hits += 1
+            dedup_profile._dedup_profile_stats.is_duplicate_ns += (
+                dedup_profile.time.perf_counter_ns() - started
+            )
         return result
 
     @staticmethod
     def _similarity(a: str, b: str) -> float:
         profile = dedup_profile_enabled()
-        started = time.perf_counter_ns() if profile else 0
+        started = dedup_profile.time.perf_counter_ns() if profile else 0
 
         if not a or not b:
             result = 0.0
@@ -825,7 +686,7 @@ class DanmuEngine(QObject):
                 result = ratio_fn(a, b)
             else:
                 if profile:
-                    _dedup_profile_stats.similarity_fallback_calls += 1
+                    dedup_profile._dedup_profile_stats.similarity_fallback_calls += 1
                 m, n = len(a), len(b)
                 if m > n:
                     a, b = b, a
@@ -841,8 +702,10 @@ class DanmuEngine(QObject):
                 result = 1 - dist / max(len(a), len(b))
 
         if profile:
-            _dedup_profile_stats.similarity_calls += 1
-            _dedup_profile_stats.similarity_ns += time.perf_counter_ns() - started
+            dedup_profile._dedup_profile_stats.similarity_calls += 1
+            dedup_profile._dedup_profile_stats.similarity_ns += (
+                dedup_profile.time.perf_counter_ns() - started
+            )
         return result
 
     def update(self, speed_factor: float = 1.0, dt_sec: float = 1.0 / 60.0):
@@ -884,6 +747,7 @@ class DanmuEngine(QObject):
         return preserved
 
     def _nearest_track_for_y(self, y: float) -> Track | None:
+        """放置算法：返回 y 坐标最近的轨道（reload_tracks 时用于保留可见弹幕位置）。"""
         if not self.tracks:
             return None
         return min(self.tracks, key=lambda t: abs(t.y - y))
@@ -894,6 +758,11 @@ class DanmuEngine(QObject):
         preserve_visible: bool = True,
         clip_to_drawable: bool = False,
     ) -> None:
+        """重载轨道：layout_mode 缩小时 clip_to_drawable=True 丢弃带外弹幕。
+
+        原因：_nearest_track_for_y 会把带外条目挤到底部轨道，导致视觉错乱。
+        preserve_visible=True 时保留屏上可见条目。
+        """
         if preserve_visible:
             preserved = self._collect_items_for_track_reload(
                 clip_to_drawable=clip_to_drawable,

@@ -1,6 +1,13 @@
 """全屏鼠标拖拽选区覆盖层：仅 UI 交互，不负责截图或 AI。
 
 由 DanmuApp 在主线程创建/销毁；坐标均为相对目标显示器左上角。
+
+⚠ 坐标系统警告：
+- ``region_w/h > 0`` 时按**屏内相对坐标**裁剪（**不是**绝对屏幕坐标）。
+- 与 ``POST/GET /api/capture-region/*`` 配合：Web 端框选区域后写入 config，
+  本模块读取并经 ``app.snipper.resolve_capture_rect`` 转为绝对屏幕坐标。
+- 禁止把 ``region_*`` 字段写入 ``PUT /api/config`` 全量表单（会污染主配置）；
+  区域选择须走 ``/api/capture-region/save`` 专用路由。
 """
 from __future__ import annotations
 

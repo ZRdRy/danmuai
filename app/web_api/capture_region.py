@@ -1,4 +1,14 @@
-"""识图区域 Web 业务 façade：读写 region_*，不触碰 Qt 或截图链路。"""
+"""识图区域 Web 业务 façade：读写 region_*，不触碰 Qt 或截图链路。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/capture-region/status``：返回 ``{x, y, w, h, mode}``（mode = full / custom）。
+- ``POST /api/capture-region/save``：写入框选区域（屏内相对坐标，**不**是绝对屏幕坐标）；
+  经 ``app.region_selector.normalize_region_for_screen`` 钳位。
+- ``POST /api/capture-region/cancel``：取消当前选择。
+
+注册方式：``app.web_api.routes`` 调用 ``register_capture_region_routes(app, bridge, check_token)``。
+本模块不触碰 Qt 或截图链路；只读写 config.region_* 字段，由 ``app.snipper`` 在截图时读出。
+"""
 from __future__ import annotations
 
 from typing import Any

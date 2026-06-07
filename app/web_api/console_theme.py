@@ -1,4 +1,12 @@
-"""Web 控制台主题偏好：config.db 字符串键，不影响主链路运行态。"""
+"""Web 控制台主题偏好：config.db 字符串键，不影响主链路运行态。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/console-theme``：返回当前主题 ``{theme: "light" | "dark"}``。
+- ``PUT /api/console-theme``：写入用户偏好（仅 light/dark，其他值归一化到 light）。
+
+本模块**仅**处理 Web UI 偏好，不影响 Overlay / FloatingPanel 等 Qt 渲染；
+Overlay 主题由 ``app.overlay`` 的颜色常量决定，与 Web 控制台主题解耦。
+"""
 
 from __future__ import annotations
 

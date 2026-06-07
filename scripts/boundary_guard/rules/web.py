@@ -1,3 +1,17 @@
+"""Web 控制台 / API 边界规则。
+
+检查项（与 [docs/CONTRIBUTING_ARCHITECTURE.md] Phase 4-A/B/F 对应）：
+    - check_web_private_access
+        Web/API 不允许直接读 ``app._xxx`` 私有字段（Phase 4-A）；须经公开 façade
+        或 diagnostic snapshot。命中 ``WEB_PRIVATE_PATTERNS`` 即报错。
+    - check_diagnostics_route
+        ``app/web_api`` 路由内不允许 import 调度 / timing 私有符号
+        （Phase 4-F）；只允许 diagnostic snapshot 出口。
+
+Web 前端（``web/static/``）不直接被这些规则覆盖（其逻辑由 UI 维护者自检）；
+引入新私有字段时，记得在 ``constants.WEB_PRIVATE_PATTERNS`` 同步登记。
+"""
+
 from __future__ import annotations
 
 import re

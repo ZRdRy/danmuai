@@ -1,3 +1,21 @@
+"""请求调度 / timing / metadata 边界规则。
+
+检查项：
+    - check_request_scheduler_ownership
+        ``app.application.request_scheduler`` 是 API 调度门控，所有触发点必须
+        经此模块；其他文件出现 ``min_api_interval`` / ``ai_in_flight`` 等 token
+        视为绕过（Phase 4-A）。
+    - check_request_timing_ownership / check_request_timing_history_ownership
+        RTT 历史与 ``_started_at_by_id`` 仅 ``RequestTimingService`` 可写；
+        Web/API 通过 diagnostic snapshot 读取。
+    - check_request_metadata_boundary
+        ``RequestMetadataState`` 是 HTTP 侧请求元数据入口；非 metadata 状态
+        文件禁止出现 ``request_metadata_*`` 字段（避免越界）。
+    - check_request_service_boundaries
+        ``app.application`` 子模块之间的 import 边带关系；某些模块不得
+        直接依赖 ``web_console`` / ``main``（防止循环 import）。
+"""
+
 from __future__ import annotations
 
 import re

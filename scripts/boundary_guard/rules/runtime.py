@@ -1,3 +1,19 @@
+"""运行时状态 / 线程模型 / 文档同步规则。
+
+检查项：
+    - check_legacy_runtime_state_writes
+        禁在 ``main.py`` 中向 ``self._rtt_history`` / ``self._last_api_trigger_at``
+        等 LEGACY_RUNTIME_ASSIGNMENT_PATTERNS 直写；这些字段已迁移至
+        application/*_state.py 与 RequestTimingService。
+    - check_runtime_state_doc
+        增删 ``app/application/runtime_state.py`` 字段时，docs/runtime-state-map.md
+        必须同步登记。
+    - check_thread_trigger_docs
+        新增 ``QTimer.singleShot`` / ``QThreadPool.start`` / ``threading.Thread``
+        触发点时，docs/main-pipeline-sequence.md 必须有说明（避免后人不熟
+        线程模型时手抖）。
+"""
+
 from __future__ import annotations
 
 import re

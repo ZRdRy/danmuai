@@ -1,4 +1,12 @@
-"""Single-instance guard via QLocalServer (one DanmuAI per user profile)."""
+"""Single-instance guard via QLocalServer (one DanmuAI per user profile).
+
+``QLocalServer`` + ``QLocalSocket`` 实现单实例：第一个进程 bind ``DanmuAI-{user-salt}``，
+后续进程连 socket 发送 ``_ACTIVATE_MSG`` 后退出，激活原窗口。``_server_name`` 哈希
+``%USERNAME% + config 数据库路径``生成唯一 server 名，避免多用户 / 多 profile 误判。
+
+约束：必须主线程构造 ``QLocalServer``；socket 连接超时 200ms，失败时新进程继续启动
+（不阻塞），仅在 ``_send_activate`` 成功时 exit 0。
+"""
 
 from __future__ import annotations
 

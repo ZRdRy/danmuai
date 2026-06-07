@@ -344,11 +344,10 @@ def test_user_nickname_in_web_config_keys():
     assert "user_nickname" in tuple(WEB_CONFIG_KEYS)
 
 
-# W-FP-003：display_mode 与悬浮窗配置走 PUT /api/config 端到端
+# W-FP-V2-001：danmu_render_mode 与悬浮窗 V2 配置走 PUT /api/config
 
 
-def test_display_mode_persists_via_config_service(tmp_path):
-    """display_mode 经 PUT /api/config 持久化到 ConfigStore，reload 后仍在。"""
+def test_danmu_render_mode_persists_via_config_service(tmp_path):
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
 
@@ -366,16 +365,11 @@ def test_display_mode_persists_via_config_service(tmp_path):
     app.config = store
     app.personae = _PersonaeStub()
 
-    apply_web_config_patch(app, {"display_mode": "floating_panel"})
-    assert store.get("display_mode") == "floating_panel"
-    app.config_changed.emit.assert_called_once()
-
-    store2 = ConfigStore(db_path)
-    assert store2.get("display_mode") == "floating_panel"
+    apply_web_config_patch(app, {"danmu_render_mode": "floating_panel"})
+    assert store.get("danmu_render_mode") == "floating_panel"
 
 
-def test_display_mode_invalid_falls_back_to_overlay_via_config_service(tmp_path):
-    """display_mode 非法值经 _clamp_choice 落库为 overlay。"""
+def test_danmu_render_mode_invalid_falls_back_to_scrolling(tmp_path):
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
 
@@ -393,12 +387,11 @@ def test_display_mode_invalid_falls_back_to_overlay_via_config_service(tmp_path)
     app.config = store
     app.personae = _PersonaeStub()
 
-    apply_web_config_patch(app, {"display_mode": "weird"})
-    assert store.get("display_mode") == "overlay"
+    apply_web_config_patch(app, {"danmu_render_mode": "both"})
+    assert store.get("danmu_render_mode") == "scrolling"
 
 
-def test_floating_panel_config_keys_round_trip(tmp_path):
-    """6 个悬浮窗配置键经 PUT /api/config 持久化、reload 后仍在。"""
+def test_floating_panel_v2_config_keys_round_trip(tmp_path):
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
 
@@ -417,30 +410,24 @@ def test_floating_panel_config_keys_round_trip(tmp_path):
     app.personae = _PersonaeStub()
 
     payload = {
+        "floating_panel_width": "380",
         "floating_panel_opacity": "70",
         "floating_panel_font_size": "22",
-        "floating_panel_max_items": "100",
-        "floating_panel_speed": "3.0",
-        "floating_panel_click_through": "0",
+        "floating_panel_max_items": "8",
+        "floating_panel_lifetime_sec": "9",
+        "floating_panel_x_offset": "25",
+        "floating_panel_y_offset": "70",
     }
     apply_web_config_patch(app, payload)
     for key, expected in payload.items():
-        # floating_panel_speed 经 _normalize_items 归一为 3 位小数（如 "3.000"）
-        if key == "floating_panel_speed":
-            assert float(store.get(key)) == float(expected), key
-        else:
-            assert store.get(key) == expected, key
-
-    store2 = ConfigStore(db_path)
-    for key, expected in payload.items():
-        if key == "floating_panel_speed":
-            assert float(store2.get(key)) == float(expected), key
-        else:
-            assert store2.get(key) == expected, key
+        assert store.get(key) == expected, key
 
 
-def test_floating_panel_speed_clamped_via_config_service(tmp_path):
-    """floating_panel_speed=100 经 _normalize_items 钳到 5.000。"""
+# W-FONT-001：字体设置走 PUT /api/config 端到端
+
+
+def test_font_family_persists_via_config_service(tmp_path):
+    """danmu_font_family 经 apply_web_config_patch 持久化到 ConfigStore。"""
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
 
@@ -458,12 +445,12 @@ def test_floating_panel_speed_clamped_via_config_service(tmp_path):
     app.config = store
     app.personae = _PersonaeStub()
 
-    apply_web_config_patch(app, {"floating_panel_speed": "100"})
-    assert float(store.get("floating_panel_speed")) == 5.0
+    apply_web_config_patch(app, {"danmu_font_family": "SimHei"})
+    assert store.get("danmu_font_family") == "SimHei"
 
 
-def test_floating_panel_click_through_normalized_via_config_service(tmp_path):
-    """floating_panel_click_through=true 归一为 '1'。"""
+def test_font_size_out_of_range_clamps_via_config_service(tmp_path):
+    """font_size=9999 经 _normalize_items 钳到 72。"""
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
 
@@ -481,9 +468,142 @@ def test_floating_panel_click_through_normalized_via_config_service(tmp_path):
     app.config = store
     app.personae = _PersonaeStub()
 
-    apply_web_config_patch(app, {"floating_panel_click_through": "true"})
-    assert store.get("floating_panel_click_through") == "1"
+    apply_web_config_patch(app, {"font_size": "9999"})
+    assert store.get("font_size") == "72"
 
-    apply_web_config_patch(app, {"floating_panel_click_through": "no"})
-    assert store.get("floating_panel_click_through") == "0"
+
+def test_font_bold_truthy_strings_normalize_to_one(tmp_path):
+    """danmu_font_bold=true 归一为 '1'。"""
+    from app.application.config_service import apply_web_config_patch
+    from app.config_store import ConfigStore
+
+    db_path = tmp_path / "config.db"
+    store = ConfigStore(db_path)
+
+    class _PersonaeStub:
+        def set_active(self, _active):
+            return None
+
+    class _DanmuAppStub:
+        config_changed = MagicMock()
+
+    app = _DanmuAppStub()
+    app.config = store
+    app.personae = _PersonaeStub()
+
+    apply_web_config_patch(app, {"danmu_font_bold": "true"})
+    assert store.get("danmu_font_bold") == "1"
+
+
+# W-FONT-002：字体导入 API（HTTP 契约；QFontDatabase 行为见 test_font_registry.py）
+
+
+def _font_route_client(registry):
+    from app.web_api.font_registry import register_font_registry_routes
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    app_stub = type("App", (), {"font_registry": registry})()
+
+    class _BridgeStub:
+        def __init__(self, danmu_app):
+            self.danmu_app = danmu_app
+
+        def invoke_on_main(self, fn, /, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+    bridge = _BridgeStub(app_stub)
+
+    def _check_token(authorization: str | None = None) -> None:
+        if authorization != "Bearer font-secret":
+            raise HTTPException(status_code=401)
+
+    api = FastAPI()
+    register_font_registry_routes(api, bridge, _check_token)
+    return TestClient(api)
+
+
+def _mock_registry():
+    reg = MagicMock()
+    reg.list_families.return_value = ["ImportedFont"]
+    reg.list_imported.return_value = []
+    return reg
+
+
+def test_post_fonts_import_with_valid_ttf_returns_family():
+    reg = _mock_registry()
+    reg.import_bytes.return_value = {
+        "sha256": "a" * 64,
+        "family": "ImportedFont",
+        "original_name": "my.ttf",
+        "size": 12345,
+        "imported_at": "2026-06-06T00:00:00+00:00",
+    }
+    client = _font_route_client(reg)
+    res = client.post(
+        "/api/fonts/import",
+        headers={"Authorization": "Bearer font-secret"},
+        files={"file": ("my.ttf", b"font-bytes", "application/octet-stream")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] is True
+    assert body["family"] == "ImportedFont"
+    reg.import_bytes.assert_called_once()
+    listed = client.get("/api/fonts", headers={"Authorization": "Bearer font-secret"})
+    assert listed.status_code == 200
+    assert "ImportedFont" in listed.json()["families"]
+
+
+def test_post_fonts_import_rejects_unsupported_extension():
+    reg = _mock_registry()
+    reg.import_bytes.side_effect = ValueError("unsupported_extension")
+    client = _font_route_client(reg)
+    res = client.post(
+        "/api/fonts/import",
+        headers={"Authorization": "Bearer font-secret"},
+        files={"file": ("bad.zip", b"abc", "application/zip")},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"] == "unsupported_extension"
+
+
+def test_post_fonts_import_rejects_empty_file():
+    reg = _mock_registry()
+    reg.import_bytes.side_effect = ValueError("empty_file")
+    client = _font_route_client(reg)
+    res = client.post(
+        "/api/fonts/import",
+        headers={"Authorization": "Bearer font-secret"},
+        files={"file": ("empty.ttf", b"", "application/octet-stream")},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"] == "empty_file"
+
+
+def test_post_fonts_import_rejects_oversized_file():
+    reg = _mock_registry()
+    reg.import_bytes.side_effect = ValueError("file_too_large")
+    client = _font_route_client(reg)
+    res = client.post(
+        "/api/fonts/import",
+        headers={"Authorization": "Bearer font-secret"},
+        files={"file": ("big.ttf", b"x", "application/octet-stream")},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"] == "file_too_large"
+
+
+def test_delete_font_removes_from_list():
+    reg = _mock_registry()
+    reg.delete.return_value = True
+    reg.list_families.return_value = []
+    client = _font_route_client(reg)
+    sha = "b" * 64
+    deleted = client.delete(
+        f"/api/fonts/{sha}",
+        headers={"Authorization": "Bearer font-secret"},
+    )
+    assert deleted.status_code == 200
+    reg.delete.assert_called_once_with(sha)
 

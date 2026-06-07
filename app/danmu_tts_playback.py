@@ -1,4 +1,12 @@
-"""WAV 字节本地播放（sounddevice + wave）。"""
+"""WAV 字节本地播放（sounddevice + wave）。
+
+``DanmuTtsPlayback`` 提供**互斥播放**：同一时间只允许一段 TTS 播音。
+``play_wav_bytes`` 在 busy 期间返回 False，调用方（``DanmuReadService``）应丢弃或排队新请求。
+``playback_finished`` 信号用于驱动下一句抽样。
+
+线程模型：播放 worker 在独立 ``threading.Thread``，与 Qt 主线程解耦；``is_busy`` 跨线程安全
+（``threading.Lock``）。
+"""
 
 from __future__ import annotations
 

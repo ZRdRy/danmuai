@@ -1,0 +1,297 @@
+"""侧边悬浮窗渲染层：右侧透明置顶窄窗，圆角卡片 + 预渲染 QPixmap。
+
+W-FP-V2-001：仿 bililive_dm 底入堆叠；不调度 AI、不写 ConfigStore。
+"""
+from __future__ import annotations
+
+import ctypes
+import sys
+import time
+from typing import TYPE_CHECKING
+
+from PyQt6.QtCore import QElapsedTimer, QRectF, Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtWidgets import QApplication, QWidget
+
+from app.floating_panel_engine import FloatingPanelEngine, FloatingPanelItem
+
+if TYPE_CHECKING:
+    from app.config_store import ConfigStore
+
+if sys.platform == "win32":
+    _GWL_EXSTYLE = -20
+    _WS_EX_LAYERED = 0x00080000
+    _WS_EX_TRANSPARENT = 0x00000020
+    _HWND_TOPMOST = -1
+    _SWP_NOMOVE = 0x0002
+    _SWP_NOSIZE = 0x0001
+    _SWP_NOACTIVATE = 0x0010
+    _SWP_SHOWWINDOW = 0x0040
+    try:
+        _SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW
+        _GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW
+    except AttributeError:
+        _SetWindowLong = ctypes.windll.user32.SetWindowLongW
+        _GetWindowLong = ctypes.windll.user32.GetWindowLongW
+    _SetWindowPos = ctypes.windll.user32.SetWindowPos
+
+_FRAME_DT = 1.0 / 60.0
+_INTERVAL_MS = 16
+_DT_CAP_SEC = 0.1
+_CARD_RADIUS = 10.0
+_CARD_H_PAD = 12.0
+_CARD_V_PAD = 8.0
+_TEXT_FILL = QColor(255, 255, 255)
+_TEXT_OUTLINE = QColor(0, 0, 0, 200)
+_OUTLINE_WIDTH = 3
+_CARD_BG = QColor(20, 20, 28, 170)
+
+
+class FloatingPanelOverlay(QWidget):
+    """右侧窄窗悬浮弹幕；始终鼠标穿透。"""
+
+    def __init__(self, config: "ConfigStore", engine: FloatingPanelEngine):
+        super().__init__()
+        self.config = config
+        self.engine = engine
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.BypassWindowManagerHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
+        self.setStyleSheet("background: transparent;")
+
+        self._opacity_pct = 85
+        self._panel_width = 360
+        self._x_offset = 20
+        self._y_offset = 80
+        self._font: QFont | None = None
+        self._font_metrics: QFontMetrics | None = None
+        self._tick_clock = QElapsedTimer()
+        self._last_tick_valid = False
+        self.last_tick_dt_sec: float = _FRAME_DT
+
+        self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.timer.timeout.connect(self._tick)
+
+        self._apply_config()
+
+    def _apply_config(self) -> None:
+        def _int(key: str, default: int, lo: int, hi: int) -> int:
+            raw = self.config.get(key, "")
+            try:
+                return max(lo, min(int(raw or default), hi))
+            except (TypeError, ValueError):
+                return default
+
+        self._opacity_pct = _int("floating_panel_opacity", 85, 0, 100)
+        self._panel_width = _int("floating_panel_width", 360, 200, 800)
+        self._x_offset = _int("floating_panel_x_offset", 20, 0, 400)
+        self._y_offset = _int("floating_panel_y_offset", 80, 0, 400)
+        size = _int("floating_panel_font_size", 20, 12, 48)
+        family = str(self.config.get("floating_panel_font_family", "Microsoft YaHei") or "Microsoft YaHei").strip()
+        bold = str(self.config.get("floating_panel_font_bold", "1") or "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        )
+        self._font = QFont(family, size)
+        self._font.setBold(bold)
+        self._font_metrics = QFontMetrics(self._font)
+        self.engine.apply_config()
+
+    def apply_config(self) -> None:
+        self._apply_config()
+        for item in self.engine.visible_items():
+            self._prepare_item_pixmap(item)
+        if self.isVisible():
+            self.update()
+
+    def is_render_active(self) -> bool:
+        return self.timer.isActive()
+
+    def active_count(self) -> int:
+        return self.engine.active_count()
+
+    def _apply_win32_click_through(self) -> None:
+        if sys.platform != "win32":
+            return
+        hwnd = int(self.winId())
+        ex_style = _GetWindowLong(hwnd, _GWL_EXSTYLE)
+        _SetWindowLong(hwnd, _GWL_EXSTYLE, ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT)
+
+    def _estimate_item_height(self) -> float:
+        if self._font_metrics is None:
+            return 40.0
+        return float(self._font_metrics.height()) + _CARD_V_PAD * 2
+
+    def add_danmu_text(
+        self,
+        content: str,
+        persona: str = "",
+        *,
+        batch_id: int = 0,
+        scene_generation: int = 0,
+        skip_dedup: bool = False,
+    ) -> FloatingPanelItem | None:
+        item = self.engine.add_text(
+            content,
+            persona,
+            item_height=self._estimate_item_height(),
+            batch_id=batch_id,
+            scene_generation=scene_generation,
+            skip_dedup=skip_dedup,
+        )
+        if item is None:
+            return None
+        self._prepare_item_pixmap(item)
+        self.ensure_render_loop()
+        return item
+
+    def _prepare_item_pixmap(self, item: FloatingPanelItem) -> None:
+        if self._font is None or self._font_metrics is None:
+            return
+        text_w = self._font_metrics.horizontalAdvance(item.content)
+        card_w = min(float(self.width() or self._panel_width) - 8.0, text_w + _CARD_H_PAD * 2)
+        card_h = float(self._font_metrics.height()) + _CARD_V_PAD * 2
+        self.engine.update_item_height(item, card_h)
+        item.pixmap = self._render_card_pixmap(item.content, int(card_w), int(card_h))
+
+    def _render_card_pixmap(self, text: str, width: int, height: int) -> QPixmap:
+        dpr = self.devicePixelRatio() or 1.0
+        w_px = max(1, int(width * dpr))
+        h_px = max(1, int(height * dpr))
+        pm = QPixmap(w_px, h_px)
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            rect = QRectF(0, 0, width, height)
+            path = QPainterPath()
+            path.addRoundedRect(rect, _CARD_RADIUS, _CARD_RADIUS)
+            painter.fillPath(path, _CARD_BG)
+            painter.setFont(self._font)
+            baseline_y = _CARD_V_PAD + self._font_metrics.ascent()
+            text_x = _CARD_H_PAD
+            text_path = QPainterPath()
+            text_path.addText(text_x, baseline_y, self._font, text)
+            pen = QPen(_TEXT_OUTLINE)
+            pen.setWidth(_OUTLINE_WIDTH)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(text_path)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_TEXT_FILL)
+            painter.drawPath(text_path)
+        finally:
+            painter.end()
+        return pm
+
+    def show_for_screen(self, screen_index: int = 0) -> None:
+        screens = QApplication.screens()
+        if not screens:
+            return
+        screen_index = max(0, min(int(screen_index), len(screens) - 1))
+        geo = screens[screen_index].geometry()
+        panel_h = max(160, geo.height() - self._y_offset * 2)
+        x = geo.x() + geo.width() - self._panel_width - self._x_offset
+        y = geo.y() + self._y_offset
+        self.setGeometry(x, y, self._panel_width, panel_h)
+        self.engine.set_panel_height(float(panel_h))
+        self.show()
+        self._apply_win32_click_through()
+        self.raise_()
+        if self.engine.running:
+            self.ensure_render_loop()
+
+    def start_render_loop(self) -> None:
+        if not self.isVisible():
+            return
+        self._last_tick_valid = False
+        if not self.timer.isActive():
+            self.timer.start(_INTERVAL_MS)
+        self._tick()
+
+    def stop_render_loop(self, *, repaint: bool = False) -> None:
+        was_active = self.timer.isActive()
+        self.timer.stop()
+        self._last_tick_valid = False
+        if repaint and was_active and self.isVisible():
+            self.update()
+
+    def ensure_render_loop(self) -> None:
+        if self.isVisible() and self.engine.needs_render_tick():
+            self.start_render_loop()
+
+    def reset_session_state(self) -> None:
+        self.stop_render_loop()
+        self.engine.clear()
+        self.hide()
+        self.update()
+
+    def _tick_dt_sec(self) -> float:
+        if not self._last_tick_valid:
+            self._tick_clock.start()
+            self._last_tick_valid = True
+            return _FRAME_DT
+        dt = self._tick_clock.restart() / 1000.0
+        if dt <= 0.0:
+            return _FRAME_DT
+        return min(dt, _DT_CAP_SEC)
+
+    def _tick(self) -> None:
+        if not self.isVisible():
+            self.stop_render_loop()
+            return
+        if not self.engine.needs_render_tick():
+            self.stop_render_loop(repaint=True)
+            return
+        dt = self._tick_dt_sec()
+        self.last_tick_dt_sec = dt
+        self.engine.update(dt, time.monotonic())
+        self.update()
+        if not self.engine.needs_render_tick():
+            self.stop_render_loop(repaint=True)
+
+    def hideEvent(self, event) -> None:
+        self.stop_render_loop()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self.engine.running:
+            self.ensure_render_loop()
+
+    def paintEvent(self, event) -> None:
+        items = self.engine.visible_items()
+        if not items:
+            return
+        global_alpha = max(0.0, min(1.0, self._opacity_pct / 100.0))
+        if global_alpha <= 0.0:
+            return
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            panel_w = float(self.width())
+            for item in items:
+                alpha = item.opacity * global_alpha
+                if alpha <= 0.0 or item.pixmap is None:
+                    continue
+                pm: QPixmap = item.pixmap
+                x = max(4.0, panel_w - float(pm.width() / (pm.devicePixelRatio() or 1.0)) - 4.0)
+                painter.setOpacity(alpha)
+                painter.drawPixmap(int(x), int(item.current_y), pm)
+            painter.setOpacity(1.0)
+        finally:
+            painter.end()

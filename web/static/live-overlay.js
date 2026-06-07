@@ -1,3 +1,21 @@
+/*
+ * live-overlay.js — 直播伴侣透明弹幕层 SSE 客户端。
+ *
+ * 独立模块（不依赖 app.js / modules/*），直接由 live-overlay.html 内联加载。
+ * 仅做 3 件事：
+ *   1) connect()：与 /api/live-overlay/events 建立 EventSource；hello 事件重置
+ *      reconnectDelay=2s；onerror 走 1.5x 退避，上限 30s
+ *   2) handlePayload()：按 event 类型分派
+ *      - 'danmu_item'（或兼容旧协议 {text,...}）→ spawnDanmuItem
+ *      - 'danmu_batch' → spawnFromBatch（多行测试弹幕）
+ *   3) spawnDanmuItem()：按 payload.y / screen_height 比例映射到当前 viewport，
+ *      requestAnimationFrame 推进 transform，结束自动从 DOM 移除
+ *
+ * 坐标映射：scaleY() 处理 y 单位（server 端以源屏幕高度为基），客户端按当前
+ * 视口高度等比缩放；保证 OBS 1920×1080 源与本机 2560×1440 浏览器源视觉一致。
+ *
+ * 线程：浏览器主线程；不写任何持久化状态；不与主链路 Qt Overlay 通信。
+ */
 (function () {
   'use strict';
 

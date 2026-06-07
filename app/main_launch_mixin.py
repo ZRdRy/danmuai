@@ -1,9 +1,24 @@
-"""DanmuApp launch / console attach helpers extracted from main.py."""
+"""DanmuApp 启动与控制台 attach Mixin（W-REFACTOR-MAIN-001）。
+
+职责边界：
+- Web 控制台打开/导航（_open_web_console、_open_web_console_when_ready）
+- pywebview attach 重试与调度（_retry_webview_attach、_schedule_webview_attach）
+
+与 DanmuApp 关系：通过 self 访问 webview_shell、web_server、web_launch_mode 等字段。
+DanmuApp 通过多继承获得这些方法。
+
+代码归属判断：Web 控制台/pywebview 的启动、attach、导航逻辑放这里。
+"""
 
 from __future__ import annotations
 
 
 class DanmuAppLaunchMixin:
+    """启动 Mixin：DanmuApp 通过多继承获得这些方法。
+
+    通过 self 访问 DanmuApp 的 webview_shell、web_server、web_launch_mode 等字段。
+    """
+
     def _open_web_console_when_ready(
         self,
         path: str = "/",

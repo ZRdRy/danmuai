@@ -1,3 +1,11 @@
+"""``DanmuApp.build_status_snapshot()`` 必须继续委托 ``StatusSnapshotBuilder``。
+
+规则（与 [docs/CONTRIBUTING_ARCHITECTURE.md] 3.2 / phase2.5 对应）：
+    - ``main.py`` 改动时，``build_status_snapshot`` 函数体**必须**存在
+    - 函数体**必须**包含 ``StatusSnapshotBuilder`` 与 ``.build(`` 调用
+    - 禁止把 snapshot 内联回 ``DanmuApp``（防止状态字段散落主类）
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

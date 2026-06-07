@@ -1,4 +1,16 @@
-"""Single host registry: endpoint guess and API transport from PROVIDERS."""
+"""Single host registry: endpoint guess and API transport from PROVIDERS.
+
+职责：
+- ``HOST_ENTRIES`` 由 ``PROVIDERS`` 预设 default_endpoint 提取 netloc 片段并去重，
+  按片段长度降序排序（更长的优先匹配，例如 ``api.xiaomimimo.com`` 早于 ``xiaomimimo.com``）。
+- ``match_host_entry`` 在 endpoint 字符串中做子串匹配；``HOST_ENTRIES`` 顺序决定优先级。
+- ``guess_provider_from_endpoint`` 先看 host 匹配；未命中时按 ``api_mode`` 返回
+  ``custom_doubao``，否则回退 ``DEFAULT_PROVIDER_ID``。
+- ``resolve_api_transport`` 选择 ``doubao``（Responses）或 ``openai``（Chat Completions）。
+
+约束：与 ``app.model_providers.PROVIDERS`` 严格对齐；新增服务商需在 ``_build_host_entries``
+中可被自动收录（仅需 ``default_endpoint`` 非空）。
+"""
 
 from __future__ import annotations
 

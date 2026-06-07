@@ -1,4 +1,16 @@
-"""公式化弹幕库专用 API；开关与 min_on_screen 不经 PUT /api/config 全量表单。"""
+"""公式化弹幕库专用 API；开关与 min_on_screen 不经 PUT /api/config 全量表单。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/danmu-pool/status``：内置/自定义开关 + pool size。
+- ``POST /api/danmu-pool/custom``：追加自定义句（去重 + 截断），上限 500。
+- ``PUT /api/danmu-pool/setting``：写 ``danmu_pool_enabled`` / ``danmu_pool_use_custom`` /
+  ``min_on_screen``；**不**走 ``PUT /api/config`` 全量表单。
+- ``DELETE /api/danmu-pool/custom/{id}``：删除自定义句。
+
+设计约束：开关与自定义句的写入**只**走本模块专用路由，避免污染 ``PUT /api/config``；
+否则 ``ConfigService.WEB_CONFIG_KEYS`` 白名单与 ``apply_web_config_payload`` 校验会
+误把这些字段当成未知键剔除。
+"""
 
 from __future__ import annotations
 

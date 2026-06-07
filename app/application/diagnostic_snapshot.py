@@ -1,4 +1,8 @@
-"""只读诊断快照：调度/timing/代际 ID 投影，供 /api/diagnostics，与 /api/status 分离。"""
+"""只读诊断快照：调度/timing/代际 ID 投影，供 /api/diagnostics，与 /api/status 分离。
+
+分离原因：诊断信息包含 API Key 掩码、调度器内部状态等敏感数据，不应暴露在 status 轮询中。
+DiagnosticSnapshotBuilder 是 /api/diagnostics 的唯一数据源。
+"""
 from __future__ import annotations
 
 import time

@@ -1,4 +1,14 @@
-"""直播网页弹幕层路由：透明页、SSE 推送、测试弹幕。"""
+"""直播网页弹幕层路由：透明页、SSE 推送、测试弹幕。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /live-overlay.html``：返回透明背景的 HTML（OBS/直播伴侣作为网页源叠加）。
+- ``GET /api/live-overlay/events``：SSE 流（``text/event-stream``），由
+  ``app.live_overlay_hub.LiveOverlayHub`` 推送实时弹幕。
+- ``POST /api/live-overlay/test``：发送测试弹幕（仅调试用）。
+
+注册方式：``app.web_api.routes`` 调用 ``register_live_overlay_routes(app, bridge, check_token)``。
+本模块仅做 HTTP 路由 + SSE 响应包装，业务逻辑在 ``LiveOverlayHub``。
+"""
 
 from __future__ import annotations
 

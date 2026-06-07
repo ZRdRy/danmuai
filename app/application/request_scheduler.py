@@ -1,4 +1,7 @@
-"""视觉 API 触发节流：拥有 last_api_trigger_at，不发起 HTTP、不消费回复队列。"""
+"""视觉 API 触发节流：拥有 last_api_trigger_at，不发起 HTTP、不消费回复队列。
+
+禁止绕过：所有 API 触发必须经此调度器的 block_reason() 判断，不得直接检查 in_flight 或时间戳。
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -21,6 +24,7 @@ class RequestScheduler:
         last_trigger_at: float | None = None,
         min_interval_elapsed: Callable[[float], bool],
     ) -> str:
+        """返回阻塞原因：空串=可触发；"in_flight"=有视觉请求在途；"min_api_interval"=防连打间隔未到。"""
         trigger_at = self.last_api_trigger_at if last_trigger_at is None else float(last_trigger_at)
         if has_visual_request_in_flight:
             return "in_flight"

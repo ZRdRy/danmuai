@@ -1,4 +1,17 @@
-/** Web 控制台浅色 / 深色主题：localStorage 即时生效 + config.db 同步。 */
+/**
+ * 模块：theme — 温馨 ↔ 黑夜主题切换（localStorage 即时生效 + config.db 同步）。
+ *
+ * 关键路径：
+ *   - localStorage[THEME_STORAGE_KEY] = 'light' | 'dark'（主源；首屏闪屏预防由
+ *     index.html 内联 early script 在 <link> 之前读 localStorage 设置
+ *     data-theme 属性，避免 FOUC）
+ *   - normalizeTheme() 容错：非 'dark' 全部归一为 'light'
+ *   - initTheme() 由 app.js init() 第一步调用，避免首屏闪烁
+ *   - 主题选择也经 PUT /api/config 写入 config.db（控制台与本机偏好同步）
+ *
+ * 不变量：data-theme 属性挂在 <html> 元素；CSS 通过 [data-theme="dark"] 选择器
+ * 覆盖浅色 token（见 warm-tokens.css）。
+ */
 
 import { API, apiFetch, authHeaders } from './transport.js';
 

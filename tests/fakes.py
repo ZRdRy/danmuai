@@ -5,6 +5,14 @@ from types import SimpleNamespace
 
 
 class FakeLogger:
+    """替代 ``SanitizedLogger`` 的内存版记录器。
+
+    收集 4 类调用（debug/info/warning/error）到 list；不写文件，不接 Qt 信号。
+    单测断言常用::
+
+        assert "expected" in app.logger.error_messages
+    """
+
     def __init__(self):
         self.debug_messages = []
         self.info_messages = []
@@ -34,6 +42,14 @@ class FakeLogger:
 
 
 class FakeConfig:
+    """替代 ``ConfigStore`` 的纯内存版配置。
+
+    用法：``FakeConfig({"api_key": "sk-...", "model": "doubao-seed-1-6-vision"})``
+    提供 ``.get()`` / ``.set()`` / ``.get_int()`` 等与 ``ConfigStore`` 一致的
+    公开方法；``api_key`` 仍走 ``_api_key`` 私有字段（与生产一致），但不做
+    Fernet 加密。
+    """
+
     def __init__(self, values=None):
         self.values = dict(values or {})
         if values and "_api_key" in values:
@@ -118,6 +134,12 @@ class FakeConfig:
 
 
 class FakeLifetimeStats:
+    """空操作版 ``LifetimeStats``，不持久化、不递增。
+
+    主链路单测里只要确保接口被调用即可；累计统计由 ``test_lifetime_stats.py``
+    单独覆盖真实现。
+    """
+
     def add_danmu(self, count: int = 1) -> None:
         pass
 
@@ -141,6 +163,11 @@ class FakeLifetimeStats:
 
 
 class FakeSessionRunLog:
+    """空操作版 ``SessionRunLog``，不写 config.db，``list_dicts_newest_first`` 返回空。
+
+    完整 SQLite 持久化由 ``test_session_run_log.py`` 覆盖。
+    """
+
     def begin(self, **_kwargs) -> None:
         pass
 
@@ -157,6 +184,16 @@ class FakeTrack:
 
 
 class FakeEngine:
+    """替代 ``danmu_engine.DanmuEngine`` 的可断言版。
+
+    关键点：
+        - ``add_text`` 总是"成功"，返回 SimpleNamespace（content/persona/...）
+          但不真正创建 QGraphicsItem（避免起 QApplication）
+        - ``calls`` 列表记录每次 ``add_text`` 的 ``(content, persona)``
+        - ``running`` / ``dropped_pending`` 让 stop/clear 路径可断言
+        - ``min_on_screen`` / ``danmu_pool_enabled`` 来自 ``_config_values``
+    """
+
     def __init__(self):
         self.calls = []
         self.running = False
@@ -246,6 +283,11 @@ class DedupFakeEngine(FakeEngine):
 
 
 class FakeCapturer:
+    """替代 ``app.snipper.ScreenCapturer``：``grab()`` 永远返回构造时传入的 pixmap。
+
+    单测里用 ``FakePixmap`` 作为 pixmap，模拟"截到一帧"或"截到 None"。
+    """
+
     def __init__(self, pixmap=None):
         self._pixmap = pixmap
 
@@ -271,6 +313,12 @@ class FakePixmap:
 
 
 class FakeHistoryWriter:
+    """替代 ``HistoryWriter`` 的可断言版。
+
+    ``enqueue`` 收集 ``(content, persona, round_num, image_bytes)`` 到
+    ``self.calls``；不写 SQLite。``stop`` 空操作（生产里是 flush + 关线程）。
+    """
+
     def __init__(self):
         self.calls = []
 
@@ -282,6 +330,12 @@ class FakeHistoryWriter:
 
 
 class FakeTimer:
+    """替代 ``QTimer`` 的可断言版：记录 start/stop 次数，不真触发。
+
+    默认 ``_interval=800``（与主链路截图节拍一致）；单测里可改 ``_interval``
+    模拟不同节奏。``active`` 是状态查询的真相源（不靠 ``isActive`` 调用）。
+    """
+
     def __init__(self):
         self.active = False
         self.started = 0

@@ -1,4 +1,15 @@
-"""DanmuApp state and compatibility proxy mixin extracted from main.py."""
+"""DanmuApp 状态代理与兼容性 Mixin（W-REFACTOR-MAIN-001）。
+
+职责边界：
+- 提供 DanmuApp 的状态访问代理（RequestScheduler、RequestTimingService、StatsState 等）
+- 配置读取辅助（normal_recognition_interval、reply_count 等）
+- 可选实例属性安全访问（_optional_instance_attr）
+
+与 DanmuApp 关系：通过 self 访问 config、_request_scheduler、_request_timing_service、
+_stats_state、web_runtime_state 等字段。
+
+代码归属判断：纯状态读取/代理方法、不触达 Qt 对象、不发起 HTTP 请求的代码放这里。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +21,11 @@ from app.personae import normal_reply_count_from_config
 
 
 class DanmuAppStateMixin:
+    """状态代理 Mixin：DanmuApp 通过多继承获得这些方法。
+
+    通过 self 访问 DanmuApp 的 config、_request_scheduler 等字段。
+    """
+
     def _get_request_scheduler(self) -> RequestScheduler:
         try:
             return object.__getattribute__(self, "_request_scheduler")

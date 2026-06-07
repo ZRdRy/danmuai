@@ -1,4 +1,8 @@
-"""会话内统计的真实所有者；DanmuApp.danmu_count 等 @property 仅为旧代码兼容 façade。"""
+"""会话内统计的真实所有者；DanmuApp.danmu_count 等 @property 仅为旧代码兼容 façade。
+
+stop() 时统计并入 lifetime_stats：会话的 danmu_count/tokens 写入 session_run_log，
+runtime 秒数 flush 到 lifetime_stats 持久化。
+"""
 from __future__ import annotations
 
 import time

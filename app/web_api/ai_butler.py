@@ -1,4 +1,15 @@
-"""AI 管家：纯文本对话辅助理解/建议助手设置（不经主链路 AiWorker）。"""
+"""AI 管家：纯文本对话辅助理解/建议助手设置（不经主链路 AiWorker）。
+
+设计原则：
+- 17 字段白名单（``AI_BUTLER_ALLOWED_KEYS``）：管家只能读/建议这 17 个键，patch 写入也
+  限制在白名单内，避免误改主配置或泄漏 ``api_key``。
+- 不经主链路 ``AiWorker`` / ``ai_in_flight``：管家是旁路 HTTP 线程调用（独立 client），
+  不会阻塞视觉截图主链路；与主链路并发安全。
+- 走 ``/chat/completions``（OpenAI 兼容） 或 ``/responses``（豆包）双协议；由
+  ``resolve_api_transport`` 自动选。
+- 返回结构 ``ButlerParseResult``：``reply`` 自然语言回复 + ``patch`` 字段调整建议
+  （经 Web 端弹窗让用户确认，不直接落配置）。
+"""
 
 from __future__ import annotations
 
@@ -20,6 +31,7 @@ from app.translations import tr
 if TYPE_CHECKING:
     from main import DanmuApp
 
+# 17 字段白名单：patch 只能命中这里；非白名单键一律忽略（防止管家改 api_key/自定义模型等敏感项）
 AI_BUTLER_ALLOWED_KEYS: frozenset[str] = frozenset(
     {
         "temperature",

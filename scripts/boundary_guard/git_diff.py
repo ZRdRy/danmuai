@@ -1,3 +1,18 @@
+"""git diff 解析 + 源码行级工具。
+
+公共函数：
+    get_changed_files(repo_root)              — git status --porcelain 解析
+    get_added_lines(repo_root, path)          — 仅含 ``+`` 行的 (no, line) 元组列表
+    get_added_full_lines(repo_root, path)     — 与 get_added_lines 相同但不去注释
+    _is_comment_or_blank(line)                — 判定是否 Python 注释/空行（跳过规则）
+    _read_lines(repo_root, path)              — 读全部行（按行号 1-indexed）
+
+数据约定：
+    - Path 用 POSIX 风格（``\\`` → ``/``），跨平台一致
+    - status 字段保留 git 的两个字母状态码（' M' / 'A ' / '??' 等）
+    - 无 HEAD 仓库（如浅克隆）用 ``_repo_has_head`` 防御
+"""
+
 from __future__ import annotations
 
 import re

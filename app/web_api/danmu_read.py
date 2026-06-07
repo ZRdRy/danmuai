@@ -1,4 +1,13 @@
-"""读弹幕（MiMo TTS）专用 API；配置不经 PUT /api/config。"""
+"""读弹幕（MiMo TTS）专用 API；配置不经 PUT /api/config。
+
+路由（由 ``app.web_api.routes`` 注册）：
+- ``GET /api/danmu-read``：返回读弹幕配置（api_key 掩码）。
+- ``PUT /api/danmu-read``：保存读弹幕配置（enabled/interval/voice/style_prompt/provider/endpoint/model_id/api_key）。
+- ``POST /api/danmu-read/probe``：发送试听文本触发 TTS 合成 + 本地播放（不写入配置）。
+
+注册方式：``app.web_api.routes`` 调用 ``register_danmu_read_routes(app, bridge, check_token)``。
+所有写操作经 ``WebConsoleBridge.invoke_on_main`` 回到主线程，由 ``DanmuReadService.apply_config`` 落地。
+"""
 
 from __future__ import annotations
 

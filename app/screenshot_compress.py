@@ -1,4 +1,7 @@
-"""QPixmap → JPEG Base64 data URI for visual AI requests (W-REFACTOR-MAIN-001)."""
+"""QPixmap → JPEG Base64 data URI：视觉 AI 请求的截图压缩。
+
+隐私设计：内存压缩、不落盘。默认 max_width=768 / quality=85，返回 data:image/jpeg;base64,...。
+"""
 
 from __future__ import annotations
 

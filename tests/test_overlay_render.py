@@ -230,6 +230,46 @@ def test_global_opacity_factor_clamps(overlay_stack):
     assert overlay._global_opacity_factor() == 1.0
 
 
+def test_apply_display_settings_detects_font_family_change(overlay_stack):
+    """danmu_font_family 变化时 display_settings_dirty 为 True，apply 后清除。"""
+    store, _, overlay = overlay_stack
+    overlay._sync_applied_display_settings_markers()
+    assert overlay.display_settings_dirty() is False
+
+    store.set("danmu_font_family", "SimHei")
+    assert overlay.display_settings_dirty() is True
+    overlay.apply_display_settings()
+    assert overlay.display_settings_dirty() is False
+
+
+def test_apply_display_settings_uses_imported_font_family(
+    overlay_stack, workspace_tmp, monkeypatch
+):
+    """W-FONT-002：导入字体 family 经 apply_display_settings 生效。"""
+    from pathlib import Path
+
+    import pytest
+    from app import font_registry as fr_mod
+    from app.font_registry import FontRegistry
+
+    fixture = Path(__file__).parent / "fixtures" / "minimal.ttf"
+    if not fixture.is_file():
+        pytest.skip("tests/fixtures/minimal.ttf missing")
+
+    fonts_dir = workspace_tmp / "fonts"
+    fonts_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fr_mod, "FONTS_DIR", fonts_dir)
+
+    store, _, overlay = overlay_stack
+    reg = FontRegistry(store)
+    record = reg.import_bytes(fixture.read_bytes(), "overlay.ttf")
+    family = record["family"]
+
+    store.set("danmu_font_family", family)
+    overlay.apply_display_settings()
+    assert overlay.font.family() == family
+
+
 def test_apply_display_settings_refreshes_pixmap_on_font_change(overlay_stack):
     store, engine, overlay = overlay_stack
     item = DanmuItem(content="resize_me", width=0.0)

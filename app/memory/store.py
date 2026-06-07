@@ -26,8 +26,16 @@ from app.memory.types import VisualMemoryUpdate
 class SceneMemoryStore:
     """场景记忆门面：context（视觉卡片）+ dedup（已播弹幕窗口）。
 
-    generation 与 DanmuApp._scene_generation 对齐；代际不一致的写入/读提示词均静默忽略，
-    避免迟到的 AI 视觉结果与当前代际错位。
+    职责：组合 ``SceneContextMemory``（场景卡片）与 ``BulletDedupMemory``（去重窗口），
+    是 ``DanmuApp.scene_memory`` 的访问入口。**不**直接持有 activity 状态；
+    activity 由 ``DanmuApp._recent_activity`` 单独管理。
+
+    线程安全：本类实例由 ``DanmuApp`` 在主线程创建/访问；单线程，无需锁。
+
+    代际（``scene_generation``）说明：
+    - 与 ``DanmuApp._scene_generation`` 对齐；视觉结果入场时 store.update_from_visual_result
+      会校验 ``update.scene_generation``，代际不匹配则静默 return。
+    - 这避免了 AI 异步返回的旧代际 scene_memory 覆盖当前代际的卡片。
     """
 
     def __init__(self) -> None:

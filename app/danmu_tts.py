@@ -1,4 +1,9 @@
-"""MiMo V2.5 TTS 非流式合成（向后兼容门面，实现见 tts_providers）。"""
+"""MiMo V2.5 TTS 非流式合成（向后兼容门面，实现见 tts_providers）。
+
+读弹幕 TTS 入口：实际合成逻辑已迁移到 ``app/tts_providers.py``（provider 注册表 + 适配层）。
+本文件**仅**作为 re-export 兼容层，保留 ``synthesize_mimo_tts`` / ``synthesize_tts`` /
+``resolve_tts_config`` 等老接口符号。新代码应直接 ``from app.tts_providers import ...``。
+"""
 
 from __future__ import annotations
 

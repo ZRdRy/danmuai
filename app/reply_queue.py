@@ -3,6 +3,9 @@
 队列存在的根本原因：AI 请求延迟不可预测（数百毫秒到数秒），而弹幕上屏需要有序、
 可控节奏。队列在「AI 异步返回」与「主线程定时消费」之间做缓冲与过滤。
 
+自适应延迟设计：reply_timer 单次触发间隔 100-1000ms，按屏上弹幕密度动态调节，
+使弹幕上屏节奏平滑（密度高时间隔长，避免堆积）。
+
 主流程位置：
 - 写入：DanmuApp._enqueue_reply_batch() → push / prepend_batch
 - 消费：DanmuApp._consume_reply_queue() → pop，由 reply_timer 或主循环主动触发

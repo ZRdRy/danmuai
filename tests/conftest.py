@@ -1,4 +1,25 @@
-"""Shared pytest configuration."""
+"""tests/conftest.py — 共享 pytest 配置与 fixture。
+
+约定（与本仓库 AGENTS.md 测试约定一致）：
+    - 临时目录：项目根 ``.pytest_tmp/``（避免 ``%TEMP%\\pytest-of-*`` 权限问题）。
+      根 ``conftest.py`` 先重定向到 workspace 根，**本文件** 再细分 per-test
+      子目录（``run-<pid>-<uuid>/``，每个 test session 一个）。
+    - 共享假对象：在 ``tests/fakes.py``（FakeLogger / FakeEngine / FakeConfig /
+      FakeTimer / FakeCapturer / FakeHistoryWriter / FakeLifetimeStats /
+      FakeSessionRunLog）。本文件不重新实现，仅 import + 在 fixture / 辅助
+      函数里组装。
+    - 最小 DanmuApp：``bind_minimal_danmu_app(app, **overrides)``（QObject 不
+      走 ``__init__``，直接 ``object.__setattr__`` 装属性）。``make_minimal_danmu_app``
+      在此基础上再绑定主链路方法（``_on_screenshot_timer`` 等）方便单测。
+
+fixture 索引：
+    _isolate_log_emit_bus  autouse — Qt 析构后 ``LogEmitBus`` 引用失效，逐
+                              用例重置为 ``None``（W-024 修复）
+    workspace_tmp           per-test 临时目录（不走 %TEMP%）
+    tmp_path                别名，给 pytest 内置 / 第三方插件用
+    qapp                    PyQt6 QApplication 单例（Overlay 单测需要）
+    danmu_app_minimal       ``make_minimal_danmu_app()`` 工厂封装
+"""
 
 # ruff: noqa: E402
 
@@ -94,6 +115,23 @@ def tmp_path(workspace_tmp) -> Path:
 
 
 def bind_minimal_danmu_app(app, **overrides):
+    """给 ``DanmuApp.__new__(DanmuApp)`` 出来的 QObject 实例装一批默认属性。
+
+    不调用 ``__init__``，避免触发 Qt / 屏幕 / 网络初始化；所有 attribute 用
+    ``object.__setattr__`` 写入（绕开某些 ``__slots__`` / property 限制）。
+
+    默认绑定（按需 ``overrides`` 覆盖）：
+        logger / engine / history_writer / reply_buffer / reply_timer /
+        ai_in_flight / mic_in_flight / stats_state / config /
+        web_runtime_state / _pending_request_meta / session_run_log /
+        _request_scheduler / _request_timing_service / lifetime_stats /
+        _lifetime_flush_timer / _scene_memory / _activity_state
+
+    典型用法：
+        app = DanmuApp.__new__(DanmuApp)
+        bind_minimal_danmu_app(app, ai_in_flight=1)
+        app._consume_reply_queue()  # 走真实主链路方法
+    """
     """Attach attributes to DanmuApp.__new__ instances (QObject without __init__)."""
     defaults = {
         "logger": FakeLogger(),
@@ -163,8 +201,105 @@ def qapp():
     app.processEvents()
 
 
+@pytest.fixture()
+def floating_panel_setup(qapp, workspace_tmp):
+    """Create V2 floating panel overlay with stable defaults for focused tests."""
+    from app.config_store import ConfigStore
+    from app.floating_panel_engine import FloatingPanelEngine
+    from app.floating_panel_overlay import FloatingPanelOverlay
+
+    store = ConfigStore(db_path=workspace_tmp / "config.db")
+    store.set("danmu_render_mode", "floating_panel")
+    store.set("floating_panel_max_items", "12")
+    store.set("floating_panel_font_size", "20")
+    store.set("floating_panel_opacity", "85")
+    engine = FloatingPanelEngine(store)
+    overlay = FloatingPanelOverlay(store, engine)
+    overlay.resize(360, 400)
+    overlay.show()
+    qapp.processEvents()
+    return store, overlay
+
+
+def make_minimal_floating_panel_app(store, panel):
+    """Construct a minimal DanmuApp shell for FloatingPanel tests."""
+    from main import DanmuApp
+
+    app = DanmuApp.__new__(DanmuApp)
+    object.__setattr__(app, "config", store)
+    object.__setattr__(app, "floating_panel", panel)
+    object.__setattr__(
+        app,
+        "logger",
+        type(
+            "L",
+            (),
+            {
+                "debug": lambda *a, **k: None,
+                "info": lambda *a, **k: None,
+                "warning": lambda *a, **k: None,
+                "error": lambda *a, **k: None,
+            },
+        )(),
+    )
+    return app
+
+
+def bind_floating_panel_app_methods(app):
+    """Bind display-related DanmuApp methods onto a __new__ instance."""
+    from main import DanmuApp
+
+    app._overlay_display_enabled = DanmuApp._overlay_display_enabled.__get__(app, DanmuApp)
+    app._sync_overlay_visibility = DanmuApp._sync_overlay_visibility.__get__(app, DanmuApp)
+    app._floating_panel_v2_enabled = DanmuApp._floating_panel_v2_enabled.__get__(app, DanmuApp)
+    app._sync_floating_panel_visibility = DanmuApp._sync_floating_panel_visibility.__get__(app, DanmuApp)
+    app._display_danmu_text = DanmuApp._display_danmu_text.__get__(app, DanmuApp)
+    app._danmu_render_mode = DanmuApp._danmu_render_mode.__get__(app, DanmuApp)
+    app._consume_reply_queue = DanmuApp._consume_reply_queue.__get__(app, DanmuApp)
+    app._on_config_changed = DanmuApp._on_config_changed.__get__(app, DanmuApp)
+
+
+class SpyOverlay:
+    """Record overlay visibility interactions for FloatingPanel integration tests."""
+
+    def __init__(self):
+        self.show_calls = 0
+        self.hide_calls = 0
+        self.stop_render_calls = 0
+        self.ensure_render_calls = 0
+        self._dirty = False
+
+    def show_for_screen(self, *_a, **_k):
+        self.show_calls += 1
+
+    def ensure_render_loop(self):
+        self.ensure_render_calls += 1
+
+    def stop_render_loop(self):
+        self.stop_render_calls += 1
+
+    def hide(self):
+        self.hide_calls += 1
+
+    def display_settings_dirty(self):
+        return self._dirty
+
+    def apply_display_settings(self):
+        self._dirty = False
+
+
 def make_minimal_danmu_app():
-    """Minimal DanmuApp for main-pipeline unit tests (no full __init__)."""
+    """造一个**绑了主链路方法**的最小 DanmuApp（主链路单测专用）。
+
+    与 ``bind_minimal_danmu_app`` 的差别：本函数会从 ``DanmuApp`` 类上把
+    关键方法（``_on_screenshot_timer`` / ``_consume_reply_queue`` /
+    ``_enqueue_reply_batch`` / ``_normal_recognition_interval_ms`` 等）通过
+    ``__get__`` 绑到实例上，使单测可以**真实地**走主链路逻辑而不需要起
+    Qt event loop。
+
+    Returns:
+        DanmuApp 实例（attribute 已装、主链路方法已绑，ai_worker 是 Mock）。
+    """
     from unittest.mock import Mock
 
     from main import DanmuApp

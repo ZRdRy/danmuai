@@ -1,4 +1,9 @@
-"""Record microphone audio and send one probe request (Doubao Responses or MiMo Chat)."""
+"""Record microphone audio and send one probe request (Doubao Responses or MiMo Chat).
+
+W-AUDIT-FIX-002 改进：通过 DanmuApp 公开 facade 访问麦克风（``app.run_mic_test``），
+避免直接读 ``DanmuApp._mic_service`` 私有字段。HTTP 线程经 ``WebConsoleBridge.invoke_on_main``
+回到主线程执行采集与发送，不在 HTTP 线程直接调用 sounddevice。
+"""
 
 from __future__ import annotations
 

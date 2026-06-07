@@ -1,7 +1,7 @@
-"""Web console support helpers extracted from app.web_console.
+"""Web 控制台支撑模块：状态快照、配置导出/导入、保存流程辅助。
 
-Keeps route/bootstrap code small while preserving the existing public imports
-re-exported from app.web_console for tests and callers.
+与 web_console.py 关系：从 web_console 提取的辅助函数，保持路由/启动代码精简。
+所有函数均在 HTTP 线程执行（除 apply_config_patch 经 bridge 到主线程）。
 """
 
 from __future__ import annotations
@@ -35,6 +35,11 @@ class WebStatusSnapshot:
     danmu_count: int = 0
     queue_count: int = 0
     display_count: int = 0
+    danmu_render_mode: str = "scrolling"
+    display_mode: str = "overlay"
+    overlay_display_count: int = 0
+    floating_panel_active_count: int = 0
+    floating_panel_render_active: bool = False
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0

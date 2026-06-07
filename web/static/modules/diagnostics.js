@@ -1,4 +1,19 @@
-/** /api/diagnostics panel (independent from /api/status). */
+/**
+ * 模块：diagnostics — 温馨控制台「诊断面板」（默认折叠，独立于 /api/status）。
+ *
+ * 数据源：/api/diagnostics（GET 或 SSE；与 /api/status 解耦）。
+ *
+ * 内容：
+ *   - 调度：scheduler.blocked / block_reason / trigger_gap
+ *   - 请求：timing.pending_count / avg_rtt / high_rtt / rtt_history
+ *   - 智能冷却：cooldown_ms
+ *   - runtime 摘要 + 诊断报告（buildDiagnosticReportText）
+ *   - config_context：当前 active_model_id / provider / persona（W-ERROR-REPORT-004）
+ *
+ * 重连：SSE 走 SSE_RECONNECT_BASE_MS=1s → SSE_MAX_RECONNECT_MS=8s 指数退避。
+ *
+ * 线程：浏览器主线程；不做任何 fetch 缓存之外的工作。
+ */
 
 import { API } from './transport.js';
 

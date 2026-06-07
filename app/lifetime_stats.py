@@ -1,4 +1,13 @@
-"""Lifetime counters persisted in config.db (survive restarts)."""
+"""Lifetime counters persisted in config.db (survive restarts).
+
+累计指标（弹幕数 / 运行时长 / token）从 ``DanmuApp`` 会话内计数；会话结束时
+``LifetimeStats.stop()`` 把临时值并入 ``ConfigStore`` 中的
+``stats_lifetime_danmu`` / ``stats_lifetime_seconds`` / ``stats_lifetime_input_tokens`` /
+``stats_lifetime_output_tokens`` 等键，**不**重置（用户可永久累加）。
+
+新增累计键时请同步 ``CONFIG_DEFAULTS`` 段（在 ``app.config_defaults`` 中无显式默认）；
+``merge_from_session`` 在 stop() 时调用，HTTP 线程**勿**直接调（须经 ``WebConsoleBridge``）。
+"""
 
 from __future__ import annotations
 

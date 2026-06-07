@@ -1,4 +1,16 @@
-"""Startup / launch helpers extracted from main.py."""
+"""启动与入口辅助函数（W-REFACTOR-MAIN-001）。
+
+职责边界：
+- 废弃启动参数检测（--qt-ui / --legacy-ui / DANMU_WEB_CONSOLE=0 → sys.exit(2)）
+- Web 启动模式解析（webview vs browser）
+- 全局异常钩子（global_exception_hook）
+- 启动提示与错误对话框（show_startup_notice、QMessageBox）
+
+与 DanmuApp 关系：main.py 在 DanmuApp.__init__ 之前调用这些函数。
+本模块不依赖 DanmuApp 实例。
+
+代码归属判断：应用启动前的环境检测、参数解析、错误提示放这里。
+"""
 
 from __future__ import annotations
 

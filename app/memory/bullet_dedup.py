@@ -22,6 +22,22 @@ def _truncate_bullet(content: str, max_len: int = MAX_BULLET_SNIPPET_LEN) -> str
 
 @dataclass
 class BulletDedupMemory:
+    """Prompt 层弹幕去重记忆。
+
+    双层去重协同：
+    - 本类（prompt 层）：将近期已播弹幕文本/角度拼入 AI 用户提示词，引导 AI
+      在生成源头就避开重复角度。
+    - ``danmu_engine.add_text`` 内的 ``deque(30)`` + ``recent_exact_set`` + Levenshtein
+      ``dedup_threshold=0.5``（渲染层）：弹幕上屏时拦截已显示的相似文本。
+
+    为什么需要两层：prompt 层只能引导；AI 仍可能输出重复文本；渲染层兜底拦截。
+
+    字段语义：
+    - ``recent_bullets``：近期已显示弹幕的精简文本（截断到 ``MAX_BULLET_SNIPPET_LEN``）。
+    - ``recent_angles``：近期角度标签（去重有序），用于对外展示「最近说过哪些角度」。
+    - ``avoid_angles``：被 prompt 注入的「避免角度」清单（取 ``recent_angles`` 子集），引导 AI 换角度。
+    """
+
     recent_bullets: list[DisplayedBullet] = field(default_factory=list)
     recent_angles: list[str] = field(default_factory=list)  # 近期弹幕的表达角度标签（去重有序）
     avoid_angles: list[str] = field(default_factory=list)  # 告诉 AI「这些角度已用过，换一个」，引导生成多样性

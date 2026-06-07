@@ -1,3 +1,12 @@
+"""诊断快照边界规则。
+
+检查项：
+    - check_diagnostic_snapshot_boundary
+        ``app/application/diagnostic_snapshot.py`` 内不允许直写
+        ``app.<attr> = ...`` 或 ``app.<list>.append(...)``；只能从 ``runtime_state``
+        投影到快照字段。这是 Phase 4-F 的具体落地：HTTP 出口统一经 snapshot。
+"""
+
 from __future__ import annotations
 
 import re

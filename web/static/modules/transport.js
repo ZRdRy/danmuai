@@ -1,4 +1,23 @@
-/** HTTP session, API fetch, WebSocket status/logs transport and degraded polling. */
+/**
+ * 模块：transport — fetch 封装 + WebSocket 状态机 + 轮询降级。
+ *
+ * 三大职责：
+ *   1) HTTP：apiFetch() 自动注入 base / token / JSON 头；401/403/5xx 转
+ *      formatApiError() 统一文案；apiFormFetch() 用于 multipart（如图片上传）。
+ *   2) WebSocket：startRealtimeTransport() 同时拉起两路 WS
+ *      - /api/ws/status ：服务端的运行状态推送（运行/待命、统计、is_error）
+ *      - /api/ws/logs   ：实时日志流
+ *      断线走指数退避（baseBackoffMs=1s, maxBackoffMs=16s, attempt 上限 6）。
+ *   3) 轮询降级：WS 关闭后经 wsGraceMs（status=2.5s, logs=0.8s）宽限，再
+ *      用 setInterval(pollIntervalMs=1500) 走 GET /api/status 和
+ *      /api/logs/recent?since_ts=...。错误 toast 走 pollToastCooldownMs=30s
+ *      节流（W-AUDIT-FIX-002 引入）。
+ *
+ * 关键不变量：
+ *   - API.base 来自 /api/session；未拉取时 base=''，调用方应 await refreshSession()
+ *   - REALTIME.lastLogsPollTs 持久保留，用于日志轮询 since_ts 增量续传
+ *   - 状态机由 setRealtimeHandlers({onStatus, onLog, onLogBatch, ...}) 解耦
+ */
 
 export const API = { token: null, base: '' };
 

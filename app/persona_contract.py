@@ -1,3 +1,18 @@
+"""System prompt 契约（人设注入 AI 提示词的接口契约）。
+
+职责：
+- 构造/裁剪 AI 的 system prompt 契约段落（``REPLY_CONTRACT_ZH/EN``、``build_reply_contract_zh/en``、
+  ``build_normal_reply_contract_zh/en``），保证模型按预期格式返回 JSON 弹幕数组。
+- 注入用户级增强：``append_nickname_to_system_pt``（W-NICKNAME-001）、
+  ``append_live_topic_to_system_pt``（W-LIVE-TOPIC-001）。
+- 提供 ``strip_reply_contract`` / ``ensure_reply_contract`` 用于去重与刷新现有 prompt 中的契约段。
+
+关键约定：
+- ``append_nickname_to_system_pt``：当 ``user_nickname`` 缺失/键不存在/纯空白时**原样返回**
+  ``system_pt``，不追加任何内容。空值兜底是 hot-patch 行为，必须保留。
+- ``append_live_topic_to_system_pt``：按 ``Translator.get_language()`` 选择中/英模板追加。
+"""
+
 from __future__ import annotations
 
 import re

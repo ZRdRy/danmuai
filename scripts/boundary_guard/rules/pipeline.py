@@ -1,3 +1,13 @@
+"""生成管线 / runtime 投影规则。
+
+检查项：
+    - check_generation_pipeline_projection
+        ``app/application/generation_pipeline_state.py`` 中候选字段
+        （GENERATION_PIPELINE_CANDIDATE_FIELDS）的写操作须经
+        ``runtime_state`` 投影；禁止直接 ``self.xxx =`` 改写（避免运行时
+        状态被绕过）。
+"""
+
 from __future__ import annotations
 
 import re

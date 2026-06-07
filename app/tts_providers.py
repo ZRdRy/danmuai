@@ -1,4 +1,15 @@
-"""读弹幕 TTS provider 注册表与适配层（MiMo 默认 + OpenAI-compat chat/audio）。"""
+"""读弹幕 TTS provider 注册表与适配层（MiMo 默认 + OpenAI-compat chat/audio）。
+
+MiMo TTS + 播放链路：
+1. ``DanmuReadService._pick_and_synthesize`` 抽样一条可见弹幕 → ``resolve_tts_config``。
+2. ``synthesize_tts`` 按 ``resolved.provider`` 选 adapter：
+   - ``mimo``：``MimoTtsAdapter`` → MiMo ``/chat/completions`` + ``audio: {format: wav, voice: ...}``，
+     voice 走 ``MIMO_TTS_VOICES`` 白名单。
+   - ``custom_openai``：``OpenAiCompatAudioTtsAdapter`` → 同结构，voice 字段自由。
+3. 响应 ``choices[0].message.audio.data``（base64 WAV）→ ``DanmuTtsPlayback.play_wav_bytes``。
+
+新增 provider：实现 ``TtsSynthesisAdapter`` 子类并注册到 ``_ADAPTERS``；不需改主链路。
+"""
 
 from __future__ import annotations
 

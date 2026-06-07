@@ -1,4 +1,14 @@
-"""Model/provider selection helpers for Web config validation and status projection."""
+"""Model/provider selection helpers for Web config validation and status projection.
+
+职责：
+- ``infer_provider_id`` / ``resolve_active_*``：根据 endpoint/model 推断当前 provider。
+- ``set_default_model_selection``：双写「默认视觉模型」到 ``default_model_id`` + 自定义模型列表，
+  Web 端切换默认模型调用此函数。
+- ``validate_model_selection_for_save``：保存前校验 endpoint 协议、model 在目录中。
+- 状态投影：``project_*`` 函数供 ``StatusSnapshotBuilder`` 使用，避免路由层直接读 model 配置。
+
+约束：本模块**不**触达 Qt、不调主链路函数；可在 HTTP 线程安全调用。
+"""
 
 from __future__ import annotations
 

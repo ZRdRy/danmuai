@@ -3,6 +3,13 @@
 独立模块原因：prompt 组装涉及字符预算分配、section 排序、mode 分支，放在 main.py 会加剧上帝类膨胀。
 
 调用链：SceneMemoryStore.format_prompt_for_generation() → build_memory_prompt_block() → append_memory_to_user_pt() → DanmuApp._build_user_pt()
+
+字符预算（与四档 memory_mode 对应，见 BUDGET_* 常量）：
+- BUDGET_DEDUP_ONLY = 220
+- BUDGET_SCENE_CARD = 450（默认 scene_card 档）
+- BUDGET_STRONG = 700（强记忆档，容纳 carryover 摘要 + 更多 stable facts）
+
+约束：模块不导入 Qt，不持有线程状态；可在主线程任何位置安全调用。
 """
 
 from __future__ import annotations

@@ -1,4 +1,11 @@
-"""Completed danmu guard sessions (start → stop); persisted in config.db when configured."""
+"""Completed danmu guard sessions (start → stop); persisted in config.db when configured.
+
+每一轮 start → stop 记一条 session_run（start_at/end_at/runtime_sec/danmu_count/input_tokens/output_tokens/
+persona_set 等字段），存于 config.db 的 ``session_runs`` 表（最近 100 条，超出时按 end_at 截断）。
+
+约束：必须在 ``DanmuApp.quit()`` 同步 flush；进程被 kill 时 SQLite 可能丢本条记录，开发者需
+接受这个不完美（不主动写 retry）。
+"""
 
 from __future__ import annotations
 

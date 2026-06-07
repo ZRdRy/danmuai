@@ -1,4 +1,17 @@
-"""DanmuApp Web/API facade mixin extracted from main.py."""
+"""DanmuApp Web/API façade Mixin（W-REFACTOR-MAIN-001）。
+
+职责边界：
+- 对外暴露 Web API 所需的只读快照方法（build_status_snapshot、build_diagnostic_snapshot）
+- 错误状态安全写入（_set_error_status_safe，经 bridge 信号发布）
+- API 调度状态查询（api_schedule_block_reason、get_request_scheduler）
+- 模型探测与连接测试（probe_model_config、probe_connection）
+
+与 DanmuApp 关系：通过 self 访问 engine、config、web_bridge、ai_worker、overlay 等字段。
+所有方法均为 DanmuApp 对外 façade，Web 路由通过 DanmuApp 实例调用这些方法。
+
+代码归属判断：Web API 路由直接调用的方法、构建状态快照、对外暴露的查询接口放这里。
+禁止在此直接读 DanmuApp._* 私有字段——应通过本 Mixin 的公开方法封装。
+"""
 
 from __future__ import annotations
 
@@ -15,6 +28,12 @@ from app.web_api.custom_models import MASKED_KEY
 
 
 class DanmuAppWebFacadeMixin:
+    """Web façade Mixin：DanmuApp 通过多继承获得这些方法。
+
+    通过 self 访问 DanmuApp 的 engine、config、web_bridge、ai_worker 等字段。
+    所有方法均为 Web API 路由的入口点。
+    """
+
     def _set_error_status_safe(self, message: str, is_error: bool):
         self._ensure_web_runtime_state().set_error_status(message, is_error=is_error)
         bridge = getattr(self, "web_bridge", None)

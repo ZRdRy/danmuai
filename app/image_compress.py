@@ -1,4 +1,7 @@
-"""In-memory JPEG compression for web preview (no disk writes)."""
+"""内存 JPEG 压缩：Web 预览与运行时共用逻辑（不落盘）。
+
+与 screenshot_compress.py 关系：本模块处理任意 bytes 输入，screenshot_compress 专用于 QPixmap。
+"""
 
 from __future__ import annotations
 

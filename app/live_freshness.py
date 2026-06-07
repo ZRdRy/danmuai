@@ -8,6 +8,9 @@
   main 在 `_on_normal_capture_tick` in-flight 分支经 `_maybe_inject_local_fallback` 接线。
 
 本文件提供常量、状态快照与纯函数；不持有 Qt/线程状态。
+
+历史兼容：实时模式 TTL/节奏预触发已移除；保留本模块仅为防旧 config 报错。
+新增「实时/节奏」功能时**勿**回填到 ``live_freshness``，应单独建模块。
 """
 from __future__ import annotations
 

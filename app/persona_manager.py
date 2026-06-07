@@ -1,3 +1,14 @@
+"""人格 CRUD + 持久化门面。
+
+``PersonaManager`` 是 ``DanmuApp.personae`` 的实际类型，提供：
+- 内置人格（``BUILTIN_PERSONAE``）的清单与中/英 prompt 获取。
+- 自定义人格（``custom_personae``）的增删改查与持久化到 ``ConfigStore``。
+- 活跃人格（``active_personae``）版本迁移：旧版人格（``阿静``/``测试``）会被自动剔除。
+- 随机抽签：``pick_random`` 从活跃人格中均匀随机选一个作为本轮回复的 persona。
+
+约束：本类不导入 Qt；可在主线程或 HTTP 线程安全调用（Dict / set 操作不修改 ConfigStore 以外的共享状态）。
+"""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +27,16 @@ _REMOVED_PERSONAE = frozenset({"阿静", "测试"})
 
 
 class PersonaManager:
+    """人格管理器：内置 + 自定义 + 活跃集合。
+
+    关键属性：
+    - ``_custom``：内存缓存的自定义人格字典，首次 ``_load_custom`` 时从 ``custom_personae`` 字符串读入。
+    - ``_ACTIVE_VERSION``：活跃人格 schema 版本号；启动时 ``_migrate_active_personae`` 检查并迁移。
+    - ``_REMOVED_PERSONAE``：被弃用的人格名（``阿静``、``测试``），迁移时自动剔除。
+
+    线程安全：主线程构造 + 主线程/HTTP 线程读取；自定义人格写入后需 ``save_custom`` 显式持久化。
+    """
+
     DEFAULT_ACTIVE = ["路人惊讶型", "搞笑玩梗型", "专业分析型", "捧场活跃型", "轻度吐槽型"]
     _ACTIVE_VERSION = 3
 

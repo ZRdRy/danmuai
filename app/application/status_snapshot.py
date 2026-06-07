@@ -1,4 +1,8 @@
-"""组装 /api/status 的 JSON 形状；禁止在此触发 AI、改队列或写 ConfigStore。"""
+"""组装 /api/status 的 JSON 形状；禁止在此触发 AI、改队列或写 ConfigStore。
+
+只读投影：StatusSnapshotBuilder 是 /api/status 的唯一数据源，不触达 Qt，不调用主链路函数。
+诊断数据走 DiagnosticSnapshotBuilder，勿混入本 dict。
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -49,8 +53,13 @@ class StatusSnapshotBuilder:
             "running": state.running,
             "danmu_count": state.danmu_count,
             "queue_count": state.queue_count,
-            # On-screen visible danmu (engine.visible_display_count), not queue/total.
+            # W-FP-V2-001：display_count 按 danmu_render_mode 语义化
             "display_count": state.display_count,
+            "danmu_render_mode": state.danmu_render_mode,
+            "display_mode": state.display_mode,
+            "overlay_display_count": state.overlay_display_count,
+            "floating_panel_active_count": state.floating_panel_active_count,
+            "floating_panel_render_active": state.floating_panel_render_active,
             "total_tokens": total_tokens,
             "input_tokens": state.input_tokens,
             "output_tokens": state.output_tokens,

@@ -1,4 +1,16 @@
-"""Platform model catalogs with pricing metadata for the Web console vision model picker."""
+"""Platform model catalogs with pricing metadata for the Web console vision model picker.
+
+四平台目录（按 ``_CATALOG_BY_PROVIDER`` key）：
+- ``doubao``：火山方舟（豆包 Responses 模型）
+- ``dashscope``：阿里云百炼（qwen-vl-* 等）
+- ``siliconflow``：硅基流动（deepseek-ai/* 等）
+- ``mimo``：小米 MiMo（仅 ``mimo-v2.5``）
+
+每个 ``CatalogModel`` 含：name、displayName_zh/en、supportsVision、supportsMicAudio、price。
+``ModelPrice`` 含 input/output/可选 audio（每千 token 元）。
+
+价格元数据仅用于 Web「视觉模型选择器」的预估成本展示，**不**写入计费。
+"""
 
 from __future__ import annotations
 

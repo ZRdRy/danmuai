@@ -1,4 +1,13 @@
-"""Persona management entry point; re-exports split modules for backward compatibility."""
+"""Persona management entry point; re-exports split modules for backward compatibility.
+
+历史：人格实现曾集中在 ``app/personae.py``；重构后拆分为 ``persona_builtin``（内置定义）/
+``persona_manager``（CRUD + 活跃集合）/ ``persona_contract``（system prompt 契约）/
+``persona_version_history``（历史版本审计）。本文件**仅**作为 re-export 兼容层。
+
+``BUILTIN_PERSONA_PINNED_FIRST``：人格工坊列表置顶的人格集合（早期固定 4 类「正式人格」，
+后由 W-025 扩为 1–4「测试」+ 路人/搞笑/专业/捧场/吐槽 5 类默认活跃）。**修改置顶
+顺序必须同步人格工坊前端列表**，否则用户看到的人格顺序与提示词注入的 persona 不一致。
+"""
 
 from __future__ import annotations
 

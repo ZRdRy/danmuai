@@ -1,4 +1,18 @@
-"""Declarative per-provider capabilities."""
+"""Declarative per-provider capabilities.
+
+职责：
+- 按 ``provider_id`` 声明式注册每个服务商的能力（transport/vision/mic_audio/thinking_param/...）。
+- ``get_capabilities`` 查表；未命中返回 ``_DEFAULT_OPENAI``。
+- ``get_capabilities_for_endpoint`` 先经 ``registry.guess_provider_from_endpoint`` 推断
+  provider_id，再做 transport 校验：若 ``caps.transport != transport`` 时回退到
+  ``_DEFAULT_DOUBAO`` 或 ``_DEFAULT_OPENAI``，避免给非豆包 endpoint 强加豆包请求结构。
+
+设计取舍：
+- ``stream_usage_in_final_chunk=False``（豆包/小米）走终结 chunk 内 usage；
+  ``True``（OpenAI 默认）走 ``stream_options.include_usage``。
+- ``thinking_param=True``（mimo）需在请求体追加 ``thinking: {"type":"disabled"}``，
+  见 ``MimoOpenAIAdapter``；其他 provider 默认不加。
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,12 @@
+"""System tray icon and menu for the DanmuApp desktop shell.
+
+QSystemTrayIcon 持有「显示控制台 / 退出 / 重启 Web 终端」菜单；点击「退出」经
+``DanmuApp.quit()`` 走完整清理流程（停止主链路 + 关闭 pywebview + 关 Web 终端 + 关 tray）。
+
+线程：tray icon 必须在主线程创建；菜单点击 handler 也在主线程，**不**需要
+``invoke_on_main`` 桥接。
+"""
+
 from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon

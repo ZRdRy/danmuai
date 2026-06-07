@@ -1,4 +1,11 @@
-"""Thread-safe in-memory PCM ring buffer (no disk persistence)."""
+"""Thread-safe in-memory PCM ring buffer (no disk persistence).
+
+``MicRingBuffer``：滚动 byte 缓冲，保留最近 ``capacity_sec`` 秒 PCM；超过上限的旧数据
+在 ``append`` 时被截断。``drain_last_ms`` 返回最后 N 毫秒字节（用于 utterance 触发后
+``snapshot_pcm`` 组装发送给 AI 的音频）。
+
+线程安全：``threading.Lock`` 保护 ``bytearray``；可由 sounddevice 回调线程写、Qt 主线程读。
+"""
 
 from __future__ import annotations
 

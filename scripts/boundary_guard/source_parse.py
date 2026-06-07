@@ -1,3 +1,10 @@
+"""源码轻量解析：按缩进抽取函数体、过滤空行与注释。
+
+仅做正则 + 缩进判断，不引入 ast 依赖（启动开销小，CI 友好）。规则模块若需要
+"函数体匹配某模式"，用 ``_extract_function_body`` + ``_meaningful_body_lines``
+拿到可比较的代码行。
+"""
+
 from __future__ import annotations
 
 import re

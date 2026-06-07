@@ -1,4 +1,25 @@
-"""Default config values for export and first-run seeding."""
+"""Default config values for export and first-run seeding.
+
+``CONFIG_DEFAULTS`` 分组说明（新增字段时请同步到对应组并核对 ``WEB_CONFIG_KEYS``）：
+
+- 弹幕显示（``danmu_*`` + ``layout_mode`` + ``opacity`` + ``eviction_mode`` + ``empty_accel`` +
+  ``danmu_pending_entry_cap`` + ``danmu_track_retention_cap`` + ``reply_queue_max_items``）
+- 截图策略（``screen_index`` + ``region_*`` + ``image_max_width`` + ``image_quality`` + ``normal_recognition_interval_sec``）
+- 麦克风（``mic_*``）
+- 悬浮窗（``danmu_render_mode`` + ``floating_panel_*``；W-FP-V2-001） — 枚举 ``danmu_render_mode``：
+  - ``scrolling``（默认）：横向 DanmuOverlay
+  - ``floating_panel``：侧边悬浮窗 V2
+  - 遗留 ``display_mode`` 只读兼容，由 ``resolve_danmu_render_mode`` 迁移
+- 字体（``danmu_font_*`` + ``floating_panel_font_*`` + ``imported_fonts``；W-FONT-001/002/003）
+- API（``api_mode`` + ``api_endpoint`` + ``api_key`` + ``model`` + ``temperature`` + ``max_tokens`` + ``use_thinking``）
+- 记忆（``memory_mode`` + ``memory_window``） — 枚举 ``memory_mode``：
+  ``off`` / ``dedup_only`` / ``scene_card``（默认） / ``strong``
+- TTS / 读弹幕（``tts_*`` + ``danmu_read_*``）
+- 公告 / 主题 / 更新 / 用户（``user_nickname`` / ``live_topic`` + ``console_theme`` + ``app_update_state``）
+
+新增字段时务必：① 同步 ``app.application.config_service.WEB_CONFIG_KEYS``；② 同步
+``main.py`` / ``danmu_engine.py`` / ``ai_client.py`` 等 runtime fallback。
+"""
 
 from __future__ import annotations
 
@@ -30,6 +51,10 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "layout_mode": "fullscreen",
     "opacity": "100",
     "font_size": "24",
+    "danmu_font_family": "Microsoft YaHei",
+    "danmu_font_bold": "1",
+    "floating_panel_font_family": "Microsoft YaHei",
+    "floating_panel_font_bold": "1",
     "danmu_pool_enabled": "1",
     "danmu_pool_use_custom": "0",
     "min_on_screen": "5",
@@ -64,13 +89,19 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "tts_endpoint": "",
     "tts_model_id": "",
     "console_theme": "light",
-    # W-FP-001：悬浮窗（弹幕姬式）显示模式与配置；默认 overlay 保证向后兼容
+    # W-FP-V2-001：弹幕渲染模式（互斥）；display_mode 遗留只读
+    "danmu_render_mode": "scrolling",
     "display_mode": "overlay",
+    "floating_panel_width": "360",
+    "floating_panel_max_items": "12",
+    "floating_panel_lifetime_sec": "7",
+    "floating_panel_x_offset": "20",
+    "floating_panel_y_offset": "80",
     "floating_panel_opacity": "85",
-    "floating_panel_font_size": "18",
-    "floating_panel_max_items": "60",
+    "floating_panel_font_size": "20",
     "floating_panel_speed": "1.5",
     "floating_panel_click_through": "1",
+    "imported_fonts": "[]",  # W-FONT-002：[{sha256, family, original_name, size, imported_at}, ...]
 }
 
 # 首装工厂默认服务商（与 model_providers doubao 预设一致）
@@ -111,6 +142,20 @@ def config_value_with_default(config, key: str) -> str:
     if val != "":
         return val
     return CONFIG_DEFAULTS.get(key, "")
+
+
+def resolve_danmu_render_mode(config) -> str:
+    """Effective render mode: prefer danmu_render_mode; migrate legacy display_mode when blank.
+
+    display_mode=overlay → scrolling; floating_panel → floating_panel; both → scrolling (deprecated).
+    """
+    raw = str(config.get("danmu_render_mode", "") or "").strip().lower()
+    if raw in ("scrolling", "floating_panel"):
+        return raw
+    legacy = str(config.get("display_mode", "") or "").strip().lower()
+    if legacy == "floating_panel":
+        return "floating_panel"
+    return "scrolling"
 
 
 def seed_config_defaults(config: "ConfigStore") -> None:

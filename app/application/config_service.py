@@ -1,4 +1,8 @@
-"""Web PUT /api/config 的业务写入入口：校验、归一化后写 ConfigStore 并 emit config_changed。"""
+"""Web PUT /api/config 的业务写入入口：校验、归一化后写 ConfigStore 并 emit config_changed。
+
+WEB_CONFIG_KEYS 白名单：仅允许这些键通过 Web API 修改，防止前端误改敏感配置（如加密相关）。
+ConfigService 在主线程执行（经 bridge.invoke_on_main），不触达 Qt 对象。
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -43,13 +47,20 @@ WEB_CONFIG_KEYS = (
     "normal_reply_count",
     "user_nickname",  # W-NICKNAME-001
     "live_topic",  # W-LIVE-TOPIC-001
-    # W-FP-001：悬浮窗模式与配置
-    "display_mode",
+    # W-FP-V2-001：弹幕渲染模式与侧边悬浮窗配置
+    "danmu_render_mode",
+    "floating_panel_width",
+    "floating_panel_max_items",
+    "floating_panel_lifetime_sec",
+    "floating_panel_x_offset",
+    "floating_panel_y_offset",
     "floating_panel_opacity",
     "floating_panel_font_size",
-    "floating_panel_max_items",
-    "floating_panel_speed",
-    "floating_panel_click_through",
+    # W-FONT-001：字体设置
+    "danmu_font_family",
+    "danmu_font_bold",
+    "floating_panel_font_family",
+    "floating_panel_font_bold",
 )
 
 # 助手设置「恢复默认」可恢复的键（= WEB_CONFIG_KEYS；不含 api_key / custom_models / region_*）
@@ -255,24 +266,35 @@ class ConfigService:
             )
             _clamp_int_key(items, "memory_window", 10, 1, 20)
 
-        # W-FP-001：悬浮窗模式与基础配置归一化
-        if "display_mode" in items:
+        # W-FP-V2-001：danmu_render_mode 与侧边悬浮窗配置归一化
+        if "danmu_render_mode" in items:
             _clamp_choice(
                 items,
-                "display_mode",
-                ("overlay", "floating_panel", "both"),
-                "overlay",
+                "danmu_render_mode",
+                ("scrolling", "floating_panel"),
+                "scrolling",
             )
+        _clamp_int_key(items, "floating_panel_width", 360, 200, 800)
+        _clamp_int_key(items, "floating_panel_max_items", 12, 1, 50)
+        _clamp_int_key(items, "floating_panel_lifetime_sec", 7, 2, 60)
+        _clamp_int_key(items, "floating_panel_x_offset", 20, 0, 400)
+        _clamp_int_key(items, "floating_panel_y_offset", 80, 0, 400)
         _clamp_int_key(items, "floating_panel_opacity", 85, 0, 100)
-        _clamp_int_key(items, "floating_panel_font_size", 18, 12, 48)
-        _clamp_int_key(items, "floating_panel_max_items", 60, 5, 200)
-        try:
-            _speed = float(items.get("floating_panel_speed", "1.5"))
-        except (TypeError, ValueError):
-            _speed = 1.5
-        items["floating_panel_speed"] = f"{max(0.5, min(_speed, 5.0)):.3f}"
-        _ct = str(items.get("floating_panel_click_through", "1")).strip().lower()
-        items["floating_panel_click_through"] = "1" if _ct in ("1", "true", "yes", "on") else "0"
+        _clamp_int_key(items, "floating_panel_font_size", 20, 12, 48)
+
+        # W-FONT-001：字体名 / 加粗 / 字号归一化
+        if "font_size" in items:
+            _clamp_int_key(items, "font_size", 24, 12, 72)
+        if "floating_panel_font_size" in items:
+            _clamp_int_key(items, "floating_panel_font_size", 20, 12, 48)
+        for _key in ("danmu_font_bold", "floating_panel_font_bold"):
+            if _key in items:
+                _v = str(items[_key]).strip().lower()
+                items[_key] = "1" if _v in ("1", "true", "yes", "on") else "0"
+        for _key in ("danmu_font_family", "floating_panel_font_family"):
+            if _key in items:
+                _v = str(items[_key]).strip()
+                items[_key] = _v if _v else "Microsoft YaHei"
 
     def _merge_custom_models(self, payload_models: list[Any]) -> list[dict[str, Any]]:
         from app.web_api.custom_models import MASKED_KEY

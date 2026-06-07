@@ -1,4 +1,14 @@
-"""Types and config helpers for scene memory."""
+"""Types and config helpers for scene memory.
+
+四档 memory_mode 取值（与 ``app/config_defaults.py`` 的 ``memory_mode`` 字段对应）：
+- ``off``：关闭记忆
+- ``dedup_only``：仅弹幕去重段
+- ``scene_card``：场景卡片 + 去重段（**默认**）
+- ``strong``：场景 + 活动 + 去重，字符预算最大
+
+弹幕/场景/活动相关常量见 ``MEMORY_MODES``、``STABLE_FACTS_MAX``、``OPEN_THREADS_MAX`` 等。
+``clamp_memory_window`` 用于钳位 ``memory_window`` 配置项（1~20，默认 10）。
+"""
 
 from __future__ import annotations
 

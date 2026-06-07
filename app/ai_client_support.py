@@ -1,4 +1,7 @@
-"""Pure helpers and small contracts extracted from app.ai_client."""
+"""AI 客户端辅助函数：纯逻辑、无 Qt 依赖，可安全用于单元测试。
+
+职责：请求扩展构建、HTTP 错误格式化、Provider 特殊处理（MiMo 等）、输出 token 下限计算。
+"""
 
 from __future__ import annotations
 

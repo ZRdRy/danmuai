@@ -1,4 +1,13 @@
-"""读弹幕：定时从屏上可见弹幕抽样 → MiMo TTS → 本地播放。"""
+"""读弹幕：定时从屏上可见弹幕抽样 → MiMo TTS → 本地播放。
+
+与 TTS 子系统的关系：
+- 本模块是「读弹幕」业务编排；HTTP 合成在 ``_DanmuTtsRunnable`` 经 QThreadPool，
+  WAV 字节经 ``_tts_ready`` Qt 信号回主线程。
+- ``DanmuTtsPlayback`` 负责互斥播放；busy 期间 ``_on_tick`` 跳过新一轮。
+- 抽样源是 ``app.engine.visible_display_texts()``，不修改主链路 ``add_text``。
+
+配置入口：``danmu_read_enabled`` / ``tts_*`` 等键经 ``apply_config`` 写入；不经 ``PUT /api/config``。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""Request helpers extracted from app.ai_client."""
+"""AI 请求构建与流式解析：豆包 Responses / OpenAI Chat Completions 双 API 路径。
+
+所有请求固定注入 thinking: {"type":"disabled"}（THINKING_DISABLED 常量），降低延迟并避免
+MiMo 等模型返回空内容。流式解析只收集 content，忽略 reasoning_content（思考内容不应作为弹幕）。
+
+MiMo 特殊路径：mimo-v2.5 走 Chat Completions input_audio + input_audio.data（data URI）。
+"""
 
 from __future__ import annotations
 
@@ -155,7 +161,7 @@ def request_doubao(
         data["instructions"] = system_pt
     if temperature:
         data["temperature"] = temperature
-    data["thinking"] = dict(THINKING_DISABLED)
+    data["thinking"] = dict(THINKING_DISABLED)  # 固定关闭思考模式：降低延迟，避免 MiMo 返回空内容
     data["max_output_tokens"] = max_output_tokens
 
     url = f"{endpoint}/responses"
@@ -464,9 +470,9 @@ def stream_openai(
                 content = delta.get("content", "")
                 if content:
                     collected.append(content)
-                reasoning = delta.get("reasoning_content", "")
+                reasoning = delta.get("reasoning_content", "")  # 忽略：豆包/OpenAI 思考内容不应作为弹幕
                 if reasoning:
-                    reasoning_parts.append(reasoning)
+                    reasoning_parts.append(reasoning)  # 仅用于诊断日志
                 if not content and not reasoning:
                     message = choice.get("message", {})
                     message_content = message.get("content", "")

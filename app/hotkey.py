@@ -1,3 +1,16 @@
+"""Global hotkey registration via ``keyboard`` library.
+
+线程模型：
+- ``keyboard.add_hotkey`` 回调在 ``keyboard`` 内部线程（不是主线程）；直接修改 Qt
+  对象会抛「QObject: Cannot create children for a parent that is in a different thread」。
+- 引入 ``_ToggleBridge(QObject) + pyqtSignal``：回调 emit signal，Qt 自动把
+  signal 投递到 ``self.app`` 所在的主线程，再触发 ``app.toggle``。
+- ``_registered_hotkey_str`` 记录最近一次成功注册的 key 串，``unregister`` 时按它反注册；
+  **不**用 ``self._hotkey_str`` 是因为用户在中途 ``set_keys`` 后会改值，可能与实际注册串脱节。
+
+约束：必须主线程构造；``register`` 失败（权限 / 被占用）只写日志，不抛。
+"""
+
 import keyboard
 from PyQt6.QtCore import QObject, pyqtSignal
 

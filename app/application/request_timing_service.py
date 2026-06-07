@@ -1,4 +1,8 @@
-"""请求耗时样本：拥有 request_started_at_by_id 与 rtt_history，供 RTT/cooldown 计算。"""
+"""请求耗时样本：拥有 request_started_at_by_id 与 rtt_history，供 RTT/cooldown 计算。
+
+复合键设计：request_id = {request_round}:{screenshot_id}:{scene_generation}，
+麦克风与视觉请求可在同一 screenshot_id 不冲突（request_round 负值区分来源）。
+"""
 from __future__ import annotations
 
 
@@ -35,6 +39,7 @@ class RequestTimingService:
         request_id: tuple[int, int, int] | str,
         now: float,
     ) -> float:
+        """记录请求开始时间；由 _trigger_api_call 在发起请求前调用。"""
         self.request_started_at_by_id[request_id] = float(now)
         return float(now)
 
@@ -45,6 +50,7 @@ class RequestTimingService:
         now: float,
         max_samples: int = 20,
     ) -> float | None:
+        """消费 RTT 样本：计算耗时并记录到 rtt_history；无对应 mark_started 时返回 None。"""
         started_at = self.request_started_at_by_id.pop(request_id, None)
         if started_at is None:
             return None

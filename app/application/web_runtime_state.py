@@ -1,4 +1,7 @@
-"""Web 控制台错误条与 Overlay 布局缓存；经 build_status_snapshot 对外展示。"""
+"""Web 控制台错误条与 Overlay 布局缓存；经 build_status_snapshot 对外展示。
+
+纯数据类，不触达 Qt；Web/API 不得直接读取本对象，须走 DanmuApp.build_status_snapshot()。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

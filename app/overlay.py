@@ -119,14 +119,32 @@ class DanmuOverlay(QWidget):
     def _sync_applied_display_settings_markers(self) -> None:
         self._applied_font_size = self._config_font_size()
         self._applied_danmu_max_chars = resolve_danmu_max_chars(self.config)
+        self._applied_danmu_font_family = str(
+            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
+        )
+        self._applied_danmu_font_bold = str(
+            self.config.get("danmu_font_bold", "1") or "1"
+        ).strip().lower() not in ("0", "false", "no")
 
     def display_settings_dirty(self) -> bool:
         """True when font_size or danmu_max_chars in config differs from last apply."""
         if self._config_font_size() != getattr(self, "_applied_font_size", -1):
             return True
-        return resolve_danmu_max_chars(self.config) != getattr(
+        if resolve_danmu_max_chars(self.config) != getattr(
             self, "_applied_danmu_max_chars", -1
+        ):
+            return True
+        current_family = str(
+            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
         )
+        if current_family != getattr(self, "_applied_danmu_font_family", ""):
+            return True
+        current_bold = str(
+            self.config.get("danmu_font_bold", "1") or "1"
+        ).strip().lower() not in ("0", "false", "no")
+        if current_bold != getattr(self, "_applied_danmu_font_bold", True):
+            return True
+        return False
 
     def apply_display_settings(self) -> None:
         """Re-read font_size / danmu_max_chars and rebuild on-screen item metrics and pixmaps."""
@@ -148,9 +166,17 @@ class DanmuOverlay(QWidget):
             self.ensure_render_loop()
 
     def _apply_font_from_config(self) -> None:
+        family = str(
+            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
+        ).strip() or "Microsoft YaHei"
         size = self._config_font_size()
-        self.font = QFont("Microsoft YaHei", size)
-        self.font.setBold(True)
+        bold = str(self.config.get("danmu_font_bold", "1") or "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        )
+        self.font = QFont(family, size)
+        self.font.setBold(bold)
         self.font_metrics = QFontMetrics(self.font)
 
     def _apply_win32_click_through(self):
@@ -195,6 +221,7 @@ class DanmuOverlay(QWidget):
         return self.engine.needs_render_tick()
 
     def start_render_loop(self) -> None:
+        """启动 16ms QTimer 渲染循环；不可见时跳过。"""
         if not self.isVisible():
             return
         self._last_tick_valid = False
@@ -203,6 +230,7 @@ class DanmuOverlay(QWidget):
         self._tick()
 
     def stop_render_loop(self, *, repaint: bool = False) -> None:
+        """停止 QTimer；repaint=True 时刷新一帧清除残影。"""
         was_active = self.timer.isActive()
         self.timer.stop()
         self._last_tick_valid = False
@@ -514,6 +542,11 @@ class DanmuOverlay(QWidget):
         return max(0.0, min(1.0, pct / 100.0))
 
     def paintEvent(self, event):
+        """Qt 绘制回调：CompositionMode_Clear 清除残影（layout_mode 缩小时），底→顶遍历轨道绘制弹幕。
+
+        clip 区域与 _drawable_height_px 交集限定绘制范围；_clear_drawable_on_next_paint 标记
+        用于 layout_mode 切换后首帧全清，避免旧弹幕残影。
+        """
         clip = event.region().boundingRect()
         drawable_h = self._drawable_height_px()
         clip = clip.intersected(QRect(0, 0, self.width(), drawable_h))

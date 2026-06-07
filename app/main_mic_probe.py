@@ -1,4 +1,14 @@
-"""Mic probe runnable extracted from main.py."""
+"""麦克风探测 QRunnable（W-REFACTOR-MAIN-001）。
+
+职责边界：
+- MicProbeRunnable：在 QThreadPool 中执行麦克风测试发送
+- 不发射 AiWorker 的 finished/error 信号（避免干扰主链路）
+- 通过 threading.Event + holder dict 同步结果回调用方
+
+与 DanmuApp 关系：DanmuApp.probe_mic_config() 创建此 Runnable 并 submit 到 QThreadPool。
+
+代码归属判断：麦克风探测专用、不触达主链路状态的 QRunnable 放这里。
+"""
 
 from __future__ import annotations
 

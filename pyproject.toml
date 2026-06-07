@@ -1,3 +1,7 @@
+# ruff（lint 工具，与本仓库无 mypy/black 配置）配置
+# - target-version py312 与 .github/workflows/ci.yml 的 python-version 对齐
+# - line-length 100；E501（行过长）忽略（部分长字符串在 views.js / css 中不可避免）
+# - per-file-ignores: tests/* 允许 F841（unused variable）— 单测断言场景常见
 [tool.ruff]
 target-version = "py312"
 line-length = 100

@@ -1,4 +1,21 @@
-/** /api/status snapshot → overview DOM (runtime clocks, session runs, errors). */
+/**
+ * 模块：status — /api/status 实时快照 → 温馨控制台 overview DOM。
+ *
+ * 职责：
+ *   - applyStatus(st) 把 status 通道 / 轮询结果写到 DOM
+ *     - 运行指示（药丸颜色 / 文字 / Realtime 连接状态）
+ *     - 4 张本场统计卡（弹幕 / 待播 / 运行时长 / 屏上弹幕）
+ *     - 4 张累计统计卡（总弹幕 / 总时长 / 输入 Token / 输出 Token）
+ *     - 当前人格、live 状态行、is_error 横幅
+ *   - 状态栏 tooltip 按 display_mode 区分（overlay 模式 → "在屏条数"；
+ *     floating_panel 模式 → 悬浮窗活跃数 / 渲染活跃度，详见 W-FP-005）
+ *   - RUNTIME_CLOCK 1s tick 把 session_runtime / lifetime_runtime 平滑到秒，
+ *     避免依赖 WS 推送的不规则间隔
+ *
+ * 跨模块依赖：
+ *   - applyCaptureRegionFromPayload / maybePromptErrorReport 由 app.js
+ *     configureStatus() 注入；本模块不直接 import 减少耦合
+ */
 
 let statusHadError = false;
 let lastAppliedStatus = null;
@@ -184,7 +201,15 @@ export function applyStatus(st) {
   document.getElementById('statQueue').textContent = String(st.queue_count ?? 0);
   syncRuntimeClocks(st);
   const displayEl = document.getElementById('statDisplay');
-  if (displayEl) displayEl.textContent = String(st.display_count ?? 0);
+  if (displayEl) {
+    displayEl.textContent = String(st.display_count ?? 0);
+    const mode = st.danmu_render_mode || st.display_mode || 'scrolling';
+    if (mode === 'floating_panel') {
+      displayEl.title = '侧边悬浮窗在屏条数';
+    } else {
+      displayEl.title = '横向弹幕在屏条数';
+    }
+  }
   const lifetimeDanmuEl = document.getElementById('statLifetimeDanmu');
   const lifetimeInputEl = document.getElementById('statLifetimeInputTokens');
   const lifetimeOutputEl = document.getElementById('statLifetimeOutputTokens');

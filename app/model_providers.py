@@ -1,4 +1,19 @@
-"""Provider presets and validation for custom model configurations."""
+"""Provider presets and validation for custom model configurations.
+
+8 个服务商预设（``PROVIDERS`` 列表，按 preset id 排序）：
+- doubao（火山方舟） — mode=doubao，lock_mode=True（不可切换 Chat Completions）
+- dashscope（阿里云百炼） — OpenAI 兼容
+- zhipu（智谱 AI） — OpenAI 兼容
+- moonshot（Moonshot Kimi） — OpenAI 兼容
+- siliconflow（硅基流动） — OpenAI 兼容
+- mimo（小米 MiMo） — OpenAI 兼容；视觉 + 音频需 mimo-v2.5
+- custom_openai（自定义 OpenAI 兼容） — lock_mode=False，可改 endpoint
+- custom_doubao（自定义豆包 Responses） — mode=doubao，可改 endpoint
+
+``guess_provider_from_endpoint`` 逻辑：先经 ``app.providers.registry.match_host_entry``
+做 host 子串匹配；未命中时按 ``api_mode`` 返回 ``custom_doubao``，否则回退
+``DEFAULT_PROVIDER_ID``（custom_openai）。
+"""
 
 from __future__ import annotations
 

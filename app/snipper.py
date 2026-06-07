@@ -1,3 +1,8 @@
+"""区域裁剪入口：屏幕/窗口截图与坐标转换。
+
+坐标系统：region_w/h > 0 时按**屏内相对坐标**裁剪（不是绝对屏幕坐标）。
+与 POST/GET /api/capture-region/* 配合：Web 端框选区域后写入 config，本模块读取并裁剪。
+"""
 import logging
 
 from PyQt6.QtGui import QPixmap

@@ -1,3 +1,14 @@
+"""runner — 扫描流程编排。
+
+``run_boundary_guard(repo_root)`` 主流程：
+    1) git_diff.get_changed_files(repo_root)   收集变更文件 (Path → status)
+    2) 逐个调 rules/*.check_*(repo_root, changed)  返回 list[Finding]
+    3) 聚合所有 findings 返回
+
+设计：所有规则**独立**接收 ``(repo_root, changed)``，不互相依赖；新增规则
+只需在 ``rules/`` 下加一个 check_* 函数并在这里 import + 调用。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

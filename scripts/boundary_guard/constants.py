@@ -1,4 +1,15 @@
-﻿from __future__ import annotations
+﻿"""rules 共享的常量与正则表。
+
+本文件**不**做规则判定，只维护规则所需的"路径/正则/白名单"。每个规则模块
+按职责域分组（web / runtime / request / config / pipeline / diagnostics /
+status / baseline），常量与 [docs/CONTRIBUTING_ARCHITECTURE.md] 中的
+"Phase 4-A/B/C/D"、"Phase 4-F" 等对应。新增规则时务必先在本文件登记
+匹配模式 / 白名单，勿在 rules/*.py 中硬编码字符串。
+
+维护者：见 [docs/CONTRIBUTING_ARCHITECTURE.md] 的"维护者登记"小节。
+"""
+
+from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -82,7 +93,10 @@ RUNTIME_FIELD_EXCLUDE = {
     "tray",
     "hotkey",
     "ai_worker",
-    "floating_panel",  # W-FP-003：悬浮窗 UI 壳对象，参考 overlay 走 exclude
+    "floating_panel",  # deprecated alias → floating_panel_overlay
+    "floating_panel_overlay",  # W-FP-V2-001
+    "floating_panel_engine",  # W-FP-V2-001
+    "font_registry",  # W-FONT-002
 }
 
 LEGACY_RUNTIME_ASSIGNMENT_PATTERNS: tuple[tuple[str, str], ...] = (

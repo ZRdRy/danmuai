@@ -1,4 +1,22 @@
-/** Log ring buffer, diary view rendering, and HTTP bootstrap. */
+/**
+ * 模块：logs — 实时日志环形缓冲 + 弹幕日记页渲染 + 历史 bootstrap。
+ *
+ * 数据流：
+ *   接收 → logBuffer（数组，按 ts 升序）
+ *     - WebSocket：onLog（单条）/ onLogBatch（批量）
+ *     - HTTP bootstrap：bootstrapLogsFromServer(lastLogsPollTs) 拉
+ *       GET /api/logs/recent?since_ts=... 用于首屏补齐 + 降级轮询
+ *   渲染 → 弹幕日记页（page-logs）
+ *     - renderLogView() 按 logLevelFilters 过滤后写到 DOM
+ *     - mergeLogItemsUnique() 按 (ts|level|message) 去重
+ *
+ * 用户偏好：
+ *   - logLevelFilters：Set<'INFO' | 'WARNING' | 'ERROR'>（默认 3 档全开）
+ *   - logAutoScroll：是否粘底
+ *
+ * 注意：logBuffer 只在本会话内存，不做持久化；err_report 的摘录走
+ * /api/logs/recent 服务端近期 + 内存缓冲（见 app.js collectErrorReportContext）。
+ */
 
 import { API, REALTIME } from './transport.js';
 

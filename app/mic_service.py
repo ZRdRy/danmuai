@@ -1,4 +1,11 @@
-"""Facade for DanmuApp microphone mode lifecycle."""
+"""Facade for DanmuApp microphone mode lifecycle.
+
+``mic_mode_enabled`` / ``mic_window_sec_from_config`` 是**纯函数**门面；``MicService`` 是
+``MicCaptureService`` 的轻量包装，暴露 ``sync(enabled)`` / ``is_running()`` / ``snapshot_pcm`` /
+``last_error`` 给 ``MicOrchestrator`` 与 ``DanmuApp._poll_mic_utterance`` 使用。
+
+约束：本模块不导入 Qt；构造与读取可在任意线程（主线程/HTTP 线程）安全调用。
+"""
 
 from __future__ import annotations
 

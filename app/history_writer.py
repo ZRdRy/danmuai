@@ -1,3 +1,5 @@
+"""Bounded background queue that flushes entries to SQLite on a fixed interval."""
+
 import logging
 import threading
 from collections import deque

@@ -1,4 +1,11 @@
-"""Encode in-memory PCM to Responses API audio data URIs."""
+"""Encode in-memory PCM to Responses API audio data URIs.
+
+``pcm_to_wav_data_uri`` 把 int16 mono PCM 包成 WAV header → base64 → ``data:audio/wav;base64,...``。
+返回 None 当 PCM 太短（< ``MIN_PCM_BYTES`` 约 100ms），调用方应回退为空音频。
+
+WAV 格式：16kHz / mono / 16-bit，与 ``MicBuffer.DEFAULT_MIC_SAMPLE_RATE`` 对齐；
+与豆包 ``input_audio.audio_url`` 或 MiMo ``input_audio.data`` 的内嵌方式一致。
+"""
 
 from __future__ import annotations
 
