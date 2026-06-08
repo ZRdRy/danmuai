@@ -112,6 +112,7 @@ def test_ai_success_reply_enqueued():
     app = make_minimal_danmu_app()
     app.ai_in_flight = 1
     app.screenshot_round = 10
+    app._register_request_meta(10, 10, 0, "visual")  # W-RACE-001: 需预注册 meta
 
     app._on_ai_reply('["???A", "???B"]', "persona-1", 10, 10, time.monotonic(), 0)
 
@@ -151,6 +152,7 @@ def test_older_reply_not_dropped_in_normal_mode():
     app = make_minimal_danmu_app()
     app.ai_in_flight = 1
     app._latest_requested_screenshot_id = 11
+    app._register_request_meta(10, 10, 0, "visual")  # W-RACE-001: 需预注册 meta
 
     app._on_ai_reply('["old reply"]', "persona-1", 10, 10, time.monotonic(), 0)
 
@@ -233,7 +235,6 @@ def test_legacy_overlay_cache_fields_proxy_to_web_runtime_state():
 
 def test_generation_pipeline_state_is_read_only_projection():
     app = make_minimal_danmu_app()
-    app._last_activity_collect_at = 2.5
     app._latest_displayed_round = 6
     app._latest_requested_screenshot_id = 12
     app._latest_queued_screenshot_id = 11
@@ -241,7 +242,6 @@ def test_generation_pipeline_state_is_read_only_projection():
 
     state = GenerationPipelineState.from_app(app)
 
-    assert state.last_activity_collect_at == 2.5
     assert state.latest_displayed_round == 6
     assert state.latest_requested_screenshot_id == 12
     assert state.latest_queued_screenshot_id == 11
@@ -285,6 +285,7 @@ def test_success_resets_failure_count():
     app._consecutive_failures = 3
     app._failure_backoff_paused = True
     app._last_error_message = "previous error"
+    app._register_request_meta(10, 10, 0, "visual")  # W-RACE-001: 需预注册 meta
 
     app._on_ai_reply('["??????"]', "persona-1", 10, 10, time.monotonic(), 0)
 

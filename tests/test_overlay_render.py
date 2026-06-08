@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from app.config_store import ConfigStore
 from app.danmu_engine import DanmuEngine, DanmuItem
-from app.overlay import _INTERVAL_MAX_MS, DanmuOverlay
+from app.overlay import _INTERVAL_MAX_MS, DanmuOverlay, _use_fast_danmu_render
 from PyQt6.QtCore import QRect
 from PyQt6.QtWidgets import QApplication
 
@@ -183,6 +183,13 @@ def test_union_dirty_rect_smaller_than_widget(overlay_stack, qapp):
     assert dirty is not None
     assert dirty.width() < overlay.width()
     assert dirty.height() < overlay.height()
+
+
+def test_use_fast_danmu_render_for_long_formula_lines():
+    short = "短弹幕"
+    long_line = "x" * 40
+    assert _use_fast_danmu_render(short) is False
+    assert _use_fast_danmu_render(long_line) is True
 
 
 def test_prepare_item_pixmap_before_paint(overlay_stack):

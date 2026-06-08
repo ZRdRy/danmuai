@@ -1,10 +1,10 @@
-"""侧边悬浮窗弹幕引擎：底入堆叠、停留 lifetime 后淡出；不依赖 DanmuEngine 轨道逻辑。
+"""侧边悬浮窗弹幕引擎：底部进入后持续上滚，越顶即移除。
 
-W-FP-V2-001：纯状态机，由 FloatingPanelOverlay 驱动 update 与绘制。
+W-FP-V3-002：修复 V2 的“堆叠停留 + 固定写死速度”语义，改为接线
+``floating_panel_speed`` 的持续向上滚动模型。
 """
 from __future__ import annotations
 
-import time
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -14,13 +14,12 @@ from app.danmu_engine import normalize_danmu_display_text
 if TYPE_CHECKING:
     from app.config_store import ConfigStore
 
-_ITEM_GAP = 8.0
-_MOVE_SPEED_PX = 520.0
-_FADE_IN_SEC = 0.25
-_FADE_OUT_SEC = 0.45
 _DEDUP_WINDOW = 30
 _DEFAULT_MAX_ITEMS = 12
-_DEFAULT_LIFETIME_SEC = 7.0
+_DEFAULT_SPEED_SCALE = 1.5
+_MIN_SPEED_SCALE = 0.5
+_MAX_SPEED_SCALE = 5.0
+_PIXELS_PER_SECOND_BASE = 120.0
 
 
 @dataclass
@@ -28,18 +27,16 @@ class FloatingPanelItem:
     """单条悬浮窗消息的状态（主线程读写）。"""
 
     content: str
-    target_y: float
     current_y: float
     height: float
     created_at: float
-    fade_state: str = "enter"
-    opacity: float = 0.0
+    opacity: float = 1.0
     batch_id: int = 0
     pixmap: object | None = None
 
 
 class FloatingPanelEngine:
-    """底入 → 堆叠上移 → lifetime 到期淡出删除。"""
+    """底部进入后以统一速度持续上滚，越顶后删除。"""
 
     def __init__(self, config: "ConfigStore"):
         self.config = config
@@ -48,7 +45,8 @@ class FloatingPanelEngine:
         self.running: bool = False
         self._panel_height: float = 600.0
         self._max_items: int = _DEFAULT_MAX_ITEMS
-        self._lifetime_sec: float = _DEFAULT_LIFETIME_SEC
+        self._speed_scale: float = _DEFAULT_SPEED_SCALE
+        self._pixels_per_second: float = _PIXELS_PER_SECOND_BASE * _DEFAULT_SPEED_SCALE
         self.apply_config()
 
     def apply_config(self) -> None:
@@ -57,15 +55,19 @@ class FloatingPanelEngine:
             self._max_items = max(1, min(int(raw_max or _DEFAULT_MAX_ITEMS), 50))
         except (TypeError, ValueError):
             self._max_items = _DEFAULT_MAX_ITEMS
-        raw_life = self.config.get("floating_panel_lifetime_sec", "")
+
+        raw_speed = self.config.get("floating_panel_speed", "")
         try:
-            self._lifetime_sec = max(2.0, min(float(raw_life or _DEFAULT_LIFETIME_SEC), 60.0))
+            self._speed_scale = max(
+                _MIN_SPEED_SCALE,
+                min(float(raw_speed or _DEFAULT_SPEED_SCALE), _MAX_SPEED_SCALE),
+            )
         except (TypeError, ValueError):
-            self._lifetime_sec = _DEFAULT_LIFETIME_SEC
+            self._speed_scale = _DEFAULT_SPEED_SCALE
+        self._pixels_per_second = _PIXELS_PER_SECOND_BASE * self._speed_scale
 
     def set_panel_height(self, height: float) -> None:
         self._panel_height = max(1.0, float(height))
-        self._relayout_targets()
 
     def start(self) -> None:
         self.running = True
@@ -86,18 +88,12 @@ class FloatingPanelEngine:
     def active_count(self) -> int:
         return self.visible_count()
 
+    @property
+    def pixels_per_second(self) -> float:
+        return self._pixels_per_second
+
     def needs_render_tick(self) -> bool:
-        if not self._items:
-            return False
-        now = time.monotonic()
-        for item in self._items:
-            if item.fade_state != "hold":
-                return True
-            if abs(item.current_y - item.target_y) > 0.5:
-                return True
-            if now >= item.created_at + self._lifetime_sec:
-                return True
-        return False
+        return bool(self._items)
 
     def is_duplicate(self, content: str) -> bool:
         return content in self._recent
@@ -105,22 +101,10 @@ class FloatingPanelEngine:
     def _remember(self, content: str) -> None:
         self._recent.append(content)
 
-    def _relayout_targets(self) -> None:
-        """自下而上重算堆叠 target_y。"""
-        y = self._panel_height
-        for item in reversed(self._items):
-            y -= item.height + _ITEM_GAP
-            item.target_y = max(0.0, y)
-
-    def _enforce_max_items(self, now: float) -> None:
+    def _enforce_max_items(self) -> None:
+        """仅用于上限兜底；超限时立即丢弃最旧条目。"""
         while len(self._items) > self._max_items:
-            oldest = self._items[0]
-            if oldest.fade_state != "exit":
-                oldest.fade_state = "exit"
-            if oldest.opacity <= 0.0:
-                self._items.pop(0)
-            else:
-                break
+            self._items.pop(0)
 
     def add_text(
         self,
@@ -140,61 +124,41 @@ class FloatingPanelEngine:
         if not skip_dedup and self.is_duplicate(text):
             return None
 
-        ts = now if now is not None else time.monotonic()
+        ts = 0.0 if now is None else float(now)
         height = max(24.0, float(item_height))
+        # 新条目始终从面板底部基线加入，不因已有条目做瞬间重排。
         start_y = self._panel_height
         item = FloatingPanelItem(
             content=text,
-            target_y=start_y,
             current_y=start_y,
             height=height,
             created_at=ts,
-            fade_state="enter",
-            opacity=0.0,
             batch_id=batch_id,
         )
         self._items.append(item)
         self._remember(text)
-        self._relayout_targets()
-        self._enforce_max_items(ts)
+        self._enforce_max_items()
         return item
 
     def update_item_height(self, item: FloatingPanelItem, height: float) -> None:
-        """Overlay 实测高度后回调，重算堆叠。"""
+        """Overlay 实测高度后回调；连续上滚语义下不做重排。"""
         item.height = max(24.0, float(height))
-        self._relayout_targets()
 
     def update(self, dt_sec: float, now: float | None = None) -> bool:
         """推进动画；返回是否仍需渲染 tick。"""
         if not self._items:
             return False
-        ts = now if now is not None else time.monotonic()
+        del now  # 连续上滚模式不再使用 lifetime / fade-out 语义。
         dt = max(0.0, min(float(dt_sec), 0.1))
-        move = _MOVE_SPEED_PX * dt
+        move = self._pixels_per_second * dt
 
         surviving: list[FloatingPanelItem] = []
         for item in self._items:
-            if item.fade_state == "exit":
-                item.opacity = max(0.0, item.opacity - dt / _FADE_OUT_SEC)
-            elif ts >= item.created_at + self._lifetime_sec:
-                item.fade_state = "exit"
-                item.opacity = max(0.0, item.opacity - dt / _FADE_OUT_SEC)
-            elif item.fade_state == "enter":
-                item.opacity = min(1.0, item.opacity + dt / _FADE_IN_SEC)
-                if item.opacity >= 1.0:
-                    item.fade_state = "hold"
-            else:
-                item.opacity = 1.0
-
-            if item.current_y > item.target_y:
-                item.current_y = max(item.target_y, item.current_y - move)
-            elif item.current_y < item.target_y:
-                item.current_y = min(item.target_y, item.current_y + move)
-
-            if item.fade_state == "exit" and item.opacity <= 0.0:
+            item.current_y -= move
+            if item.current_y + item.height < 0.0:
                 continue
             surviving.append(item)
 
         self._items = surviving
-        self._enforce_max_items(ts)
+        self._enforce_max_items()
         return self.needs_render_tick()

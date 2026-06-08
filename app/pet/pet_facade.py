@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.pet.pet_animation_mapper import resolve_pet_animation_hint
@@ -60,6 +61,43 @@ def get_pet_settings_snapshot(app: "DanmuApp") -> dict[str, object]:
     return out
 
 
+def import_pet_asset_via_dialog(app: "DanmuApp") -> dict[str, object]:
+    """Open a native directory picker on the Qt main thread and bind the chosen pack."""
+    from PyQt6.QtWidgets import QFileDialog
+
+    start_dir = str(app.config.get("pet_asset_path", "") or "").strip()
+    if not start_dir:
+        start_dir = str(Path.home())
+    selected_dir = QFileDialog.getExistingDirectory(
+        None,
+        "选择桌宠文件夹",
+        start_dir,
+        QFileDialog.Option.ShowDirsOnly,
+    )
+    if not selected_dir:
+        snapshot = get_pet_settings_snapshot(app)
+        snapshot["cancelled"] = True
+        return snapshot
+    return apply_pet_settings_patch(
+        app,
+        {
+            "pet_asset_source": "local",
+            "pet_asset_path": selected_dir,
+        },
+    )
+
+
+def reset_pet_asset_to_builtin(app: "DanmuApp") -> dict[str, object]:
+    """Unbind any custom local pack and fall back to the builtin default pet."""
+    return apply_pet_settings_patch(
+        app,
+        {
+            "pet_asset_source": "builtin",
+            "pet_asset_path": "",
+        },
+    )
+
+
 def apply_pet_settings_patch(app: "DanmuApp", payload: dict[str, object]) -> dict[str, object]:
     items: dict[str, str] = {}
     for key in PET_CONFIG_KEYS:
@@ -76,12 +114,12 @@ def apply_pet_settings_patch(app: "DanmuApp", payload: dict[str, object]) -> dic
     if "pet_asset_source" in items:
         src = items["pet_asset_source"].strip().lower()
         items["pet_asset_source"] = src if src in ("builtin", "local") else "builtin"
+        if items["pet_asset_source"] == "builtin" and "pet_asset_path" not in items:
+            items["pet_asset_path"] = ""
 
     if items.get("pet_asset_source") == "local" or items.get("pet_asset_path"):
         path = items.get("pet_asset_path") or app.config.get("pet_asset_path", "")
         if str(path).strip():
-            from pathlib import Path
-
             validate_pet_pack_dir(Path(str(path).strip()))
 
     if "pet_enabled" in items:

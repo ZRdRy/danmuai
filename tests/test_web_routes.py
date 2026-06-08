@@ -414,13 +414,35 @@ def test_floating_panel_v2_config_keys_round_trip(tmp_path):
         "floating_panel_opacity": "70",
         "floating_panel_font_size": "22",
         "floating_panel_max_items": "8",
-        "floating_panel_lifetime_sec": "9",
+        "floating_panel_speed": "2.5",
         "floating_panel_x_offset": "25",
         "floating_panel_y_offset": "70",
     }
     apply_web_config_patch(app, payload)
     for key, expected in payload.items():
         assert store.get(key) == expected, key
+
+
+def test_floating_panel_speed_clamped_via_config_service(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+    from app.config_store import ConfigStore
+
+    db_path = tmp_path / "config.db"
+    store = ConfigStore(db_path)
+
+    class _PersonaeStub:
+        def set_active(self, _active):
+            return None
+
+    class _DanmuAppStub:
+        config_changed = MagicMock()
+
+    app = _DanmuAppStub()
+    app.config = store
+    app.personae = _PersonaeStub()
+
+    apply_web_config_patch(app, {"floating_panel_speed": "99"})
+    assert store.get("floating_panel_speed") == "5"
 
 
 # W-FONT-001：字体设置走 PUT /api/config 端到端
@@ -608,6 +630,18 @@ def test_pet_settings_and_command_routes():
         "has_pending_command": False,
     }
     bridge.danmu_app.apply_pet_settings_patch.return_value = {"enabled": True}
+    bridge.danmu_app.import_pet_asset_via_dialog.return_value = {
+        "enabled": True,
+        "asset_source": "local",
+        "asset_path": "C:/pets/custom-cat",
+        "asset": {"ok": True, "display_name": "Custom Cat"},
+    }
+    bridge.danmu_app.reset_pet_asset_to_builtin.return_value = {
+        "enabled": True,
+        "asset_source": "builtin",
+        "asset_path": "",
+        "asset": {"ok": True, "display_name": "Yuexin Miao Animated"},
+    }
     bridge.danmu_app.show_pet.return_value = {"ok": True}
     bridge.danmu_app.submit_pet_command.return_value = {"ok": True, "id": "abc"}
     bridge.danmu_app.get_pet_status_snapshot.return_value = {"animation": "idle"}
@@ -648,6 +682,14 @@ def test_pet_settings_and_command_routes():
     patch_payload = bridge.danmu_app.apply_pet_settings_patch.call_args[0][0]
     assert patch_payload.get("pet_enabled") is False
     assert "pet_visible" not in patch_payload
+
+    imported = client.post("/api/pet/import-folder", headers={"Authorization": "Bearer pet-secret"})
+    assert imported.status_code == 200
+    bridge.danmu_app.import_pet_asset_via_dialog.assert_called_once()
+
+    reset = client.post("/api/pet/reset-asset", headers={"Authorization": "Bearer pet-secret"})
+    assert reset.status_code == 200
+    bridge.danmu_app.reset_pet_asset_to_builtin.assert_called_once()
 
 
 def test_delete_font_removes_from_list():

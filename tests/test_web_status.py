@@ -174,7 +174,6 @@ def test_build_status_snapshot_collects_generation_projection_without_exposing_n
         visible_display_count=lambda: 0,
         stats_state=StatsState(),
         web_runtime_state=WebRuntimeState(),
-        _last_activity_collect_at=7.5,
         _latest_displayed_round=9,
         _latest_requested_screenshot_id=11,
         _latest_queued_screenshot_id=10,
@@ -189,7 +188,6 @@ def test_build_status_snapshot_collects_generation_projection_without_exposing_n
     runtime_state = GenerationPipelineState.from_app(app)
     status = DanmuApp.build_status_snapshot(app)
 
-    assert runtime_state.last_activity_collect_at == 7.5
     assert runtime_state.latest_displayed_round == 9
     assert runtime_state.latest_requested_screenshot_id == 11
     assert runtime_state.latest_queued_screenshot_id == 10

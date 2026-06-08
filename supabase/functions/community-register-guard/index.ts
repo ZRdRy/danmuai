@@ -103,7 +103,9 @@ Deno.serve(async (req: Request) => {
   let body: { username?: unknown; password?: unknown; deviceId?: unknown };
   try {
     body = await req.json();
-  } catch {
+  } catch (err) {
+    const errName = err instanceof Error ? err.name : "ParseError";
+    console.error("community-register-guard: invalid JSON body", errName);
     return jsonResponse({ error: "Invalid JSON body" }, 400, origin);
   }
 

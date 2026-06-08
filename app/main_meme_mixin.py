@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, QThreadPool, QTimer, pyqtSignal
 
+from app.meme_barrage.client import format_tags_for_remote_api
 from app.meme_barrage.config import meme_barrage_enabled, read_meme_barrage_settings
 from app.meme_barrage.runnable import MemeAiSelectRunnable, MemeFetchRunnable
 from app.meme_barrage.service import MemeBarrageService
@@ -13,6 +14,8 @@ from app.screenshot_compress import IMAGE_JPEG_QUALITY, IMAGE_MAX_WIDTH, compres
 
 if TYPE_CHECKING:
     pass
+
+_MEME_DISPLAY_MAX_PER_TICK = 2
 
 
 class _MemeBarrageBridge(QObject):
@@ -139,8 +142,14 @@ class DanmuAppMemeMixin:
 
         service.set_fetch_in_flight(True)
         batch_size = int(settings["collect_batch_size"])
-        tag = str(settings["tag"])
+        tags_list = settings.get("tag") or ["06"]
+        if not isinstance(tags_list, list):
+            tags_list = [str(tags_list)]
         page_num = service.next_page_num()
+        tag = format_tags_for_remote_api(
+            [str(t).strip() for t in tags_list if str(t).strip()],
+            page_num,
+        )
 
         bridge = self._meme_barrage_bridge
 
@@ -171,6 +180,8 @@ class DanmuAppMemeMixin:
         try:
             filtered = service.apply_remote_page(data)
             texts = [row[0] for row in filtered]
+            if not texts:
+                self.logger.warning("meme_barrage_fetch_empty reason=no_items_after_filter")
             if texts:
                 service.store.insert_many(filtered)
             settings = read_meme_barrage_settings(self.config)
@@ -286,13 +297,18 @@ class DanmuAppMemeMixin:
         if not meme_barrage_enabled(self.config):
             return
         service = self._ensure_meme_barrage_service()
-        settings = read_meme_barrage_settings(self.config)
-        batch_size = int(settings["display_batch_size"])
-        texts = service.pop_display_batch(batch_size)
-        if not texts:
+        backlog: list[str] = list(self.__dict__.get("_meme_display_backlog") or [])
+        if not backlog:
+            settings = read_meme_barrage_settings(self.config)
+            batch_size = int(settings["display_batch_size"])
+            backlog = list(service.pop_display_batch(batch_size))
+        if not backlog:
+            self._meme_display_backlog = []
             return
+        chunk = backlog[:_MEME_DISPLAY_MAX_PER_TICK]
+        self._meme_display_backlog = backlog[_MEME_DISPLAY_MAX_PER_TICK:]
         scene_generation = int(getattr(self, "_scene_generation", 0))
-        for text in texts:
+        for text in chunk:
             item = self.engine.add_text(
                 text,
                 persona="",
@@ -302,3 +318,5 @@ class DanmuAppMemeMixin:
             )
             if item:
                 self._update_stats(success=True)
+        if self._meme_display_backlog:
+            QTimer.singleShot(0, self._meme_display_tick)

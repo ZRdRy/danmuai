@@ -96,7 +96,6 @@ def test_runtime_diagnostics_summarize_runtime_state_without_polluting_status_sn
     app.stats_state.start_time = 90.0
     app.web_runtime_state.set_error_status("warn", is_error=True)
     app.web_runtime_state.set_overlay_cache(danmu_lines=8, layout_mode="compact")
-    app._last_activity_collect_at = 30.0
     app._latest_displayed_round = 4
     app._latest_requested_screenshot_id = 101
     app._latest_queued_screenshot_id = 102
@@ -136,7 +135,6 @@ def test_runtime_diagnostics_summarize_runtime_state_without_polluting_status_sn
         "runtime_sec": 10.0,
     }
     assert snapshot["runtime_state"]["generation_pipeline"] == {
-        "last_activity_collect_at": 30.0,
         "latest_displayed_round": 4,
         "latest_requested_screenshot_id": 101,
         "latest_queued_screenshot_id": 102,
@@ -216,7 +214,6 @@ def test_diagnostics_api_returns_independent_read_only_payload(monkeypatch: pyte
                     "runtime_sec": 0.0,
                 },
                 "generation_pipeline": {
-                    "last_activity_collect_at": 0.0,
                     "latest_displayed_round": 0,
                     "latest_requested_screenshot_id": 0,
                     "latest_queued_screenshot_id": 0,

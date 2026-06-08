@@ -569,6 +569,11 @@
   color: var(--color-primary-dark, var(--color-text));
 }
 
+.meme-tag-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .danmu-pool-tabs {
   margin-bottom: 0;
 }

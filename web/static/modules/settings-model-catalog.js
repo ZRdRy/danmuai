@@ -13,6 +13,7 @@ let catalogDeps = {
 };
 
 let catalogCache = { platforms: [] };
+let catalogLoadFailureLogged = false;
 let floatingTooltipEl = null;
 let floatingTooltipDismissBound = false;
 
@@ -23,8 +24,12 @@ export function configureSettingsModelCatalog(deps) {
 export async function loadModelCatalog() {
   try {
     catalogCache = await fetch(`${API.base}/api/model-catalog`).then((r) => r.json());
-  } catch {
+  } catch (error) {
     catalogCache = { platforms: [] };
+    if (!catalogLoadFailureLogged) {
+      catalogLoadFailureLogged = true;
+      console.warn('loadModelCatalog failed; using empty catalog fallback', error);
+    }
   }
   if (!catalogCache.platforms) catalogCache.platforms = [];
 }

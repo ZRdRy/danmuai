@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,6 +20,17 @@ DISPLAY_INTERVAL_MAX = 60
 DISPLAY_BATCH_MIN = 1
 DISPLAY_BATCH_MAX = 50
 
+DEFAULT_TAG = "06"
+MAX_SELECTED_TAGS = 3
+
+
+def normalize_meme_barrage_tags(tags: list[str]) -> list[str]:
+    """Keep at most ``MAX_SELECTED_TAGS`` ids; remote API rejects four or more."""
+    cleaned = [str(t).strip() for t in tags if str(t).strip()]
+    if not cleaned:
+        return [DEFAULT_TAG]
+    return cleaned[:MAX_SELECTED_TAGS]
+
 
 def meme_barrage_enabled(config: "ConfigStore") -> bool:
     raw = config.get("meme_barrage_enabled", "")
@@ -35,6 +47,33 @@ def _clamp_int(value: object, default: int, lo: int, hi: int) -> int:
     return max(lo, min(n, hi))
 
 
+def _parse_tag(raw: object) -> list[str]:
+    """向后兼容解析 ``meme_barrage_tag`` 为 ``list[str]``。
+
+    1. 优先 ``json.loads`` → 若为 list 则直接使用；
+    2. 解析失败 / 结果非 list → 视为旧的「单字符串或逗号分隔字符串」，
+       按 ``,`` split → 过滤空 → 至少保留 1 个；
+    3. 解析失败且为空 → 回退默认值 ``["06"]``。
+    """
+    out: list[str] = []
+    if isinstance(raw, list):
+        out = [str(t).strip() for t in raw if str(t).strip()]
+    else:
+        s = str(raw or "").strip()
+        if s:
+            parsed_as_json_list = False
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    parsed_as_json_list = True
+                    out = [str(t).strip() for t in parsed if str(t).strip()]
+            except (ValueError, TypeError):
+                pass
+            if not out and not parsed_as_json_list:
+                out = [t.strip() for t in s.split(",") if t.strip()]
+    return normalize_meme_barrage_tags(out)
+
+
 def read_meme_barrage_settings(config: "ConfigStore") -> dict[str, object]:
     category = str(config.get("meme_barrage_category", "random") or "random").strip().lower()
     if category not in VALID_CATEGORIES:
@@ -42,7 +81,7 @@ def read_meme_barrage_settings(config: "ConfigStore") -> dict[str, object]:
     display_mode = str(config.get("meme_barrage_display_mode", "full") or "full").strip().lower()
     if display_mode not in VALID_DISPLAY_MODES:
         display_mode = "full"
-    tag = str(config.get("meme_barrage_tag", "06") or "06").strip() or "06"
+    tag = _parse_tag(config.get("meme_barrage_tag", DEFAULT_TAG))
     return {
         "enabled": meme_barrage_enabled(config),
         "category": category,

@@ -111,6 +111,7 @@ def test_real_ai_reply_appends_after_fallback():
     app.reply_timer.active = True
     app._batch_id = 7
     captured_at = time.monotonic()
+    app._register_request_meta(10, 20, 0, "visual")  # W-RACE-001: 需预注册 meta
 
     app._enqueue_reply_batch(
         "persona-1",

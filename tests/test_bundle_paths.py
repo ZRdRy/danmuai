@@ -219,6 +219,14 @@ def test_pet_page_in_index_html():
     assert 'id="page-pet"' in html
     assert 'id="petEnabled"' in html
     assert 'id="btnPetSave"' in html
+    assert 'https://petdex.dev/zh' in html
+    assert 'id="btnPetImportFolder"' in html
+    assert 'id="btnPetResetAsset"' in html
+    assert 'id="petAssetSourceText"' in html
+    assert 'id="petAssetPathText"' in html
+    assert 'id="petAssetErrorText"' in html
+    assert '去 PetDex 查找更多桌宠' in html
+    assert '目录中需包含 pet.json 与 spritesheet.webp 或 spritesheet.png' in html
     assert 'id="petVisible"' not in html
     assert 'id="btnPetShow"' not in html
     assert 'id="btnPetHide"' not in html
@@ -226,6 +234,13 @@ def test_pet_page_in_index_html():
     app_js = (project_root() / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "initPetPage" in app_js
     assert "loadPetPage" in app_js
+    pet_js = (project_root() / "web" / "static" / "modules" / "app-pet-page.js").read_text(
+        encoding="utf-8"
+    )
+    assert "asset_source: currentAssetSource" in pet_js
+    assert "asset_path: currentAssetPath" in pet_js
+    assert "/api/pet/import-folder" in pet_js
+    assert "/api/pet/reset-asset" in pet_js
 
 
 def test_tailwind_offline_bundle_packaged():

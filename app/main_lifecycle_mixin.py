@@ -29,7 +29,6 @@ from app.lifetime_stats import LifetimeStats
 from app.logger import SanitizedLogger
 from app.main_launch import show_startup_notice_if_needed
 from app.main_mic_mixin import MIC_POLL_MS
-from app.memory.activity import RecentActivityState
 from app.mic_orchestrator import MicOrchestrator
 from app.mic_service import MicService
 from app.model_providers import resolve_active_model_id
@@ -168,8 +167,6 @@ class DanmuAppLifecycleMixin:
         self._latest_displayed_screenshot_id = 0
         self._request_scheduler = RequestScheduler()
         self._scene_memory = SceneMemoryStore()
-        self._activity_state = RecentActivityState()
-        self._last_activity_collect_at = 0.0
         self._mic_service = MicService(log_fn=lambda msg: self.logger.info(msg))
         self._mic_orchestrator = MicOrchestrator(
             mic_service=self._mic_service,
@@ -458,8 +455,6 @@ class DanmuAppLifecycleMixin:
         self._mic_batch_id = 0
         self._pending_request_meta.clear()
         self._scene_memory.reset()
-        self._activity_state.reset()
-        self._last_activity_collect_at = 0.0
         self.reply_buffer.set_max_items(self._queue_capacity())
         self.screenshot_timer.stop()
         self.screenshot_timer.setInterval(self._normal_recognition_interval_ms())

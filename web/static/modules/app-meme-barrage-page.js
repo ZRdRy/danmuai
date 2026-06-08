@@ -1,14 +1,22 @@
 import { apiFetch } from './transport.js';
 
+const MAX_SELECTED_MEME_TAGS = 3;
+
 let memeBarrageMeta = null;
 let memeTags = [];
-let selectedTag = '06';
+let selectedTags = new Set(['06']);
 let toast = () => {};
 let handlersBound = false;
 let metaPollTimer = null;
 
 function showToast(message, isError = false) {
   toast(message, isError);
+}
+
+function normalizeSelectedTags(tags) {
+  const values = Array.from(tags).map((t) => String(t).trim()).filter(Boolean);
+  const capped = values.slice(0, MAX_SELECTED_MEME_TAGS);
+  return new Set(capped.length ? capped : ['06']);
 }
 
 function getSelectedCategory() {
@@ -19,14 +27,32 @@ function getSelectedDisplayMode() {
   return document.querySelector('input[name="memeDisplayMode"]:checked')?.value || 'full';
 }
 
+function syncMemeTagButtonStates(grid) {
+  const tagged = getSelectedCategory() === 'tagged';
+  const atMax = selectedTags.size >= MAX_SELECTED_MEME_TAGS;
+  grid.querySelectorAll('.meme-tag-btn').forEach((btn) => {
+    const value = btn.dataset.tagValue;
+    const active = selectedTags.has(value);
+    btn.classList.toggle('active', active);
+    const blocked = tagged && atMax && !active;
+    btn.disabled = !tagged || blocked;
+    btn.classList.toggle('at-limit', blocked);
+  });
+}
+
 function updateMemeTagGridState() {
   const tagged = getSelectedCategory() === 'tagged';
   const grid = document.getElementById('memeTagGrid');
   if (grid) {
     grid.classList.toggle('is-disabled', !tagged);
-    grid.querySelectorAll('.meme-tag-btn').forEach((btn) => {
-      btn.disabled = !tagged;
-    });
+    if (tagged) {
+      syncMemeTagButtonStates(grid);
+    } else {
+      grid.querySelectorAll('.meme-tag-btn').forEach((btn) => {
+        btn.disabled = true;
+        btn.classList.remove('at-limit');
+      });
+    }
   }
   document.querySelectorAll('.meme-category-group input').forEach((input) => {
     input.disabled = false;
@@ -43,15 +69,22 @@ function renderMemeTagGrid(tags) {
     btn.className = 'meme-tag-btn';
     btn.dataset.tagValue = tag.value;
     btn.textContent = tag.label || tag.value;
-    if (tag.value === selectedTag) {
+    if (selectedTags.has(tag.value)) {
       btn.classList.add('active');
     }
     btn.addEventListener('click', () => {
       if (getSelectedCategory() !== 'tagged') return;
-      selectedTag = tag.value;
-      grid.querySelectorAll('.meme-tag-btn').forEach((el) => {
-        el.classList.toggle('active', el.dataset.tagValue === selectedTag);
-      });
+      if (selectedTags.has(tag.value)) {
+        if (selectedTags.size <= 1) return;
+        selectedTags.delete(tag.value);
+      } else {
+        if (selectedTags.size >= MAX_SELECTED_MEME_TAGS) {
+          showToast(`最多只能选择 ${MAX_SELECTED_MEME_TAGS} 个标签`, true);
+          return;
+        }
+        selectedTags.add(tag.value);
+      }
+      syncMemeTagButtonStates(grid);
     });
     grid.append(btn);
   });
@@ -83,7 +116,13 @@ function applyMemeMetaToForm(meta, { formFields = true } = {}) {
   document.querySelectorAll('input[name="memeDisplayMode"]').forEach((input) => {
     input.checked = input.value === meta.display_mode;
   });
-  selectedTag = meta.tag || selectedTag;
+  if (Array.isArray(meta.tag) && meta.tag.length > 0) {
+    selectedTags = normalizeSelectedTags(new Set(meta.tag.map((t) => String(t))));
+  } else if (Array.isArray(meta.tag)) {
+    // 数组但为空：保留当前选择，避免误清空
+  } else {
+    selectedTags = new Set(['06']);
+  }
   const collectInterval = document.getElementById('memeCollectInterval');
   const collectBatch = document.getElementById('memeCollectBatch');
   const displayInterval = document.getElementById('memeDisplayInterval');
@@ -129,7 +168,7 @@ async function saveMemeBarrageSettings() {
   const body = {
     enabled: Boolean(document.getElementById('memeBarrageEnabled')?.checked),
     category: getSelectedCategory(),
-    tag: selectedTag,
+    tag: Array.from(normalizeSelectedTags(selectedTags)),
     display_mode: getSelectedDisplayMode(),
     collect_interval_sec: parseInt(document.getElementById('memeCollectInterval')?.value, 10) || 5,
     collect_batch_size: parseInt(document.getElementById('memeCollectBatch')?.value, 10) || 40,
@@ -158,7 +197,9 @@ export function startMemeBarrageMetaPolling() {
   if (metaPollTimer) return;
   metaPollTimer = window.setInterval(() => {
     if (!document.getElementById('page-danmu-pool')?.classList.contains('active')) return;
-    refreshMemeMeta().catch(() => {});
+    refreshMemeMeta().catch((error) => {
+      console.warn('refreshMemeMeta failed', error);
+    });
   }, 3000);
 }
 

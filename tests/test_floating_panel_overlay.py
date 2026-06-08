@@ -1,4 +1,4 @@
-"""W-FP-V2-001：FloatingPanelOverlay 渲染与生命周期测试。"""
+"""W-FP-V3-002：FloatingPanelOverlay 渲染与计时器生命周期测试。"""
 from __future__ import annotations
 
 import pytest
@@ -37,12 +37,14 @@ def test_timer_stops_when_queue_empty(fp_v2_setup, qapp):
     overlay.show()
     qapp.processEvents()
     overlay.add_danmu_text("once")
-    for _ in range(200):
+    overlay._tick_dt_sec = lambda: 0.5
+    for _ in range(30):
         overlay._tick()
-        if not engine.needs_render_tick():
+        if engine.visible_count() == 0:
             break
     qapp.processEvents()
-    assert not overlay.is_render_active() or engine.visible_count() == 0
+    assert engine.visible_count() == 0
+    assert not overlay.is_render_active()
 
 
 def test_reset_session_state_clears_and_hides(fp_v2_setup, qapp):

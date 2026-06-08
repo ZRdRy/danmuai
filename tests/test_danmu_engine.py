@@ -192,6 +192,9 @@ def test_ai_reply_queue_uses_request_context_and_fifos_results():
     )
     app._sync_reply_batch_config = DanmuApp._sync_reply_batch_config.__get__(app, DanmuApp)
     app._on_ai_reply = DanmuApp._on_ai_reply.__get__(app, DanmuApp)
+    app._register_request_meta = DanmuApp._register_request_meta.__get__(app, DanmuApp)
+    app._register_request_meta(10, 10, 0, "visual")  # W-RACE-001: 需预注册 meta
+    app._register_request_meta(11, 11, 0, "visual")  # W-RACE-001: 需预注册 meta
     app._sync_reply_batch_config()
     app.reply_timer.active = False
 

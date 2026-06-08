@@ -1,5 +1,7 @@
 """Bounded background queue that flushes entries to SQLite on a fixed interval."""
 
+# W-CONC-001：flush 走 ConfigStore 写入临界区，避免主线程持锁时 database is locked 永久丢失
+
 import logging
 import threading
 from collections import deque
@@ -30,12 +32,16 @@ class HistoryWriter:
             self._buffer.clear()
         if not items:
             return
+        # W-CONC-001：通过 ConfigStore.with_write_lock() 与主线程 set/set_batch 共享
+        # _write_lock，规避主线程持锁时本后台线程 executemany 抛 database is locked
+        # 导致整批弹幕历史永久丢失（PRAGMA busy_timeout=5000 不足以覆盖截图/API 延宕）。
         try:
-            self.config.conn.executemany(
-                "INSERT INTO history (time, persona, content, image, round) VALUES (?,?,?,?,?)",
-                items,
-            )
-            self.config.conn.commit()
+            with self.config.with_write_lock():
+                self.config.conn.executemany(
+                    "INSERT INTO history (time, persona, content, image, round) VALUES (?,?,?,?,?)",
+                    items,
+                )
+                self.config.conn.commit()
         except Exception:
             _logger.exception("history flush failed items=%d", len(items))
 

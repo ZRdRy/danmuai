@@ -90,7 +90,7 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
     class MemeBarrageSettingsPayload(BaseModel):
         enabled: bool | None = None
         category: str | None = None
-        tag: str | None = None
+        tag: list[str] | None = None
         display_mode: str | None = None
         collect_interval_sec: int | None = None
         collect_batch_size: int | None = None
@@ -506,6 +506,16 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
         }
         payload = {k: v for k, v in payload.items() if v is not None}
         return _invoke_main(pet_api.save_settings, bridge.danmu_app, payload)
+
+    @app.post("/api/pet/import-folder")
+    def post_pet_import_folder(authorization: str | None = Header(default=None)):
+        check_token(authorization)
+        return _invoke_main(pet_api.import_asset_via_dialog, bridge.danmu_app)
+
+    @app.post("/api/pet/reset-asset")
+    def post_pet_reset_asset(authorization: str | None = Header(default=None)):
+        check_token(authorization)
+        return _invoke_main(pet_api.reset_asset_to_builtin, bridge.danmu_app)
 
     @app.post("/api/pet/show")
     def post_pet_show(authorization: str | None = Header(default=None)):

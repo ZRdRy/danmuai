@@ -62,6 +62,7 @@ def test_memory_mode_scene_card_appends_block():
     assert "【当前场景状态】" in result
     assert "延续语境" in result
     assert "必须以当前截图" in result
+    assert "近期状态：" not in result
 
 
 def test_record_display_ignores_wrong_generation():

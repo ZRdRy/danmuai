@@ -23,7 +23,7 @@ export const CONFIG_FIELDS = [
   'danmu_render_mode',
   'floating_panel_width',
   'floating_panel_max_items',
-  'floating_panel_lifetime_sec',
+  'floating_panel_speed',
   'floating_panel_x_offset',
   'floating_panel_y_offset',
   'floating_panel_opacity',
@@ -44,7 +44,7 @@ export const SETTINGS_RESTORE_GROUPS = {
     'danmu_max_chars', 'opacity', 'dedup_threshold', 'layout_mode', 'hotkey',
     'eviction_mode', 'danmu_pending_entry_cap', 'danmu_track_retention_cap', 'reply_queue_max_items',
     'danmu_render_mode', 'floating_panel_width', 'floating_panel_max_items',
-    'floating_panel_lifetime_sec', 'floating_panel_x_offset', 'floating_panel_y_offset',
+    'floating_panel_speed', 'floating_panel_x_offset', 'floating_panel_y_offset',
     'floating_panel_opacity', 'floating_panel_font_size',
   ],
   font: [

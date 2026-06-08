@@ -1,6 +1,6 @@
 """侧边悬浮窗渲染层：右侧透明置顶窄窗，圆角卡片 + 预渲染 QPixmap。
 
-W-FP-V2-001：仿 bililive_dm 底入堆叠；不调度 AI、不写 ConfigStore。
+W-FP-V3-002：仅保留现有外观，运动学改为持续向上滚动。
 """
 from __future__ import annotations
 

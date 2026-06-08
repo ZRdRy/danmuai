@@ -52,6 +52,7 @@ WEB_CONFIG_KEYS = (
     "floating_panel_width",
     "floating_panel_max_items",
     "floating_panel_lifetime_sec",
+    "floating_panel_speed",
     "floating_panel_x_offset",
     "floating_panel_y_offset",
     "floating_panel_opacity",
@@ -297,6 +298,12 @@ class ConfigService:
         _clamp_int_key(items, "floating_panel_width", 360, 200, 800)
         _clamp_int_key(items, "floating_panel_max_items", 12, 1, 50)
         _clamp_int_key(items, "floating_panel_lifetime_sec", 7, 2, 60)
+        if "floating_panel_speed" in items:
+            try:
+                speed = max(0.5, min(float(items["floating_panel_speed"]), 5.0))
+                items["floating_panel_speed"] = f"{speed:.3f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                items["floating_panel_speed"] = "1.5"
         _clamp_int_key(items, "floating_panel_x_offset", 20, 0, 400)
         _clamp_int_key(items, "floating_panel_y_offset", 80, 0, 400)
         _clamp_int_key(items, "floating_panel_opacity", 85, 0, 100)

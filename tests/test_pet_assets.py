@@ -215,6 +215,46 @@ def test_apply_pet_settings_patch_enabled_unchanged_keeps_visible(qapp):
     assert app.config.get("pet_scale") == "1.5"
 
 
+def test_apply_pet_settings_patch_builtin_clears_local_path(qapp):
+    from app.pet.pet_facade import apply_pet_settings_patch
+
+    app = _make_patch_app(
+        {
+            "pet_asset_source": "local",
+            "pet_asset_path": str(BUILTIN_PET_DIR),
+        }
+    )
+    apply_pet_settings_patch(app, {"pet_asset_source": "builtin"})
+
+    assert app.config.get("pet_asset_source") == "builtin"
+    assert app.config.get("pet_asset_path") == ""
+
+
+def test_apply_pet_settings_patch_invalid_local_path_keeps_existing_config(qapp):
+    from app.pet.pet_facade import apply_pet_settings_patch
+
+    app = _make_patch_app(
+        {
+            "pet_asset_source": "builtin",
+            "pet_asset_path": "",
+            "pet_scale": "1.0",
+        }
+    )
+
+    with pytest.raises(ValueError, match="pet.json"):
+        apply_pet_settings_patch(
+            app,
+            {
+                "pet_asset_source": "local",
+                "pet_asset_path": str(Path("/nonexistent/pet-pack")),
+            },
+        )
+
+    assert app.config.get("pet_asset_source") == "builtin"
+    assert app.config.get("pet_asset_path") == ""
+    assert app.config.get("pet_scale") == "1.0"
+
+
 def test_sync_pet_window_visibility_noop_when_window_missing():
     """PET-009: 启动期 _init_core_subsystems 顺序保证 pet_window 已创建；
     但若缺失（如旧路径装配失败），façade 必须安全 no-op，不能抛异常。"""

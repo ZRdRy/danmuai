@@ -134,7 +134,6 @@ LEGACY_RUNTIME_ASSIGNMENT_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 
 GENERATION_PIPELINE_CANDIDATE_FIELDS: tuple[str, ...] = (
-    "_last_activity_collect_at",
     "_latest_displayed_round",
     "_latest_requested_screenshot_id",
     "_latest_queued_screenshot_id",

@@ -65,7 +65,6 @@ from app.application.request_scheduler import RequestScheduler
 from app.application.request_timing_service import RequestTimingService
 from app.application.stats_state import StatsState
 from app.application.web_runtime_state import WebRuntimeState
-from app.memory.activity import RecentActivityState
 from app.reply_queue import AIReplyFIFOBuffer
 from app.scene_memory import SceneMemoryStore
 
@@ -125,7 +124,7 @@ def bind_minimal_danmu_app(app, **overrides):
         ai_in_flight / mic_in_flight / stats_state / config /
         web_runtime_state / _pending_request_meta / session_run_log /
         _request_scheduler / _request_timing_service / lifetime_stats /
-        _lifetime_flush_timer / _scene_memory / _activity_state
+        _lifetime_flush_timer / _scene_memory
 
     典型用法：
         app = DanmuApp.__new__(DanmuApp)
@@ -168,8 +167,6 @@ def bind_minimal_danmu_app(app, **overrides):
         "_batch_id": 0,
         "_current_batch": None,
         "_scene_memory": SceneMemoryStore(),
-        "_activity_state": RecentActivityState(),
-        "_last_activity_collect_at": 0.0,
         "mic_in_flight": 0,
         "_mic_request_seq": 0,
         "_mic_batch_id": 0,
@@ -355,8 +352,6 @@ def make_minimal_danmu_app():
     app.web_bridge = None
     app.ai_worker = Mock()
     app._scene_memory = SceneMemoryStore()
-    app._activity_state = RecentActivityState()
-    app._last_activity_collect_at = 0.0
     app.lifetime_stats = FakeLifetimeStats()
     app.session_run_log = Mock()
     app._lifetime_flush_timer = FakeTimer()

@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 
 from app.api_schedule import min_api_interval_elapsed
@@ -20,19 +19,10 @@ from app.main_helpers import (
     queue_capacity,
     reply_request_id,
 )
-from app.memory.activity_prompt import append_activity_line_to_user_pt, format_activity_prompt_line
 from app.memory.types import MEMORY_MODE_OFF, bullet_angle_from_index
 from app.reply_queue import QueuedReply
 from app.scene_memory import append_memory_to_user_pt, memory_window_from_config
 from app.translations import tr
-from app.window_info import classify_foreground_window, get_foreground_window_info
-
-
-def _resolve_runtime_symbol(name: str, fallback):
-    module = sys.modules.get("main") or sys.modules.get("__main__")
-    if module is None:
-        return fallback
-    return getattr(module, name, fallback)
 
 
 class DanmuAppRequestContextMixin:
@@ -146,38 +136,10 @@ class DanmuAppRequestContextMixin:
     def _memory_enabled(self) -> bool:
         return memory_enabled(self._memory_mode())
 
-    def _collect_activity_observation(self) -> None:
-        if not self._memory_enabled():
-            return
-        now = time.monotonic()
-        if now - self._last_activity_collect_at < 1.0:
-            return
-        self._last_activity_collect_at = now
-        try:
-            info_fn = _resolve_runtime_symbol(
-                "get_foreground_window_info",
-                get_foreground_window_info,
-            )
-            classify_fn = _resolve_runtime_symbol(
-                "classify_foreground_window",
-                classify_foreground_window,
-            )
-            info = info_fn()
-            if info is None:
-                return
-            obs = classify_fn(info.title, info.exe_name)
-            obs.scene_generation = self._scene_generation
-            self._activity_state.record_observation(obs)
-        except Exception:
-            pass
-
     def _append_scene_memory_to_user_pt(self, user_pt: str) -> str:
         mode = self._memory_mode()
         if mode == MEMORY_MODE_OFF:
             return user_pt
-        activity_line = format_activity_prompt_line(self._activity_state)
-        if activity_line:
-            return append_activity_line_to_user_pt(user_pt, activity_line)
         block = self._scene_memory.format_prompt_for_generation(self._scene_generation, mode)
         return append_memory_to_user_pt(user_pt, block)
 

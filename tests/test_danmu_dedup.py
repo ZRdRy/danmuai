@@ -364,8 +364,6 @@ def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
         "lifetime_stats": type("L", (), {"flush_pending": _noop})(),
         "session_run_log": type("R", (), {"begin": _noop})(),
         "_scene_memory": type("M", (), {"reset": _noop})(),
-        "_activity_state": type("A", (), {"reset": _noop})(),
-        "_last_activity_collect_at": 0.0,
         "_pending_request_meta": {},
         "state_changed": type("S", (), {"emit": lambda *a: None})(),
         "_queue_capacity": lambda: 8,

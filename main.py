@@ -77,7 +77,6 @@ from app.screenshot_compress import (
 )
 from app.snipper import resolve_screen_index  # noqa: F401
 from app.translations import tr
-from app.window_info import classify_foreground_window, get_foreground_window_info  # noqa: F401
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtCore import QTimer as QTimer  # noqa: F401 — re-exported for tests
 from PyQt6.QtWidgets import QApplication
@@ -235,7 +234,6 @@ class DanmuApp(
                 height=pixmap.height(),
             )
         )
-        self._collect_activity_observation()
 
     def _on_screenshot_timer(self):
         """screenshot_timer 超时回调（主线程 QTimer）；转发到 _on_normal_capture_tick。"""
@@ -412,6 +410,20 @@ class DanmuApp(
         """
         self.logger.debug(f"[DEBUG] _on_ai_reply called, text length={len(text)}")
         meta = self._pop_request_meta(request_round, screenshot_id, scene_generation)
+        # W-RACE-001（bug-03 缺陷 3 修复）：陈旧 AiRunnable 在 stop()→start() 之间
+        # 完成时，_pending_request_meta 已被 stop() 清空，_pop_request_meta 返回
+        # 空 dict（既有 request_meta_missing warning 仍保留作可观测性）。本判断作为
+        # 第二道防线：若 meta 为空（stop 后到位的 reply），既不释放新会话的 in-flight
+        # 槽位，也不入队。
+        if not meta:
+            self.logger.warning(
+                "stale_reply_dropped: request_round=%s screenshot_id=%s "
+                "scene_generation=%s reason=meta_missing_after_stop",
+                request_round,
+                screenshot_id,
+                scene_generation,
+            )
+            return
         source = meta.get("source") or "visual"
         is_mic = source == "mic"
 

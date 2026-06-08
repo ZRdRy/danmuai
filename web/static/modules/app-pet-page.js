@@ -2,19 +2,65 @@ import { apiFetch } from './transport.js';
 
 let toast = () => {};
 let handlersBound = false;
+let currentAssetSource = 'builtin';
+let currentAssetPath = '';
 
 function showToast(message, isError = false) {
   toast(message, isError);
 }
 
-function setStatusText(text) {
-  const el = document.getElementById('petStatusText');
+function setText(id, text) {
+  const el = document.getElementById(id);
   if (el) el.textContent = text;
 }
 
+function setStatusText(text) {
+  setText('petStatusText', text);
+}
+
 function setAssetText(text) {
-  const el = document.getElementById('petAssetText');
-  if (el) el.textContent = text;
+  setText('petAssetText', text);
+}
+
+function setAssetError(message) {
+  const errorEl = document.getElementById('petAssetErrorText');
+  if (!errorEl) return;
+  if (message) {
+    errorEl.textContent = message;
+    errorEl.classList.remove('hidden');
+  } else {
+    errorEl.textContent = '';
+    errorEl.classList.add('hidden');
+  }
+}
+
+function setResetButtonEnabled(enabled) {
+  const btn = document.getElementById('btnPetResetAsset');
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.classList.toggle('opacity-50', !enabled);
+  btn.classList.toggle('cursor-not-allowed', !enabled);
+}
+
+function describeAsset(data) {
+  const asset = data.asset || {};
+  const displayName = asset.display_name || asset.id || '默认桌宠';
+  const sourceLabel = currentAssetSource === 'local' ? '本地目录' : '内置默认';
+
+  if (asset.ok) {
+    setAssetText(displayName);
+    setAssetError('');
+  } else if (asset.error) {
+    setAssetText(currentAssetSource === 'local' ? '自定义桌宠加载失败' : '默认桌宠');
+    setAssetError(asset.error);
+  } else {
+    setAssetText('默认桌宠');
+    setAssetError('');
+  }
+
+  setText('petAssetSourceText', sourceLabel);
+  setText('petAssetPathText', currentAssetPath || '—');
+  setResetButtonEnabled(currentAssetSource === 'local' || Boolean(currentAssetPath));
 }
 
 function fillPetForm(data) {
@@ -36,6 +82,9 @@ function fillPetForm(data) {
   if (ttl) ttl.value = String(data.command_ttl_sec ?? 30);
   if (applyCount) applyCount.value = String(data.command_apply_count ?? 1);
 
+  currentAssetSource = data.asset_source === 'local' ? 'local' : 'builtin';
+  currentAssetPath = String(data.asset_path || '');
+
   const pending = data.pending_command;
   if (data.has_pending_command && pending?.preview) {
     setStatusText(`已启用 · 待注入指令：${pending.preview}`);
@@ -47,14 +96,7 @@ function fillPetForm(data) {
     setStatusText('已启用 · 已隐藏（可在桌宠右键菜单显示）');
   }
 
-  const asset = data.asset || {};
-  if (asset.ok) {
-    setAssetText(`${asset.display_name || asset.id || '默认宠物'}`);
-  } else if (asset.error) {
-    setAssetText(`加载失败：${asset.error}`);
-  } else {
-    setAssetText('默认宠物');
-  }
+  describeAsset(data);
 }
 
 function collectPetPayload() {
@@ -67,8 +109,8 @@ function collectPetPayload() {
     command_box_enabled: Boolean(document.getElementById('petCommandBoxEnabled')?.checked),
     command_ttl_sec: parseInt(document.getElementById('petCommandTtl')?.value, 10) || 30,
     command_apply_count: parseInt(document.getElementById('petCommandApplyCount')?.value, 10) || 1,
-    asset_source: 'builtin',
-    asset_path: '',
+    asset_source: currentAssetSource,
+    asset_path: currentAssetPath,
   };
 }
 
@@ -103,6 +145,23 @@ async function submitPetCommand() {
   showToast('已加入下一次弹幕生成');
 }
 
+async function importPetFolder() {
+  const data = await apiFetch('/api/pet/import-folder', { method: 'POST' });
+  if (data.cancelled) {
+    fillPetForm(data);
+    return;
+  }
+  fillPetForm(data);
+  const asset = data.asset || {};
+  showToast(`已切换到桌宠：${asset.display_name || asset.id || '自定义桌宠'}`);
+}
+
+async function resetPetAsset() {
+  const data = await apiFetch('/api/pet/reset-asset', { method: 'POST' });
+  fillPetForm(data);
+  showToast('已恢复默认桌宠');
+}
+
 export function initPetPage(deps = {}) {
   toast = deps.showToast || toast;
   if (handlersBound) return;
@@ -115,6 +174,9 @@ export function initPetPage(deps = {}) {
     submitPetCommand().catch((error) => showToast(error.message, true));
   });
   document.getElementById('btnPetImportFolder')?.addEventListener('click', () => {
-    showToast('导入文件夹功能正在开发中，当前将继续使用内置默认素材。');
+    importPetFolder().catch((error) => showToast(error.message, true));
+  });
+  document.getElementById('btnPetResetAsset')?.addEventListener('click', () => {
+    resetPetAsset().catch((error) => showToast(error.message, true));
   });
 }

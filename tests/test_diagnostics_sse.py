@@ -193,7 +193,7 @@ def test_diagnostics_sse_snapshot_contains_correct_fields():
         "runtime_state": {
             "web_runtime": {"error_message": "", "is_error": False},
             "stats": {"danmu_count": 10, "total_input_tokens": 100, "total_output_tokens": 200},
-            "generation_pipeline": {"last_activity_collect_at": 0.0},
+            "generation_pipeline": {},
         },
         "diagnosis": {
             "scheduler_blocked": False,

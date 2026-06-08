@@ -123,6 +123,16 @@ class DanmuAppDisplayMixin:
 
         return apply_pet_settings_patch(self, payload)
 
+    def import_pet_asset_via_dialog(self) -> dict[str, object]:
+        from app.pet.pet_facade import import_pet_asset_via_dialog
+
+        return import_pet_asset_via_dialog(self)
+
+    def reset_pet_asset_to_builtin(self) -> dict[str, object]:
+        from app.pet.pet_facade import reset_pet_asset_to_builtin
+
+        return reset_pet_asset_to_builtin(self)
+
     def show_pet(self) -> dict[str, object]:
         from app.pet.pet_facade import show_pet
 

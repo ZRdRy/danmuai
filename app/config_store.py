@@ -16,6 +16,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 try:
@@ -202,8 +203,26 @@ class ConfigStore:
                     self._cache[k] = v
             except sqlite3.OperationalError as e:
                 self.conn.rollback()
-                logger.error(tr("config.batch_write_failed").format(error=e))
+                logger.error(tr("config.batch_write_failed").format(error=type(e).__name__))
                 raise
+
+    @contextmanager
+    def with_write_lock(self):
+        """Acquire the SQLite write lock for atomic conn operations (W-CONC-001).
+
+        用于同包模块（``HistoryWriter`` 等）批量 ``executemany`` + ``commit``。
+        与 ``set`` / ``set_batch`` 共享同一把 ``self._write_lock``，避免主线程
+        持锁时后台线程 ``conn.executemany`` 抛 ``database is locked`` 永久丢数据。
+
+        限制：
+            - 仅供同包模块在 SQLite 写入临界区使用；**禁止** HTTP 线程、Web
+              路由、其他包模块直接调用（会阻塞主线程 SET 路径）。
+            - 进程内临界区（``threading.Lock``），不跨进程；多实例仍受
+              ``SingleInstanceGuard`` 串行化。
+            - 不可重入：同线程内嵌套调用会死锁。
+        """
+        with self._write_lock:
+            yield self.conn
 
     def get_int(self, key: str, default: int = 0) -> int:
         val = self.get(key)
@@ -259,7 +278,7 @@ class ConfigStore:
                     self._cache["api_key_encrypted"] = encrypted
                 except sqlite3.OperationalError as e:
                     self.conn.rollback()
-                    logger.error(tr("config.api_key_write_failed").format(error=e))
+                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
                     raise
             else:
                 logger.warning(tr("config.insecure_store"))
@@ -301,7 +320,7 @@ class ConfigStore:
                     self._cache["tts_api_key_encrypted"] = encrypted
                 except sqlite3.OperationalError as e:
                     self.conn.rollback()
-                    logger.error(tr("config.api_key_write_failed").format(error=e))
+                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
                     raise
         else:
             logger.warning(tr("config.insecure_store"))
@@ -343,7 +362,7 @@ class ConfigStore:
                     self._cache["mic_api_key_encrypted"] = encrypted
                 except sqlite3.OperationalError as e:
                     self.conn.rollback()
-                    logger.error(tr("config.api_key_write_failed").format(error=e))
+                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
                     raise
         else:
             logger.warning(tr("config.insecure_store"))
@@ -402,7 +421,9 @@ class ConfigStore:
 
     def meme_barrage_library_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM meme_barrage_library").fetchone()
-        return int(row[0]) if row else 0
+        if not row or row[0] is None:
+            return 0
+        return int(row[0])
 
     def meme_barrage_library_clear(self) -> None:
         with self._write_lock:
@@ -468,7 +489,7 @@ class ConfigStore:
 
     def _trim_meme_barrage_library_locked(self, max_rows: int) -> None:
         count = self.conn.execute("SELECT COUNT(*) FROM meme_barrage_library").fetchone()
-        total = int(count[0]) if count else 0
+        total = 0 if not count or count[0] is None else int(count[0])
         if total <= max_rows:
             return
         excess = total - max_rows

@@ -21,6 +21,20 @@ def save_settings(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, object]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def import_asset_via_dialog(app: "DanmuApp") -> dict[str, object]:
+    try:
+        return app.import_pet_asset_via_dialog()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def reset_asset_to_builtin(app: "DanmuApp") -> dict[str, object]:
+    try:
+        return app.reset_pet_asset_to_builtin()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def show_pet(app: "DanmuApp") -> dict[str, object]:
     return app.show_pet()
 

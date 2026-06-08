@@ -3,9 +3,6 @@
 SceneMemoryStore 是记忆子系统的门面，组合 SceneContextMemory（场景卡片）与
 BulletDedupMemory（近期弹幕去重）。纯内存、随 DanmuApp 会话生命周期，不写 SQLite。
 
-注意：activity（活跃度等）由 DanmuApp 直接持有，不在 store 内组合；
-store 只负责 context + dedup 两块。
-
 四档 memory_mode（在 format_prompt_for_generation → build_memory_prompt_block 生效）：
 - off：不注入记忆提示词
 - dedup_only：仅弹幕去重段，字符预算最小
@@ -31,8 +28,7 @@ class SceneMemoryStore:
     """场景记忆门面：context（视觉卡片）+ dedup（已播弹幕窗口）。
 
     职责：组合 ``SceneContextMemory``（场景卡片）与 ``BulletDedupMemory``（去重窗口），
-    是 ``DanmuApp.scene_memory`` 的访问入口。**不**直接持有 activity 状态；
-    activity 由 ``DanmuApp._recent_activity`` 单独管理。
+    是 ``DanmuApp.scene_memory`` 的访问入口。
 
     线程安全：本类实例由 ``DanmuApp`` 在主线程创建/访问；单线程，无需锁。
 

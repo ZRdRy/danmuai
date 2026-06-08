@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 
 import pytest
 from app.config_store import ConfigStore
@@ -188,3 +189,81 @@ def test_config_store_repairs_stale_region_on_init(tmp_path):
     assert store2.get("region_w") == "0"
     assert store2.get("region_h") == "0"
     store2.close()
+
+
+def test_with_write_lock_yields_conn_and_releases(tmp_path):
+    """W-CONC-001：``with_write_lock()`` 必须 (1) 产出 ``self.conn``；(2) 退出
+    with 块后立即释放锁，主线程可再次获取。
+    """
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    try:
+        # 第一次进入：with 块内可拿到 store.conn
+        with store.with_write_lock() as conn:
+            assert conn is store.conn
+            # 在临界区内写入一条 REPLACE 验证可用
+            store.conn.execute(
+                "REPLACE INTO config (key, value) VALUES (?, ?)", ("w_conc_001", "v1")
+            )
+            store.conn.commit()
+        # 退出 with 后，_write_lock 已释放，主线程能再次进入
+        with store.with_write_lock() as conn:
+            assert conn is store.conn
+            store.conn.execute(
+                "REPLACE INTO config (key, value) VALUES (?, ?)", ("w_conc_001", "v2")
+            )
+            store.conn.commit()
+        # 关键：再次进入临界区写入不抛锁异常（互斥已验证）；
+        # 用 store.set 走「正常」路径刷新 _cache，验证最终值。
+        store.set("w_conc_001", "v3")
+        assert store.get("w_conc_001") == "v3"
+        # 验证 via 再次进入 with_write_lock 的写也确实落到 DB
+        with store.with_write_lock() as conn:
+            row = conn.execute(
+                "SELECT value FROM config WHERE key=?", ("w_conc_001",)
+            ).fetchone()
+        assert row[0] == "v3"
+    finally:
+        store.close()
+
+
+def test_with_write_lock_blocks_other_writer(tmp_path):
+    """W-CONC-001：``with_write_lock()`` 与 ``set`` 共享 ``_write_lock``；
+    互斥成立（持有方未释放前另一方拿不到锁）。
+    """
+    store = ConfigStore(db_path=tmp_path / "config.db")
+    try:
+        # 主线程持锁
+        assert store._write_lock.acquire(timeout=2.0) is True
+        acquired_main_thread: dict = {}
+
+        def _other_thread():
+            try:
+                with store.with_write_lock():
+                    acquired_main_thread["ok"] = True
+            except Exception as e:  # pragma: no cover - 仅在退步时报
+                acquired_main_thread["error"] = repr(e)
+
+        t = threading.Thread(target=_other_thread, name="test-other-writer")
+        t.start()
+        # 给另一线程一点时间确认它在 _write_lock 上阻塞
+        t.join(timeout=0.3)
+        assert t.is_alive(), "另一个写入者应在 _write_lock 上阻塞等待"
+        assert "ok" not in acquired_main_thread, (
+            f"持锁未释放时另一线程不应进入临界区：{acquired_main_thread}"
+        )
+
+        # 释放锁
+        store._write_lock.release()
+        t.join(timeout=2.0)
+        assert not t.is_alive(), "释放锁后另一线程应在 2s 内进入临界区"
+        assert acquired_main_thread.get("ok") is True, (
+            f"释放锁后另一线程仍失败：{acquired_main_thread}"
+        )
+    finally:
+        # 防御：若主线程持锁未释放，强制释放避免 close 时的潜在阻塞
+        if store._write_lock.locked():
+            try:
+                store._write_lock.release()
+            except RuntimeError:
+                pass
+        store.close()

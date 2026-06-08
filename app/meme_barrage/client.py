@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from app.meme_barrage.config import normalize_meme_barrage_tags
+
 API_BASE = "https://hguofichp.cn:10086"
 API_ORIGIN = "https://hguofichp.cn"
 
@@ -15,6 +17,11 @@ DEFAULT_HEADERS = {
     "Origin": API_ORIGIN,
     "Referer": f"{API_ORIGIN}/",
 }
+
+def format_tags_for_remote_api(tags: list[str], page_num: int = 1) -> str:
+    """Build ``tags`` query param for sortAllBarrage / remote fetch."""
+    return ",".join(normalize_meme_barrage_tags(tags))
+
 
 # Fallback when dictList is unreachable (27 tags from API snapshot).
 FALLBACK_TAGS: list[dict[str, str]] = [

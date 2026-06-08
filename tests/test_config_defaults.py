@@ -27,6 +27,7 @@ FP_KEYS = (
     "floating_panel_width",
     "floating_panel_max_items",
     "floating_panel_lifetime_sec",
+    "floating_panel_speed",
     "floating_panel_x_offset",
     "floating_panel_y_offset",
     "floating_panel_opacity",

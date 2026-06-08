@@ -37,29 +37,19 @@ function resolveRenderModeFromCfg(cfg) {
   return 'scrolling';
 }
 
-function resolveRenderModeForUI(cfg) {
-  const mode = resolveRenderModeFromCfg(cfg);
-  return mode === 'floating_panel' ? 'scrolling' : mode;
-}
-
 export function syncFloatingPanelV2FieldsVisibility() {
   const modeEl = document.getElementById('danmu_render_mode');
-  const box = document.getElementById('floatingPanelV2Fields');
-  if (!box) return;
   const mode = modeEl?.value || 'scrolling';
-  box.classList.toggle('hidden', mode !== 'floating_panel');
+  const floatingBox = document.getElementById('floatingPanelV2Fields');
+  const scrollingBox = document.getElementById('scrollingModeFields');
+  if (floatingBox) floatingBox.classList.toggle('hidden', mode !== 'floating_panel');
+  if (scrollingBox) scrollingBox.classList.toggle('hidden', mode !== 'scrolling');
 }
 
 export function initFloatingPanelV2Controls() {
   const modeEl = document.getElementById('danmu_render_mode');
   if (!modeEl) return;
-  modeEl.addEventListener('change', () => {
-    if (modeEl.value === 'floating_panel') {
-      modeEl.value = 'scrolling';
-      coreDeps.showToast('非常抱歉，该功能将在明日开发完成');
-    }
-    syncFloatingPanelV2FieldsVisibility();
-  });
+  modeEl.addEventListener('change', syncFloatingPanelV2FieldsVisibility);
   syncFloatingPanelV2FieldsVisibility();
 }
 
@@ -186,7 +176,7 @@ export function collectFormData() {
 }
 
 export function fillForm(cfg) {
-  const cfgWithMode = { ...cfg, danmu_render_mode: resolveRenderModeForUI(cfg) };
+  const cfgWithMode = { ...cfg, danmu_render_mode: resolveRenderModeFromCfg(cfg) };
   CONFIG_FIELDS.forEach((name) => {
     const el = document.getElementById(name);
     if (el && cfgWithMode[name] !== undefined) el.value = cfgWithMode[name];
@@ -203,7 +193,7 @@ export function fillForm(cfg) {
     'image_max_width', 'temperature', 'max_tokens', 'image_quality', 'danmu_max_chars',
     'danmu_pending_entry_cap', 'danmu_track_retention_cap', 'reply_queue_max_items',
     'danmu_render_mode', 'floating_panel_width', 'floating_panel_max_items',
-    'floating_panel_lifetime_sec', 'floating_panel_x_offset', 'floating_panel_y_offset',
+    'floating_panel_speed', 'floating_panel_x_offset', 'floating_panel_y_offset',
     'floating_panel_opacity', 'floating_panel_font_size', 'danmu_font_family',
     'floating_panel_font_family',
   ].forEach(setIfEmpty);

@@ -242,8 +242,8 @@
                 <input type="number" name="floating_panel_max_items" id="floating_panel_max_items" min="1" max="50" class="settings-field-control">
               </div>
               <div class="settings-field">
-                <label for="floating_panel_lifetime_sec" class="settings-field-label">停留时间 (秒)</label>
-                <input type="number" name="floating_panel_lifetime_sec" id="floating_panel_lifetime_sec" min="2" max="60" class="settings-field-control">
+                <label for="floating_panel_speed" class="settings-field-label">滚动速度</label>
+                <input type="number" name="floating_panel_speed" id="floating_panel_speed" min="0.5" max="5" step="0.1" class="settings-field-control">
               </div>
               <div class="settings-field">
                 <label for="floating_panel_opacity" class="settings-field-label">不透明度 (%)</label>
@@ -281,61 +281,66 @@
           <p class="settings-section-title mt-2">外观与行为</p>
           <div class="settings-params-grid cols-3">
             <div class="settings-field">
-              <label for="danmu_speed" class="settings-field-label">弹幕速度</label>
-              <input type="number" name="danmu_speed" id="danmu_speed" min="0.5" max="5" step="0.1" class="settings-field-control">
-            </div>
-            <div class="settings-field settings-full-only">
-              <label for="danmu_lines" class="settings-field-label">轨道行数</label>
-              <input type="number" name="danmu_lines" id="danmu_lines" min="12" max="20" value="20" class="settings-field-control">
-            </div>
-            <div class="settings-field">
               <label for="danmu_max_chars" class="settings-field-label">最大弹幕字数</label>
               <input type="number" name="danmu_max_chars" id="danmu_max_chars" min="5" max="80" step="1" class="settings-field-control" placeholder="15">
-            </div>
-            <div class="settings-field">
-              <label for="opacity" class="settings-field-label">不透明度 (%)</label>
-              <input type="number" name="opacity" id="opacity" min="0" max="100" class="settings-field-control">
             </div>
             <div class="settings-field settings-full-only">
               <label for="dedup_threshold" class="settings-field-label">去重阈值</label>
               <input type="number" name="dedup_threshold" id="dedup_threshold" min="0" max="1" step="0.05" class="settings-field-control">
             </div>
             <div class="settings-field">
-              <label for="layout_mode" class="settings-field-label">布局</label>
-              <select name="layout_mode" id="layout_mode" class="settings-field-control text-left">
-                <option value="fullscreen">全屏</option>
-                <option value="3/4">3/4</option>
-                <option value="1/2">1/2</option>
-                <option value="1/4">1/4</option>
-              </select>
-            </div>
-            <div class="settings-field settings-full-only">
-              <label for="hotkey" class="settings-field-label">全局快捷键</label>
-              <input type="text" name="hotkey" id="hotkey" class="settings-field-control" placeholder="Ctrl+Shift+B">
-            </div>
-            <div class="settings-field settings-full-only">
-              <label for="eviction_mode" class="settings-field-label">退场模式</label>
-              <select name="eviction_mode" id="eviction_mode" class="settings-field-control text-left">
-                <option value="natural">自然</option>
-                <option value="accelerate">加速</option>
-              </select>
-            </div>
-            <div class="settings-field">
-              <label for="danmu_pending_entry_cap" class="settings-field-label">入口区 pending 上限</label>
-              <input type="number" name="danmu_pending_entry_cap" id="danmu_pending_entry_cap" min="0" max="9999" step="1" class="settings-field-control" placeholder="0=无限制">
-            </div>
-            <div class="settings-field">
-              <label for="danmu_track_retention_cap" class="settings-field-label">轨道总保留上限</label>
-              <input type="number" name="danmu_track_retention_cap" id="danmu_track_retention_cap" min="0" max="9999" step="1" class="settings-field-control" placeholder="0=无限制">
-            </div>
-            <div class="settings-field">
               <label for="reply_queue_max_items" class="settings-field-label">回复队列上限</label>
               <input type="number" name="reply_queue_max_items" id="reply_queue_max_items" min="0" max="9999" step="1" class="settings-field-control" placeholder="0=无限制">
             </div>
           </div>
-          <p class="settings-section-title">开关选项</p>
-          <div class="settings-toggle-row">
-            <label class="flex items-center gap-2"><input type="checkbox" id="empty_accel" class="accent-warmPink"> 空轨道时加速补位</label>
+          <div id="scrollingModeFields" class="space-y-3">
+            <p class="settings-section-title">横向弹幕</p>
+            <div class="settings-params-grid cols-3">
+              <div class="settings-field">
+                <label for="danmu_speed" class="settings-field-label">弹幕速度</label>
+                <input type="number" name="danmu_speed" id="danmu_speed" min="0.5" max="5" step="0.1" class="settings-field-control">
+              </div>
+              <div class="settings-field settings-full-only">
+                <label for="danmu_lines" class="settings-field-label">轨道行数</label>
+                <input type="number" name="danmu_lines" id="danmu_lines" min="12" max="20" value="20" class="settings-field-control">
+              </div>
+              <div class="settings-field">
+                <label for="opacity" class="settings-field-label">不透明度 (%)</label>
+                <input type="number" name="opacity" id="opacity" min="0" max="100" class="settings-field-control">
+              </div>
+              <div class="settings-field">
+                <label for="layout_mode" class="settings-field-label">布局</label>
+                <select name="layout_mode" id="layout_mode" class="settings-field-control text-left">
+                  <option value="fullscreen">全屏</option>
+                  <option value="3/4">3/4</option>
+                  <option value="1/2">1/2</option>
+                  <option value="1/4">1/4</option>
+                </select>
+              </div>
+              <div class="settings-field settings-full-only">
+                <label for="hotkey" class="settings-field-label">全局快捷键</label>
+                <input type="text" name="hotkey" id="hotkey" class="settings-field-control" placeholder="Ctrl+Shift+B">
+              </div>
+              <div class="settings-field settings-full-only">
+                <label for="eviction_mode" class="settings-field-label">退场模式</label>
+                <select name="eviction_mode" id="eviction_mode" class="settings-field-control text-left">
+                  <option value="natural">自然</option>
+                  <option value="accelerate">加速</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="danmu_pending_entry_cap" class="settings-field-label">入口区 pending 上限</label>
+                <input type="number" name="danmu_pending_entry_cap" id="danmu_pending_entry_cap" min="0" max="9999" step="1" class="settings-field-control" placeholder="0=无限制">
+              </div>
+              <div class="settings-field">
+                <label for="danmu_track_retention_cap" class="settings-field-label">轨道总保留上限</label>
+                <input type="number" name="danmu_track_retention_cap" id="danmu_track_retention_cap" min="0" max="9999" step="1" class="settings-field-control" placeholder="0=无限制">
+              </div>
+            </div>
+            <p class="settings-section-title">开关选项</p>
+            <div class="settings-toggle-row">
+              <label class="flex items-center gap-2"><input type="checkbox" id="empty_accel" class="accent-warmPink"> 空轨道时加速补位</label>
+            </div>
           </div>
         </div>
 

@@ -58,6 +58,17 @@ _DT_CAP_SEC = 0.1
 _OPACITY_CACHE_BUCKET = 4.0
 _Y_OFFSET = 30
 _DIRTY_MARGIN_PX = 12
+_FAST_DANMU_RENDER_MIN_LEN = 36
+_FAST_OUTLINE_OFFSETS = (
+    (-2, 0),
+    (2, 0),
+    (0, -2),
+    (0, 2),
+    (-1, -1),
+    (1, 1),
+    (-1, 1),
+    (1, -1),
+)
 _overlay_logger = logging.getLogger("danmu.overlay")
 _overlay_profile_flag: bool | None = None
 
@@ -68,6 +79,43 @@ def overlay_profile_enabled() -> bool:
         value = os.environ.get("DANMU_OVERLAY_PROFILE", "").strip().lower()
         _overlay_profile_flag = value in ("1", "true", "yes", "on")
     return _overlay_profile_flag
+
+
+def _use_fast_danmu_render(content: str) -> bool:
+    """长文本/emoji 走 drawText 描边，避免 QPainterPath.addText 阻塞主线程数秒。"""
+    return len(content) >= _FAST_DANMU_RENDER_MIN_LEN
+
+
+def _paint_danmu_text(
+    painter: QPainter,
+    *,
+    content: str,
+    font: QFont,
+    color: QColor,
+    text_x: int,
+    baseline_y: int,
+    fast: bool,
+) -> None:
+    if fast:
+        outline_pen = QPen(QColor(0, 0, 0, 200))
+        for dx, dy in _FAST_OUTLINE_OFFSETS:
+            painter.setPen(outline_pen)
+            painter.drawText(text_x + dx, baseline_y + dy, content)
+        painter.setPen(QPen(color))
+        painter.drawText(text_x, baseline_y, content)
+        return
+
+    path = QPainterPath()
+    path.addText(text_x, baseline_y, font, content)
+    outline_pen = QPen(QColor(0, 0, 0, 200))
+    outline_pen.setWidth(4)
+    outline_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(outline_pen)
+    painter.drawPath(path)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawPath(path)
 
 
 class DanmuOverlay(QWidget):
@@ -473,11 +521,14 @@ class DanmuOverlay(QWidget):
         if item.width <= 0:
             self.measure_item_width(item)
         if item._pixmap is None:
-            item._pixmap = self._render_item_pixmap(item)
+            fast = _use_fast_danmu_render(item.content)
+            item._pixmap = self._render_item_pixmap(item, fast=fast)
         item._opacity_cache_bucket = None
         item._cached_opacity = None
 
-    def _render_item_pixmap(self, item) -> QPixmap:
+    def _render_item_pixmap(self, item, *, fast: bool | None = None) -> QPixmap:
+        if fast is None:
+            fast = _use_fast_danmu_render(item.content)
         w = int(item.width) + 10
         h = self.font_metrics.height() + 10
         dpr = self.devicePixelRatio()
@@ -485,28 +536,23 @@ class DanmuOverlay(QWidget):
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
 
-        p = QPainter(pm)
-        p.setFont(self.font)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter = QPainter(pm)
+        painter.setFont(self.font)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         baseline_y = self.font_metrics.ascent() + 5
         text_x = 5
-
-        path = QPainterPath()
-        path.addText(text_x, baseline_y, self.font, item.content)
-
-        outline_pen = QPen(QColor(0, 0, 0, 200))
-        outline_pen.setWidth(4)
-        outline_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setPen(outline_pen)
-        p.drawPath(path)
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(item.color)
-        p.drawPath(path)
-        p.end()
+        _paint_danmu_text(
+            painter,
+            content=item.content,
+            font=self.font,
+            color=item.color,
+            text_x=text_x,
+            baseline_y=baseline_y,
+            fast=fast,
+        )
+        painter.end()
         return pm
 
     def _item_opacity(self, item) -> float:

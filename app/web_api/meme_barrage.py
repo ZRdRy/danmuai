@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from app.meme_barrage.client import FALLBACK_TAGS, MemeBarrageApiClient
@@ -16,6 +17,7 @@ from app.meme_barrage.config import (
     DISPLAY_INTERVAL_MIN,
     VALID_CATEGORIES,
     VALID_DISPLAY_MODES,
+    normalize_meme_barrage_tags,
     read_meme_barrage_settings,
 )
 
@@ -68,8 +70,16 @@ def save_settings(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, Any]:
             items["meme_barrage_category"] = category
             reset_cursors = True
     if "tag" in payload:
-        tag = str(payload.get("tag") or "06").strip() or "06"
-        items["meme_barrage_tag"] = tag
+        raw = payload.get("tag")
+        if isinstance(raw, list):
+            tags_list = [str(t).strip() for t in raw if str(t).strip()]
+        elif raw is None:
+            tags_list = []
+        else:
+            # 兼容旧字符串 / 逗号字符串
+            tags_list = [t.strip() for t in str(raw).split(",") if t.strip()]
+        tags_list = normalize_meme_barrage_tags(tags_list)
+        items["meme_barrage_tag"] = json.dumps(tags_list, ensure_ascii=False)
         reset_cursors = True
     if "display_mode" in payload:
         mode = str(payload.get("display_mode") or "full").strip().lower()

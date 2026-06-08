@@ -33,6 +33,8 @@ def test_get_meta_defaults(meme_app):
 
 
 def test_save_settings_persists(meme_app):
+    import json
+
     meme_api.save_settings(
         meme_app,
         {
@@ -48,7 +50,8 @@ def test_save_settings_persists(meme_app):
     )
     assert meme_app.config.get("meme_barrage_enabled") == "1"
     assert meme_app.config.get("meme_barrage_category") == "tagged"
-    assert meme_app.config.get("meme_barrage_tag") == "07"
+    # 兼容旧单字符串 → 内部存为 JSON 数组
+    assert json.loads(meme_app.config.get("meme_barrage_tag")) == ["07"]
     assert meme_app.config.get("meme_barrage_display_mode") == "ai"
     assert meme_app.config.get_int("meme_barrage_collect_batch_size") == 30
     meme_app.config_changed.emit.assert_called()
@@ -112,3 +115,28 @@ def test_meme_barrage_routes_registered(tmp_path):
     cleared = client.post("/api/meme-barrage/clear")
     assert cleared.status_code == 200
     assert cleared.json()["library_count"] == 0
+
+
+def test_format_tags_for_remote_api_caps_multi_select():
+    from app.meme_barrage.client import format_tags_for_remote_api
+
+    tags = ["00", "01", "02", "03", "05", "15"]
+    assert format_tags_for_remote_api(tags, 1) == "00,01,02"
+
+
+def test_save_settings_caps_tag_list(meme_app):
+    meme_api.save_settings(
+        meme_app,
+        {"tag": ["00", "01", "02", "03", "05"]},
+    )
+    import json
+
+    assert json.loads(meme_app.config.get("meme_barrage_tag")) == ["00", "01", "02"]
+
+
+def test_format_tags_for_remote_api_small_selection():
+    from app.meme_barrage.client import format_tags_for_remote_api
+
+    assert format_tags_for_remote_api(["06", "07"], 1) == "06,07"
+    assert format_tags_for_remote_api(["06"], 5) == "06"
+    assert format_tags_for_remote_api([], 1) == "06"

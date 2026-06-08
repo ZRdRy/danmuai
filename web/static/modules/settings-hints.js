@@ -80,11 +80,11 @@ const SETTINGS_FIELD_TIPS = {
   empty_accel:
     '某行轨道空了时，暂时加快滚动，让新弹幕更快占满空位。',
   danmu_render_mode:
-    '横向弹幕：全屏透明 Overlay 横向滚动。从下到上：消息自下而上堆叠后淡出（开发中）。',
+    '横向弹幕：全屏透明 Overlay 横向滚动。从下到上：右侧窄窗自下而上连续上滚，越过顶部后消失。',
   floating_panel_width:
     '从下到上模式窗口宽度（200–800 px），默认靠右显示。',
-  floating_panel_lifetime_sec:
-    '每条消息停留秒数（2–60），到期后淡出移除。',
+  floating_panel_speed:
+    '从下到上模式的滚动速度（0.5–5.0，默认 1.5）。数值越大上移越快（引擎约 120×速度 px/s）。',
   floating_panel_x_offset:
     '悬浮窗与屏幕右边缘的距离（px）。',
   floating_panel_y_offset:
