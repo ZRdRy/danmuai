@@ -103,6 +103,67 @@ const SETTINGS_FIELD_TIPS = {
     '用当前填写的地址、模式和密钥试连一次 AI，不开始弹幕，也不改其它设置。',
 };
 
+const PERSONA_FIELD_TIPS = {
+  liveTopicInput:
+    '告知 AI 本次直播主题或正在玩的游戏，会写入每次弹幕生成的系统提示词。留空则不注入；上限 200 字。',
+  userNicknameInput:
+    '你的昵称，AI 可在合适时自然称呼你。全局生效，与当前人格无关；上限 20 字。',
+  personaSelect:
+    '选择要编辑的人格模板。内置人格可覆盖保存，也可点「恢复默认」还原。',
+  personaContract:
+    '只读的 JSON 输出格式要求。每次生成条数与助手设置「弹幕显示」中的条数同步；改条数请去助手设置。',
+  personaSystemCustom:
+    '追加到该人格系统提示词末尾的自定义风格要求；点「保存人格」后生效。',
+};
+
+const DANMU_POOL_FIELD_TIPS = {
+  memeBarrageEnabled:
+    '开启后按下方配置独立采集与展示烂梗弹幕，不与 AI 生成弹幕共用展示额度。',
+  memeCollectInterval:
+    '烂梗采集间隔（1–60 秒）。每隔该秒数从源拉取一批候选弹幕。',
+  memeCollectBatch:
+    '每次采集拉取的弹幕数量（1–100 条）。',
+  memeDisplayInterval:
+    '烂梗展示间隔（1–60 秒）。每隔该秒数从待展示队列取出弹幕上屏。',
+  memeDisplayBatch:
+    '每次展示取出的弹幕条数（1–50 条）。',
+  btnMemeBarrageClear:
+    '清空本地烂梗库与待展示队列；不影响已上屏弹幕。',
+  poolCustomEnabled:
+    '启用后，系统会从你保存的自定义弹幕句中抽取短句，用于弹幕不足时补足。',
+  poolMinOnScreen:
+    '当屏幕上的弹幕少于该数量时，从自定义公式化弹幕库抽取短句补足。设为 0 则关闭补足。',
+  poolCustomTextarea:
+    '一行一条短句，保存后上屏时完整展示、不截断。重复句会自动跳过。',
+  poolCustomSelectAll:
+    '勾选后可选中列表全部自定义句，便于批量删除。',
+};
+
+const PET_FIELD_TIPS = {
+  petEnabled:
+    '开启后桌宠显示在桌面；临时隐藏请使用桌宠右键菜单。',
+  petScale:
+    '桌宠显示大小倍率（0.5–2.0）。1 为默认尺寸。',
+  petOpacity:
+    '桌宠窗口不透明度（0.2–1.0）。1 为完全不透明。',
+  petAlwaysOnTop:
+    '开启后桌宠窗口始终置顶，不会被其它窗口遮挡。',
+  petClickThrough:
+    '开启后鼠标可穿透桌宠，但将无法拖动桌宠位置。',
+  petCommandBoxEnabled:
+    '开启后双击桌宠可弹出弹幕指令输入框。',
+  petCommandTtl:
+    '指令提交后在此秒数内有效（5–300 秒），超时自动失效。',
+  petCommandApplyCount:
+    '一条指令最多影响几次截图弹幕生成（1–5 次）。',
+  petCommandInput:
+    '在 Web 页调试注入弹幕指令；不会立即请求 AI，而是并入下一次正常截图生成。',
+  btnPetImportFolder:
+    '从本地文件夹导入桌宠素材。目录需包含 pet.json 与 spritesheet.webp 或 spritesheet.png。',
+  btnPetResetAsset:
+    '恢复为内置默认桌宠，不会删除你原来的本地素材文件。',
+};
+
 const SETTINGS_HEADING_TIPS = {
   'custom-models':
     '模型配置档案：为不同接口地址、模型、密钥保存多套配置，可指定默认；这里的密钥与上方全局密钥分开管理。',
@@ -110,7 +171,32 @@ const SETTINGS_HEADING_TIPS = {
     '上传一张样图，预览当前「最大宽度」和「JPEG 质量」下的压缩效果。图片只在内存里处理，不会保存到硬盘。',
 };
 
+const CONTENT_PAGE_SECTION_TIPS = {
+  hintMemeCategoryTitle:
+    '随机：从全库抽取。自选：限选最多 3 个标签。本地库：仅使用本地导入的烂梗句。',
+  hintMemeDisplayModeTitle:
+    '全展示：采集结果全部进入展示队列。AI识别展示：由 AI 根据当前画面从候选中筛选。',
+  hintMemeTagTitle:
+    '仅「自选」分类时可选择标签，最多 3 个。',
+  hintMemeCollectTitle:
+    '控制烂梗弹幕的采集节奏：间隔秒数与每批采集条数。',
+  hintMemeDisplayTitle:
+    '控制烂梗弹幕的上屏节奏：间隔秒数与每批展示条数。',
+  hintPersonaActiveTitle:
+    '勾选多个人格后，运行时每轮随机选一个生成弹幕；点「保存激活列表」生效。',
+};
+
 const SETTINGS_CONTROL_HINT_IDS = new Set(['btnMicTest', 'btnMicTestSend', 'btnProbe']);
+
+const CONTENT_PAGE_CONTROL_HINT_IDS = new Set([
+  'btnMemeBarrageClear',
+  'btnPetImportFolder',
+  'btnPetResetAsset',
+  'memeCollectInterval',
+  'memeCollectBatch',
+  'memeDisplayInterval',
+  'memeDisplayBatch',
+]);
 
 function createFieldHintWrap(tipText, tipId) {
   const wrap = document.createElement('span');
@@ -140,7 +226,8 @@ function attachHintToLabel(label, tipText, tipId) {
   const row = document.createElement('div');
   row.className = 'field-label-row flex items-center gap-1';
   const useBlockSpacing =
-    label.classList.contains('block') || label.classList.contains('settings-field-label');
+    label.classList.contains('block')
+    || label.classList.contains('settings-field-label');
   if (useBlockSpacing) {
     row.classList.add('mb-2');
     label.classList.remove('block', 'mb-2');
@@ -161,33 +248,63 @@ function attachHintToHeading(heading, tipText, tipId) {
   const title = document.createElement('span');
   title.className = `${heading.className} flex-1 min-w-0 mb-0`;
   title.innerHTML = heading.innerHTML;
+  if (heading.id) title.id = heading.id;
   heading.replaceWith(row);
   row.append(title, createFieldHintWrap(tipText, tipId));
 }
 
-function resolveSettingsLabel(fieldEl) {
+function resolveFieldLabel(fieldEl, rootEl) {
   if (!fieldEl) return null;
   const id = fieldEl.id;
-  if (id) {
-    const byFor = document.querySelector(`#settingsForm label[for="${id}"]`);
+  if (id && rootEl) {
+    const byFor = rootEl.querySelector(`label[for="${id}"]`);
     if (byFor) return byFor;
   }
-  const inLabel = fieldEl.closest('#settingsForm label');
-  if (inLabel) return inLabel;
+  const inLabel = fieldEl.closest('label');
+  if (inLabel && (!rootEl || rootEl.contains(inLabel))) {
+    const spanLabel = inLabel.querySelector(':scope > .settings-field-label');
+    if (spanLabel) return spanLabel;
+    return inLabel;
+  }
   const parent = fieldEl.parentElement;
-  if (parent) {
+  if (parent && (!rootEl || rootEl.contains(parent))) {
     const prev = fieldEl.previousElementSibling;
-    if (prev && prev.tagName === 'LABEL') return prev;
+    if (prev) {
+      if (prev.tagName === 'LABEL') return prev;
+      if (prev.classList?.contains('settings-field-label')) return prev;
+    }
     const labelInParent = parent.querySelector(':scope > label');
     if (labelInParent) return labelInParent;
+    const spanInParent = parent.querySelector(':scope > .settings-field-label');
+    if (spanInParent) return spanInParent;
   }
   return null;
+}
+
+function resolveSettingsLabel(fieldEl) {
+  const form = document.getElementById('settingsForm');
+  return resolveFieldLabel(fieldEl, form);
 }
 
 function attachHintAfterControl(control, tipText, tipId) {
   if (!control || control.dataset.hintAttached === '1') return;
   control.insertAdjacentElement('afterend', createFieldHintWrap(tipText, tipId));
   control.dataset.hintAttached = '1';
+}
+
+function attachFieldHintsInRoot(root, fieldTips, controlHintIds = new Set()) {
+  if (!root) return;
+  Object.entries(fieldTips).forEach(([fieldId, tip]) => {
+    const field = root.querySelector(`#${fieldId}`) || document.getElementById(fieldId);
+    if (!field || !root.contains(field)) return;
+    const tipId = `tip-field-${fieldId}`;
+    if (controlHintIds.has(fieldId)) {
+      attachHintAfterControl(field, tip, tipId);
+      return;
+    }
+    const label = resolveFieldLabel(field, root);
+    if (label) attachHintToLabel(label, tip, tipId);
+  });
 }
 
 export function initSidebarNavFloatingHints() {
@@ -210,16 +327,7 @@ export function initSettingsFieldHints() {
   const form = document.getElementById('settingsForm');
   if (!form) return;
 
-  Object.entries(SETTINGS_FIELD_TIPS).forEach(([fieldId, tip]) => {
-    const field = document.getElementById(fieldId);
-    if (!field) return;
-    if (SETTINGS_CONTROL_HINT_IDS.has(fieldId)) {
-      attachHintAfterControl(field, tip, `tip-field-${fieldId}`);
-      return;
-    }
-    const label = resolveSettingsLabel(field);
-    if (label) attachHintToLabel(label, tip, `tip-field-${fieldId}`);
-  });
+  attachFieldHintsInRoot(form, SETTINGS_FIELD_TIPS, SETTINGS_CONTROL_HINT_IDS);
 
   attachHintToHeading(
     document.querySelector('#customModelsSection h4'),
@@ -234,4 +342,19 @@ export function initSettingsFieldHints() {
       'tip-heading-compress-preview',
     );
   }
+}
+
+export function initContentPageFieldHints() {
+  const personaRoot = document.getElementById('page-persona');
+  const danmuPoolRoot = document.getElementById('page-danmu-pool');
+  const petRoot = document.getElementById('page-pet');
+
+  attachFieldHintsInRoot(personaRoot, PERSONA_FIELD_TIPS);
+  attachFieldHintsInRoot(danmuPoolRoot, DANMU_POOL_FIELD_TIPS, CONTENT_PAGE_CONTROL_HINT_IDS);
+  attachFieldHintsInRoot(petRoot, PET_FIELD_TIPS, CONTENT_PAGE_CONTROL_HINT_IDS);
+
+  Object.entries(CONTENT_PAGE_SECTION_TIPS).forEach(([elementId, tip]) => {
+    const heading = document.getElementById(elementId);
+    if (heading) attachHintToHeading(heading, tip, `tip-section-${elementId}`);
+  });
 }

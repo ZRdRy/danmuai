@@ -5,11 +5,28 @@ from unittest.mock import MagicMock
 from app.config_store import ConfigStore
 from app.danmu_read_service import export_danmu_read_config
 from app.model_providers import normalize_endpoint
-from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI, validate_custom_tts_fields
+from app.tts_providers import (
+    TTS_PROVIDER_CUSTOM_OPENAI,
+    TTS_PROVIDER_DASHSCOPE_QWEN,
+    TTS_PROVIDER_DOUBAO,
+    validate_custom_tts_fields,
+)
 from app.web_api.danmu_read import normalize_probe_payload, normalize_put_payload
 from app.web_api.routes import register_web_routes
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+def test_get_danmu_read_catalog():
+    app = FastAPI()
+    bridge = MagicMock()
+    register_web_routes(app, bridge, lambda _auth=None: None)
+    client = TestClient(app)
+    data = client.get("/api/danmu-read/catalog").json()
+    ids = {p["id"] for p in data["providers"]}
+    assert "mimo" in ids
+    assert "doubao" in ids
+    assert "dashscope_qwen" in ids
 
 
 def test_get_danmu_read_config_masks_key(workspace_tmp):
@@ -77,7 +94,12 @@ def _apply_custom_tts_patch(config: ConfigStore, patch: dict) -> dict:
             config.set_batch(
                 {
                     "tts_provider": resolved_provider,
-                    "tts_endpoint": endpoint,
+                    "tts_endpoint": (
+                        ""
+                        if resolved_provider
+                        in (TTS_PROVIDER_DOUBAO, TTS_PROVIDER_DASHSCOPE_QWEN)
+                        else endpoint
+                    ),
                     "tts_model_id": model_id,
                 }
             )
@@ -192,6 +214,33 @@ def test_normalize_probe_payload_accepts_custom_field_aliases():
     )
     assert out["endpoint_override"] == "https://tts.example.com/v1"
     assert out["model_id_override"] == "probe-model"
+
+
+def test_put_danmu_read_config_dashscope_provider(workspace_tmp):
+    app = FastAPI()
+    bridge = MagicMock()
+    config = ConfigStore(db_path=workspace_tmp / "ds_read.db")
+    danmu_app = MagicMock()
+    danmu_app.config = config
+    danmu_app.apply_danmu_read_config = lambda patch: _apply_custom_tts_patch(config, patch)
+    bridge.danmu_app = danmu_app
+    bridge.invoke_on_main = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+    register_web_routes(app, bridge, lambda _auth=None: None)
+    client = TestClient(app)
+    res = client.put(
+        "/api/danmu-read/config",
+        headers={"Authorization": "Bearer test"},
+        json={
+            "provider": TTS_PROVIDER_DASHSCOPE_QWEN,
+            "model_id": "qwen3-tts-flash-2025-11-27",
+            "voice": "Cherry",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["use_custom_model"] is True
+    assert body["model"] == "qwen3-tts-flash-2025-11-27"
 
 
 def test_danmu_read_probe_route_custom_field_aliases():

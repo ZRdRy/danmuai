@@ -68,7 +68,7 @@ class PetSettings:
             visible=_truthy(config.get("pet_visible", "0")),
             asset_source=source,
             asset_path=str(config.get("pet_asset_path", "") or ""),
-            scale=_float_clamped(config.get("pet_scale", "1.0"), 1.0, 0.5, 2.0),
+            scale=_float_clamped(config.get("pet_scale", "0.5"), 0.5, 0.5, 2.0),
             opacity=_float_clamped(config.get("pet_opacity", "1.0"), 1.0, 0.2, 1.0),
             always_on_top=_truthy(config.get("pet_always_on_top", "1"), default=True),
             click_through=_truthy(config.get("pet_click_through", "0")),

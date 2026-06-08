@@ -24,11 +24,17 @@ from app.danmu_tts import (
     clamp_read_interval_sec,
     normalize_tts_voice,
     resolve_tts_config,
-    synthesize_mimo_tts,
+    synthesize_tts,
 )
 from app.danmu_tts_playback import DanmuTtsPlayback
 from app.model_providers import normalize_endpoint
-from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI, validate_custom_tts_fields
+from app.tts_providers import (
+    TTS_PROVIDER_CUSTOM_OPENAI,
+    TTS_PROVIDER_DASHSCOPE_QWEN,
+    TTS_PROVIDER_DOUBAO,
+    TTS_PROVIDER_MIMO,
+    validate_custom_tts_fields,
+)
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -69,7 +75,13 @@ def danmu_read_enabled(config) -> bool:
 
 def _normalize_tts_provider(value: object) -> str:
     raw = str(value or "").strip()
-    if raw in ("", "mimo", TTS_PROVIDER_CUSTOM_OPENAI):
+    if raw in ("", "mimo", TTS_PROVIDER_MIMO):
+        return ""
+    if raw in (
+        TTS_PROVIDER_DOUBAO,
+        TTS_PROVIDER_DASHSCOPE_QWEN,
+        TTS_PROVIDER_CUSTOM_OPENAI,
+    ):
         return raw
     return TTS_PROVIDER_CUSTOM_OPENAI
 
@@ -96,7 +108,7 @@ class _DanmuTtsRunnable(QRunnable):
 
     def run(self) -> None:
         try:
-            wav = synthesize_mimo_tts(
+            wav = synthesize_tts(
                 self._api_key,
                 self._text,
                 style_prompt=self._style_prompt,
@@ -190,16 +202,11 @@ class DanmuReadService(QObject):
             items["danmu_read_interval_sec"] = str(
                 clamp_read_interval_sec(patch.get("interval_sec"))
             )
-        if "voice" in patch:
-            items["tts_voice"] = normalize_tts_voice(str(patch.get("voice") or ""))
-        if "style_prompt" in patch:
-            items["tts_style_prompt"] = str(patch.get("style_prompt", ""))
-
         provider = _normalize_tts_provider(patch.get("provider", ""))
         endpoint = normalize_endpoint(str(patch.get("endpoint") or ""))
         model_id = str(patch.get("model_id") or "").strip()
         if "provider" in patch or "endpoint" in patch or "model_id" in patch:
-            if provider in ("", "mimo") and not endpoint and not model_id:
+            if not provider and not endpoint and not model_id:
                 items["tts_provider"] = ""
                 items["tts_endpoint"] = ""
                 items["tts_model_id"] = ""
@@ -207,8 +214,27 @@ class DanmuReadService(QObject):
                 resolved_provider = provider or TTS_PROVIDER_CUSTOM_OPENAI
                 validate_custom_tts_fields(resolved_provider, endpoint, model_id)
                 items["tts_provider"] = resolved_provider
-                items["tts_endpoint"] = endpoint
+                items["tts_endpoint"] = (
+                    "" if resolved_provider in (TTS_PROVIDER_DOUBAO, TTS_PROVIDER_DASHSCOPE_QWEN) else endpoint
+                )
                 items["tts_model_id"] = model_id
+
+        if "voice" in patch:
+            eff_provider = items.get("tts_provider", config.get("tts_provider") or "")
+            eff_model = items.get("tts_model_id", config.get("tts_model_id") or "")
+            if not eff_provider and not eff_model:
+                resolved_tmp = resolve_tts_config(config)
+                eff_provider = resolved_tmp.provider
+                eff_model = resolved_tmp.model
+            items["tts_voice"] = normalize_tts_voice(
+                str(patch.get("voice") or ""),
+                provider=eff_provider or TTS_PROVIDER_MIMO,
+                model_id=eff_model,
+            )
+        if "style_prompt" in patch:
+            items["tts_style_prompt"] = str(patch.get("style_prompt", ""))
+        if "app_id" in patch:
+            items["tts_app_id"] = str(patch.get("app_id") or "").strip()
 
         if items:
             config.set_batch(items)
@@ -242,8 +268,6 @@ class DanmuReadService(QObject):
             return {"ok": False, "message": "请先填写 TTS API Key（可直接试听，保存后用于定时朗读）"}
         if self._playback.is_busy() or self._tts_in_flight:
             return {"ok": False, "message": "正在播放或合成，请稍后再试听"}
-        voice = normalize_tts_voice(config.get("tts_voice", ""))
-        style = config.get("tts_style_prompt", "")
         try:
             resolved = resolve_tts_config(
                 config,
@@ -253,9 +277,15 @@ class DanmuReadService(QObject):
             )
         except ValueError as exc:
             return {"ok": False, "message": str(exc)}
+        voice = normalize_tts_voice(
+            config.get("tts_voice", ""),
+            provider=resolved.provider,
+            model_id=resolved.model,
+        )
+        style = config.get("tts_style_prompt", "")
         self._tts_in_flight = True
         try:
-            wav = synthesize_mimo_tts(
+            wav = synthesize_tts(
                 api_key,
                 TTS_PROBE_TEXT,
                 style_prompt=style,
@@ -297,13 +327,17 @@ class DanmuReadService(QObject):
         candidates = [t for t in texts if t != self._last_text] or texts
         text = random.choice(candidates)
         self._last_text = text
-        voice = normalize_tts_voice(app.config.get("tts_voice", ""))
         style = app.config.get("tts_style_prompt", "")
         try:
             resolved = resolve_tts_config(app.config)
         except ValueError as exc:
             self._log_skip_once("bad_tts_config", f"TTS 配置无效，跳过朗读：{exc}")
             return
+        voice = normalize_tts_voice(
+            app.config.get("tts_voice", ""),
+            provider=resolved.provider,
+            model_id=resolved.model,
+        )
         preview = text if len(text) <= 24 else f"{text[:24]}..."
         app.logger.info("danmu read: synthesizing %s", preview)
         self._tts_in_flight = True
@@ -354,7 +388,12 @@ def export_danmu_read_config(config) -> dict[str, object]:
         "interval_sec": clamp_read_interval_sec(
             config.get("danmu_read_interval_sec", "10")
         ),
-        "voice": normalize_tts_voice(config.get("tts_voice", "")),
+        "voice": normalize_tts_voice(
+            config.get("tts_voice", ""),
+            provider=resolved.provider,
+            model_id=resolved.model,
+        ),
+        "app_id": (config.get("tts_app_id") or "").strip(),
         "style_prompt": config.get("tts_style_prompt", ""),
         "api_key": MASKED_API_KEY if key else "",
         "provider": stored_provider,

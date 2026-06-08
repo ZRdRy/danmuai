@@ -124,7 +124,7 @@ def request_doubao(
             scene_generation=scene_generation,
         )
     endpoint, api_key, model, _ = resolved
-    temperature = worker.config.get_float("temperature", 0.7)
+    temperature = worker.config.get_float("temperature", 0.8)
     configured_max = worker.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
     max_output_tokens = resolve_danmu_max_output_tokens(configured_max, use_thinking=False)
 
@@ -303,7 +303,7 @@ def request_openai(
             scene_generation=scene_generation,
         )
     endpoint, api_key, model, api_mode = resolved
-    temperature = worker.config.get_float("temperature", 0.7)
+    temperature = worker.config.get_float("temperature", 0.8)
     configured_max = worker.config.get_int("max_tokens", DEFAULT_MAX_TOKENS)
     caps = get_capabilities_for_model(model, endpoint, api_mode)
     max_tokens = resolve_danmu_max_output_tokens(

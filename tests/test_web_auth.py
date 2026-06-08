@@ -234,11 +234,13 @@ def test_export_web_config_defaults():
     assert "custom_models" not in data
 
     doubao = get_provider("doubao")
-    assert data["api_endpoint"] == doubao.default_endpoint
-    assert data["api_mode"] == "doubao"
-    assert data["model"] == default_catalog_model_id("doubao")
+    assert data["api_endpoint"] == ""
+    assert data["api_mode"] == "openai"
+    assert data["model"] == default_catalog_model_id("custom_openai")
 
     assert data["mic_api_endpoint"] == doubao.default_endpoint
+    assert data["temperature"] == "0.8"
+    assert data["pet_scale"] == "0.5"
 
     for key in WEB_CONFIG_KEYS:
         if key in ("api_endpoint", "model", "mic_api_endpoint"):

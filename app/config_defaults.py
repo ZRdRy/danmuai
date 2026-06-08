@@ -39,8 +39,8 @@ DEFAULT_LANGUAGE = "zh"
 
 # String values aligned with runtime fallbacks in main.py / danmu_engine / ai_client.
 CONFIG_DEFAULTS: dict[str, str] = {
-    "api_mode": "doubao",
-    "temperature": "0.7",
+    "api_mode": "openai",
+    "temperature": "0.8",
     "max_tokens": "512",
     "use_thinking": "0",
     "danmu_speed": "2",
@@ -95,6 +95,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "tts_provider": "",
     "tts_endpoint": "",
     "tts_model_id": "",
+    "tts_app_id": "",
     "console_theme": "light",
     # W-FP-V2-001：弹幕渲染模式（互斥）
     "danmu_render_mode": "scrolling",
@@ -113,7 +114,7 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "pet_visible": "0",
     "pet_asset_source": "builtin",
     "pet_asset_path": "",
-    "pet_scale": "1.0",
+    "pet_scale": "0.5",
     "pet_opacity": "1.0",
     "pet_always_on_top": "1",
     "pet_click_through": "0",
@@ -124,15 +125,21 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "pet_command_apply_count": "1",
 }
 
-# 首装工厂默认服务商（与 model_providers doubao 预设一致）
-_DEFAULT_PROVIDER_ID = "doubao"
+# 首装视觉 API 默认服务商（与 model_providers.DEFAULT_PROVIDER_ID 一致）
+_DEFAULT_PROVIDER_ID = "custom_openai"
+# 麦克风「恢复默认」仍使用火山方舟预设地址
+_DEFAULT_MIC_PROVIDER_ID = "doubao"
 
 
-def _default_api_endpoint() -> str:
+def _default_api_endpoint(provider_id: str = _DEFAULT_PROVIDER_ID) -> str:
     from app.model_providers import get_provider
 
-    spec = get_provider(_DEFAULT_PROVIDER_ID)
+    spec = get_provider(provider_id)
     return spec.default_endpoint if spec else ""
+
+
+def _default_mic_api_endpoint() -> str:
+    return _default_api_endpoint(_DEFAULT_MIC_PROVIDER_ID)
 
 
 def _default_model_id() -> str:
@@ -152,7 +159,7 @@ def export_web_config_defaults() -> dict[str, str]:
     defaults["api_endpoint"] = _default_api_endpoint()
     default_model = _default_model_id()
     defaults["model"] = default_model
-    defaults["mic_api_endpoint"] = _default_api_endpoint()
+    defaults["mic_api_endpoint"] = _default_mic_api_endpoint()
     return defaults
 
 

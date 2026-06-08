@@ -26,6 +26,7 @@ import {
   initNormalBatchControls,
   initFloatingPanelV2Controls,
   initRestoreDefaultsControls,
+  initContentPageFieldHints,
   initSettingsFieldHints,
   initSettingsTabs,
   initSettingsUiMode,
@@ -81,6 +82,7 @@ import {
 } from './modules/app-update-banner.js';
 
 let danmuReadConfigCache = null;
+let danmuReadCatalog = null;
 
 function showToast(message, isError = false) {
   const el = document.getElementById('toast');
@@ -110,54 +112,147 @@ window.addEventListener('unhandledrejection', (event) => {
   showToast(`操作失败: ${message}`, true);
 });
 
-function handleDanmuReadProviderChange() {
-  const providerEl = document.getElementById('danmuReadProvider');
-  if (!providerEl) return;
-  if (providerEl.value === 'custom_openai') {
-    providerEl.value = '';
-    showToast('非常抱歉，该功能将在明日开发完成');
+function getDanmuReadCatalogProvider(providerId) {
+  const pid = providerId || '';
+  const list = danmuReadCatalog?.providers || [];
+  return list.find((p) => p.id === pid || (!pid && p.id === 'mimo')) || null;
+}
+
+function populateDanmuReadModelSelect(providerId, selectedModelId) {
+  const modelSelect = document.getElementById('danmuReadModelSelect');
+  if (!modelSelect) return;
+  const cat = getDanmuReadCatalogProvider(providerId);
+  modelSelect.innerHTML = '';
+  const models = cat?.models || [];
+  models.forEach((m) => {
+    if (!m.id && providerId === 'custom_openai') return;
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.label || m.id;
+    modelSelect.appendChild(opt);
+  });
+  if (selectedModelId && [...modelSelect.options].some((o) => o.value === selectedModelId)) {
+    modelSelect.value = selectedModelId;
+  } else if (modelSelect.options.length) {
+    modelSelect.selectedIndex = 0;
   }
+}
+
+function populateDanmuReadVoiceSelect(providerId, modelId, selectedVoice) {
+  const voiceEl = document.getElementById('danmuReadVoice');
+  if (!voiceEl) return;
+  const cat = getDanmuReadCatalogProvider(providerId);
+  let voices = [];
+  if (cat) {
+    const model = cat.models?.find((m) => m.id === modelId) || cat.models?.[0];
+    voices = model?.voices || [];
+  }
+  voiceEl.innerHTML = '';
+  voices.forEach((v) => {
+    if (!v.id && providerId === 'custom_openai') {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = v.label || '自定义';
+      voiceEl.appendChild(opt);
+      return;
+    }
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.label || v.id;
+    voiceEl.appendChild(opt);
+  });
+  if (selectedVoice && [...voiceEl.options].some((o) => o.value === selectedVoice)) {
+    voiceEl.value = selectedVoice;
+  } else if (voiceEl.options.length) {
+    voiceEl.selectedIndex = 0;
+  }
+}
+
+function updateDanmuReadStyleHint(providerId, modelId) {
+  const hint = document.getElementById('danmuReadStyleHint');
+  if (!hint) return;
+  const cat = getDanmuReadCatalogProvider(providerId);
+  const model = cat?.models?.find((m) => m.id === modelId);
+  if (model?.supports_style) {
+    hint.textContent = '当前模型支持风格指令，将用于控制语气与情感。';
+  } else if (!providerId) {
+    hint.textContent = 'MiMo：作为 user 消息控制语气；留空则仅朗读弹幕正文。';
+  } else {
+    hint.textContent = '当前模型可能忽略风格指令，留空则仅朗读弹幕正文。';
+  }
+}
+
+function handleDanmuReadProviderChange() {
   syncDanmuReadCustomFieldsUi();
+}
+
+function handleDanmuReadModelChange() {
+  const provider = document.getElementById('danmuReadProvider')?.value || '';
+  const modelId = document.getElementById('danmuReadModelSelect')?.value || '';
+  const voice = document.getElementById('danmuReadVoice')?.value || '';
+  populateDanmuReadVoiceSelect(provider, modelId, voice);
+  updateDanmuReadStyleHint(provider, modelId);
+  const modelLabel = document.getElementById('danmuReadModelLabel');
+  const endpointLabel = document.getElementById('danmuReadEndpointLabel');
+  if (modelLabel) modelLabel.textContent = modelId || 'mimo-v2.5-tts';
+  if (endpointLabel) endpointLabel.textContent = provider === 'custom_openai' ? '自定义' : provider || 'MiMo';
 }
 
 function syncDanmuReadCustomFieldsUi() {
   const provider = document.getElementById('danmuReadProvider')?.value || '';
-  const endpointEl = document.getElementById('danmuReadEndpoint');
-  const modelEl = document.getElementById('danmuReadModelId');
   const useCustom = provider === 'custom_openai';
-  if (endpointEl) {
-    endpointEl.disabled = !useCustom;
-    if (!useCustom) endpointEl.value = '';
-  }
-  if (modelEl) {
-    modelEl.disabled = !useCustom;
-    if (!useCustom) modelEl.value = '';
+  const usePreset = provider === 'doubao' || provider === 'dashscope_qwen';
+  const modelSelectWrap = document.getElementById('danmuReadModelSelectWrap');
+  const customEndpointWrap = document.getElementById('danmuReadCustomEndpointWrap');
+  const customModelWrap = document.getElementById('danmuReadCustomModelWrap');
+  const appIdWrap = document.getElementById('danmuReadAppIdWrap');
+  if (modelSelectWrap) modelSelectWrap.hidden = useCustom;
+  if (customEndpointWrap) customEndpointWrap.hidden = !useCustom;
+  if (customModelWrap) customModelWrap.hidden = !useCustom;
+  if (appIdWrap) appIdWrap.hidden = provider !== 'doubao';
+  if (usePreset || !provider) {
+    const modelId = document.getElementById('danmuReadModelSelect')?.value || '';
+    populateDanmuReadModelSelect(provider, modelId);
+    handleDanmuReadModelChange();
   }
 }
 
 function collectDanmuReadCustomPayload() {
   const provider = document.getElementById('danmuReadProvider')?.value || '';
   const endpoint = document.getElementById('danmuReadEndpoint')?.value?.trim() || '';
-  const modelId = document.getElementById('danmuReadModelId')?.value?.trim() || '';
-  const payload = { provider, endpoint, model_id: modelId };
-  if (!provider && !endpoint && !modelId) {
-    return { provider: '', endpoint: '', model_id: '' };
+  const customModelId = document.getElementById('danmuReadModelId')?.value?.trim() || '';
+  const presetModelId = document.getElementById('danmuReadModelSelect')?.value?.trim() || '';
+  const appId = document.getElementById('danmuReadAppId')?.value?.trim() || '';
+  if (!provider) {
+    return { provider: '', endpoint: '', model_id: '', app_id: '' };
   }
-  return payload;
+  if (provider === 'custom_openai') {
+    return { provider, endpoint, model_id: customModelId, app_id: '' };
+  }
+  return { provider, endpoint: '', model_id: presetModelId, app_id: appId };
 }
 
 function validateDanmuReadCustomFields(payload) {
   const provider = payload.provider || '';
   const endpoint = payload.endpoint || '';
   const modelId = payload.model_id || '';
-  if (!provider && !endpoint && !modelId) return true;
-  if (!endpoint) {
-    showToast('请填写 API 地址', true);
-    return false;
+  if (!provider) return true;
+  if (provider === 'doubao' || provider === 'dashscope_qwen') {
+    if (!modelId) {
+      showToast('请选择 TTS 模型', true);
+      return false;
+    }
+    return true;
   }
-  if (!modelId) {
-    showToast('请填写模型名称', true);
-    return false;
+  if (provider === 'custom_openai') {
+    if (!endpoint) {
+      showToast('请填写 API 地址', true);
+      return false;
+    }
+    if (!modelId) {
+      showToast('请填写模型名称', true);
+      return false;
+    }
   }
   return true;
 }
@@ -172,24 +267,36 @@ function applyDanmuReadForm(cfg) {
   const providerEl = document.getElementById('danmuReadProvider');
   const endpointEl = document.getElementById('danmuReadEndpoint');
   const modelIdEl = document.getElementById('danmuReadModelId');
+  const appIdEl = document.getElementById('danmuReadAppId');
   const modelLabel = document.getElementById('danmuReadModelLabel');
   const endpointLabel = document.getElementById('danmuReadEndpointLabel');
   if (enabledEl) enabledEl.checked = Boolean(cfg.enabled);
   if (intervalEl) intervalEl.value = String(cfg.interval_sec ?? 10);
   if (keyEl) keyEl.value = cfg.api_key || '';
-  if (voiceEl && cfg.voice) voiceEl.value = cfg.voice;
   if (styleEl) styleEl.value = cfg.style_prompt || '';
-  if (providerEl) {
-    providerEl.value = '';
-  }
+  const storedProvider = cfg.provider || (cfg.use_custom_model ? 'custom_openai' : '');
+  if (providerEl) providerEl.value = storedProvider || '';
   if (endpointEl) endpointEl.value = cfg.custom_endpoint || '';
   if (modelIdEl) modelIdEl.value = cfg.custom_model_id || '';
+  if (appIdEl) appIdEl.value = cfg.app_id || '';
+  const effProvider = storedProvider || '';
+  const effModel = cfg.custom_model_id || cfg.model_id || cfg.model || '';
+  populateDanmuReadModelSelect(effProvider, effModel);
   syncDanmuReadCustomFieldsUi();
+  populateDanmuReadVoiceSelect(effProvider, effModel, cfg.voice || '');
+  updateDanmuReadStyleHint(effProvider, effModel);
   if (modelLabel) modelLabel.textContent = cfg.model || 'mimo-v2.5-tts';
-  if (endpointLabel) endpointLabel.textContent = cfg.endpoint || '-';
+  if (endpointLabel) endpointLabel.textContent = cfg.endpoint || '—';
+}
+
+async function ensureDanmuReadCatalog() {
+  if (danmuReadCatalog) return danmuReadCatalog;
+  danmuReadCatalog = await apiFetch('/api/danmu-read/catalog');
+  return danmuReadCatalog;
 }
 
 async function loadDanmuReadPage() {
+  await ensureDanmuReadCatalog();
   const cfg = await apiFetch('/api/danmu-read/config');
   applyDanmuReadForm(cfg);
   const status = document.getElementById('danmuReadStatus');
@@ -237,9 +344,13 @@ async function probeDanmuRead() {
 }
 
 function initDanmuReadPage() {
+  ensureDanmuReadCatalog().catch(() => {});
   document
     .getElementById('danmuReadProvider')
     ?.addEventListener('change', handleDanmuReadProviderChange);
+  document
+    .getElementById('danmuReadModelSelect')
+    ?.addEventListener('change', handleDanmuReadModelChange);
   document.getElementById('btnSaveDanmuRead')?.addEventListener('click', () => {
     saveDanmuReadSettings().catch((error) => showToast(error.message, true));
   });
@@ -335,6 +446,7 @@ async function init() {
   initSettingsTabs();
   initSettingsUiMode();
   initSettingsFieldHints();
+  initContentPageFieldHints();
   initSidebarNavFloatingHints();
   initNormalBatchControls();
   initDanmuReadPage();

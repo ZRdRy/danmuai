@@ -514,7 +514,22 @@ class DanmuApp(
         fallback/mic 可 skip_dedup。
         锚点弹幕滚到 75% 屏宽处的时间写入 batch.next_generation_time（debug/批次元数据）。
         拒因（去重/入口过载）不入历史。
+        floating_panel spacing 阻塞时 peek 不 pop，条目留在 reply_buffer 稍后重试。
         """
+        if self._danmu_render_mode() == "floating_panel":
+            queued_peek = self.reply_buffer.peek()
+            if queued_peek is None:
+                return
+            fp_engine = self.__dict__.get("floating_panel_engine")
+            fp_overlay = self.__dict__.get("floating_panel_overlay")
+            if fp_engine is not None and fp_overlay is not None:
+                est_h = fp_overlay.estimate_item_height()
+                if not fp_engine.can_accept_new_item(est_h):
+                    delay = fp_engine.estimate_entry_delay_ms(est_h)
+                    if not self.reply_buffer.is_empty():
+                        self.reply_timer.start(max(50, delay))
+                    return
+
         queued = self.reply_buffer.pop()
         if queued is None:
             return

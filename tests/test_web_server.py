@@ -97,6 +97,29 @@ def test_web_settings_ui_provider_naming_unified():
     assert "模型配置档案" in settings_js
 
 
+def test_web_content_page_field_hints_wired():
+    from app.bundle_paths import project_root
+
+    root = project_root()
+    hints_js = (root / "web" / "static" / "modules" / "settings-hints.js").read_text(
+        encoding="utf-8"
+    )
+    app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    settings_js = (root / "web" / "static" / "modules" / "settings.js").read_text(
+        encoding="utf-8"
+    )
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "initContentPageFieldHints" in hints_js
+    assert "liveTopicInput" in hints_js
+    assert "memeBarrageEnabled" in hints_js
+    assert "petScale" in hints_js
+    assert "initContentPageFieldHints()" in app_js
+    assert "initContentPageFieldHints" in settings_js
+    assert 'id="hintMemeCategoryTitle"' in html
+    assert 'for="personaSelect"' in html
+    assert 'id="hintPersonaActiveTitle"' in html
+
+
 def test_web_app_js_provider_switch_resets_vision_model():
     from app.bundle_paths import project_root
 

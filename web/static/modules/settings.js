@@ -65,6 +65,7 @@ import {
   configureSettingsFonts,
 } from './settings-fonts.js';
 import {
+  initContentPageFieldHints,
   initSettingsFieldHints,
   initSidebarNavFloatingHints,
 } from './settings-hints.js';
@@ -120,6 +121,7 @@ export {
 export { loadCustomModels } from './settings-custom-models.js';
 export { loadFontFamilies, uploadFontFile } from './settings-fonts.js';
 export {
+  initContentPageFieldHints,
   initSettingsFieldHints,
   initSidebarNavFloatingHints,
 } from './settings-hints.js';

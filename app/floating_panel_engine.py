@@ -2,6 +2,8 @@
 
 W-FP-V3-002：修复 V2 的“堆叠停留 + 固定写死速度”语义，改为接线
 ``floating_panel_speed`` 的持续向上滚动模型。
+
+W-FP-V3-003：竖向 min_gap 准入与独立调度；间距逻辑与横向 ``DanmuEngine._calc_min_gap`` 无关。
 """
 from __future__ import annotations
 
@@ -20,6 +22,11 @@ _DEFAULT_SPEED_SCALE = 1.5
 _MIN_SPEED_SCALE = 0.5
 _MAX_SPEED_SCALE = 5.0
 _PIXELS_PER_SECOND_BASE = 120.0
+_MIN_GAP_BASE = 12.0
+_ENTRY_DELAY_MS_MIN = 50
+_ENTRY_DELAY_MS_MAX = 1000
+_ENTRY_DELAY_MS_READY = 100
+_ENTRY_FRAME_BUFFER_MS = 16
 
 
 @dataclass
@@ -106,6 +113,36 @@ class FloatingPanelEngine:
         while len(self._items) > self._max_items:
             self._items.pop(0)
 
+    @staticmethod
+    def min_vertical_gap(item_height: float) -> float:
+        """竖向最小间距（内部常量，非配置项）。"""
+        height = max(24.0, float(item_height))
+        return max(_MIN_GAP_BASE, height * 0.25)
+
+    def _trailing_bottom_edge(self) -> float:
+        if not self._items:
+            return 0.0
+        return max(item.current_y + item.height for item in self._items)
+
+    def can_accept_new_item(self, item_height: float) -> bool:
+        """末条底边 + min_gap 不超过面板底边时可从底部进入。"""
+        if not self._items:
+            return True
+        min_gap = self.min_vertical_gap(item_height)
+        return self._trailing_bottom_edge() + min_gap <= self._panel_height
+
+    def estimate_entry_delay_ms(self, item_height: float) -> int:
+        """估算底部留出 min_gap 所需等待毫秒数；可进入时返回较短固定节奏。"""
+        if self.can_accept_new_item(item_height):
+            return _ENTRY_DELAY_MS_READY
+        min_gap = self.min_vertical_gap(item_height)
+        deficit_px = (self._trailing_bottom_edge() + min_gap) - self._panel_height
+        if deficit_px <= 0.0:
+            return _ENTRY_DELAY_MS_READY
+        speed = max(self._pixels_per_second, 1.0)
+        delay_ms = int(deficit_px / speed * 1000.0) + _ENTRY_FRAME_BUFFER_MS
+        return max(_ENTRY_DELAY_MS_MIN, min(_ENTRY_DELAY_MS_MAX, delay_ms))
+
     def add_text(
         self,
         content: str,
@@ -126,7 +163,9 @@ class FloatingPanelEngine:
 
         ts = 0.0 if now is None else float(now)
         height = max(24.0, float(item_height))
-        # 新条目始终从面板底部基线加入，不因已有条目做瞬间重排。
+        if not self.can_accept_new_item(height):
+            return None
+        # 准入后从面板底部基线加入；竖向间距由 can_accept 时机保证，不做瞬间重排。
         start_y = self._panel_height
         item = FloatingPanelItem(
             content=text,

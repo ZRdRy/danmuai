@@ -49,6 +49,9 @@ def test_first_run_seeds_config_defaults(tmp_path):
     assert store.get("hotkey") == "Ctrl+Shift+B"
     assert store.get("language") == "zh"
     assert store.get("danmu_pool_use_custom") == "0"
+    assert store.get("api_mode") == "openai"
+    assert store.get("temperature") == "0.8"
+    assert store.get("pet_scale") == "0.5"
     store.close()
 
 

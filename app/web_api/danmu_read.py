@@ -17,9 +17,15 @@ from fastapi import HTTPException
 
 from app.application.config_service import MASKED_API_KEY
 from app.danmu_read_service import export_danmu_read_config
-from app.danmu_tts import normalize_tts_voice
+from app.tts_catalog import list_catalog_for_api
+from app.tts_providers import (
+    TTS_PROVIDER_CUSTOM_OPENAI,
+    TTS_PROVIDER_DASHSCOPE_QWEN,
+    TTS_PROVIDER_DOUBAO,
+    TTS_PROVIDER_MIMO,
+    normalize_tts_voice,
+)
 from app.model_providers import normalize_endpoint
-from app.tts_providers import TTS_PROVIDER_CUSTOM_OPENAI
 
 if TYPE_CHECKING:
     from main import DanmuApp
@@ -27,6 +33,10 @@ if TYPE_CHECKING:
 
 def get_config(app: "DanmuApp") -> dict[str, object]:
     return export_danmu_read_config(app.config)
+
+
+def get_catalog() -> dict[str, object]:
+    return {"providers": list_catalog_for_api()}
 
 
 def save_config(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, object]:
@@ -61,8 +71,17 @@ def normalize_put_payload(body: dict[str, Any]) -> dict[str, Any]:
         out["enabled"] = bool(body.get("enabled"))
     if "interval_sec" in body:
         out["interval_sec"] = body.get("interval_sec")
+    provider = str(body.get("provider") or "").strip()
+    model_id = _pick_model_id(body) if ("model_id" in body or "custom_model_id" in body) else ""
     if "voice" in body:
-        out["voice"] = normalize_tts_voice(str(body.get("voice") or ""))
+        eff_provider = provider or TTS_PROVIDER_MIMO
+        if provider in ("", "mimo"):
+            eff_provider = TTS_PROVIDER_MIMO
+        out["voice"] = normalize_tts_voice(
+            str(body.get("voice") or ""),
+            provider=eff_provider,
+            model_id=model_id,
+        )
     if "style_prompt" in body:
         out["style_prompt"] = str(body.get("style_prompt") or "")
     if "api_key" in body:
@@ -75,6 +94,8 @@ def normalize_put_payload(body: dict[str, Any]) -> dict[str, Any]:
         out["endpoint"] = _pick_endpoint(body)
     if "model_id" in body or "custom_model_id" in body:
         out["model_id"] = _pick_model_id(body)
+    if "app_id" in body:
+        out["app_id"] = str(body.get("app_id") or "").strip()
     return out
 
 
@@ -94,7 +115,12 @@ def normalize_probe_payload(payload: dict[str, Any] | None) -> dict[str, str | N
             overrides["api_key_override"] = key
     if "provider" in payload:
         provider = str(payload.get("provider") or "").strip()
-        overrides["provider_override"] = provider or TTS_PROVIDER_CUSTOM_OPENAI
+        if provider in ("", "mimo", TTS_PROVIDER_MIMO):
+            overrides["provider_override"] = ""
+        elif provider in (TTS_PROVIDER_DOUBAO, TTS_PROVIDER_DASHSCOPE_QWEN):
+            overrides["provider_override"] = provider
+        else:
+            overrides["provider_override"] = provider or TTS_PROVIDER_CUSTOM_OPENAI
     if "endpoint" in payload or "custom_endpoint" in payload:
         overrides["endpoint_override"] = _pick_endpoint(payload)
     if "model_id" in payload or "custom_model_id" in payload:

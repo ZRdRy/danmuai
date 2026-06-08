@@ -14,8 +14,8 @@ export function guessProviderIdFromEndpoint(endpoint, apiMode) {
     if (value.includes(fragment)) return id;
   }
   const mode = apiMode ?? document.getElementById('api_mode')?.value ?? '';
-  if (mode === 'doubao') return 'doubao';
-  return '';
+  if (mode === 'doubao') return 'custom_doubao';
+  return 'custom_openai';
 }
 
 const MANUAL_PROVIDER_LABEL = '手动填写';

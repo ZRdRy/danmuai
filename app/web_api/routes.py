@@ -328,6 +328,10 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
     def get_danmu_read_config():
         return read_api.get_config(bridge.danmu_app)
 
+    @app.get("/api/danmu-read/catalog")
+    def get_danmu_read_catalog():
+        return read_api.get_catalog()
+
     @app.put("/api/danmu-read/config")
     def put_danmu_read_config(
         body: DanmuReadConfigPayload,

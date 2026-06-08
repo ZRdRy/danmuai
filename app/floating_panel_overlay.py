@@ -132,6 +132,10 @@ class FloatingPanelOverlay(QWidget):
             return 40.0
         return float(self._font_metrics.height()) + _CARD_V_PAD * 2
 
+    def estimate_item_height(self) -> float:
+        """供主链路 peek 阶段估算竖向准入，避免访问私有方法。"""
+        return self._estimate_item_height()
+
     def add_danmu_text(
         self,
         content: str,

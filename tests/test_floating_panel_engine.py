@@ -1,4 +1,4 @@
-"""W-FP-V3-002：FloatingPanelEngine 连续上滚模型测试。"""
+"""W-FP-V3-002/003：FloatingPanelEngine 连续上滚与竖向间距测试。"""
 from __future__ import annotations
 
 from app.config_store import ConfigStore
@@ -12,6 +12,23 @@ def _engine(tmp_path, **overrides) -> FloatingPanelEngine:
     engine = FloatingPanelEngine(store)
     engine.set_panel_height(400.0)
     return engine
+
+
+def _wait_until_can_accept(engine: FloatingPanelEngine, height: float, *, max_steps: int = 200) -> None:
+    steps = 0
+    while not engine.can_accept_new_item(height) and steps < max_steps:
+        engine.update(0.05, now=float(steps))
+        steps += 1
+    assert engine.can_accept_new_item(height)
+
+
+def _pairwise_vertical_gaps(engine: FloatingPanelEngine) -> list[float]:
+    items = sorted(engine.visible_items(), key=lambda it: it.current_y)
+    gaps: list[float] = []
+    for idx in range(len(items) - 1):
+        upper, lower = items[idx], items[idx + 1]
+        gaps.append(lower.current_y - (upper.current_y + upper.height))
+    return gaps
 
 
 def test_add_text_returns_item(workspace_tmp):
@@ -29,13 +46,48 @@ def test_new_item_starts_at_bottom(workspace_tmp):
     assert item.current_y == 400.0
 
 
-def test_second_item_also_starts_from_bottom_baseline(workspace_tmp):
+def test_can_accept_empty_panel(workspace_tmp):
     engine = _engine(workspace_tmp)
-    first = engine.add_text("one", item_height=40.0, now=0.0)
-    second = engine.add_text("two", item_height=40.0, now=0.1)
-    assert first is not None and second is not None
-    assert first.current_y == 400.0
+    assert engine.can_accept_new_item(40.0) is True
+
+
+def test_second_item_blocked_until_trailing_scrolls_up(workspace_tmp):
+    engine = _engine(workspace_tmp)
+    height = 40.0
+    first = engine.add_text("one", item_height=height, now=0.0)
+    assert first is not None
+    assert engine.can_accept_new_item(height) is False
+    assert engine.add_text("two", item_height=height, now=0.1) is None
+
+    _wait_until_can_accept(engine, height)
+    second = engine.add_text("two", item_height=height, now=1.0)
+    assert second is not None
     assert second.current_y == 400.0
+    gap = second.current_y - (first.current_y + first.height)
+    assert gap >= engine.min_vertical_gap(height) - 0.01
+
+
+def test_estimate_entry_delay_positive_when_blocked(workspace_tmp):
+    engine = _engine(workspace_tmp)
+    height = 40.0
+    assert engine.estimate_entry_delay_ms(height) == 100
+    engine.add_text("one", item_height=height, now=0.0)
+    blocked = engine.estimate_entry_delay_ms(height)
+    assert blocked > 50
+    assert blocked <= 1000
+
+
+def test_consecutive_items_vertical_gap_invariant(workspace_tmp):
+    engine = _engine(workspace_tmp)
+    height = 40.0
+    min_gap = engine.min_vertical_gap(height)
+    for idx in range(5):
+        _wait_until_can_accept(engine, height)
+        item = engine.add_text(f"line-{idx}", item_height=height, now=float(idx), skip_dedup=True)
+        assert item is not None
+        engine.update(0.08, now=float(idx) + 0.5)
+        for gap in _pairwise_vertical_gaps(engine):
+            assert gap >= min_gap - 0.01
 
 
 def test_duplicate_rejected(workspace_tmp):
@@ -46,8 +98,10 @@ def test_duplicate_rejected(workspace_tmp):
 
 def test_max_items_forces_oldest_exit(workspace_tmp):
     engine = _engine(workspace_tmp, floating_panel_max_items="3")
+    height = 30.0
     for i in range(4):
-        engine.add_text(f"line-{i}", item_height=30.0, now=0.0)
+        _wait_until_can_accept(engine, height)
+        engine.add_text(f"line-{i}", item_height=height, now=float(i))
     assert engine.visible_count() == 3
     assert engine.visible_items()[-1].content == "line-3"
     assert engine.visible_items()[0].content != "line-0"

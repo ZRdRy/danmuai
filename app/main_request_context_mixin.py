@@ -188,6 +188,16 @@ class DanmuAppRequestContextMixin:
             if current_interval > 0:
                 return current_interval
 
+        if self._danmu_render_mode() == "floating_panel":
+            fp_engine = self.__dict__.get("floating_panel_engine")
+            fp_overlay = self.__dict__.get("floating_panel_overlay")
+            if fp_engine is not None and fp_overlay is not None:
+                est_h = fp_overlay.estimate_item_height()
+                if not fp_engine.can_accept_new_item(est_h):
+                    return fp_engine.estimate_entry_delay_ms(est_h)
+                return 120
+            return 200
+
         if hasattr(self.engine, "visibility_counts"):
             visible_total, right_count = self.engine.visibility_counts()
         else:

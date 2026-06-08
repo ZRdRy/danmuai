@@ -74,7 +74,7 @@ function fillPetForm(data) {
   const applyCount = document.getElementById('petCommandApplyCount');
 
   if (enabled) enabled.checked = Boolean(data.enabled);
-  if (scale) scale.value = String(data.scale ?? 1);
+  if (scale) scale.value = String(data.scale ?? 0.5);
   if (opacity) opacity.value = String(data.opacity ?? 1);
   if (alwaysOnTop) alwaysOnTop.checked = Boolean(data.always_on_top);
   if (clickThrough) clickThrough.checked = Boolean(data.click_through);
@@ -102,7 +102,7 @@ function fillPetForm(data) {
 function collectPetPayload() {
   return {
     enabled: Boolean(document.getElementById('petEnabled')?.checked),
-    scale: parseFloat(document.getElementById('petScale')?.value) || 1,
+    scale: parseFloat(document.getElementById('petScale')?.value) || 0.5,
     opacity: parseFloat(document.getElementById('petOpacity')?.value) || 1,
     always_on_top: Boolean(document.getElementById('petAlwaysOnTop')?.checked),
     click_through: Boolean(document.getElementById('petClickThrough')?.checked),

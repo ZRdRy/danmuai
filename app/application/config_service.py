@@ -341,7 +341,7 @@ class ConfigService:
                 scale = float(items["pet_scale"])
                 items["pet_scale"] = str(max(0.5, min(scale, 2.0)))
             except (TypeError, ValueError):
-                items["pet_scale"] = "1.0"
+                items["pet_scale"] = "0.5"
         if "pet_opacity" in items:
             try:
                 opacity = float(items["pet_opacity"])
