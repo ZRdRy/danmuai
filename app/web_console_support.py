@@ -45,6 +45,8 @@ class WebStatusSnapshot:
     runtime_sec: float = 0.0
     error_message: str = ""
     is_error: bool = False
+    overlay_compat_warning: str = ""
+    screen_index_fallback_warning: str = ""
     live_analyzing: bool = False
     live_local_fallback: bool = False
     live_delay_sec: float = 0.0

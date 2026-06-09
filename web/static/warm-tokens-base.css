@@ -17,6 +17,7 @@
  * 不变量：
  *   - 仅修改 token + 工具类与本仓库特有控件；不得影响 Tailwind 通用类
  *   - 所有颜色引用 token，不写死 hex
+ *   - tooltip 背景/前景使用 --tooltip-bg / --tooltip-fg，不得复用 --color-text-primary
  *   - 黑夜模式通过 [data-theme="dark"] 选择器覆盖；index.html 早期 script
  *     在 <link> 之前先读 localStorage 防止 FOUC
  */
@@ -35,6 +36,8 @@
   --color-text-dim: #9ca3af;
   --color-text-primary: #5d5757;
   --color-text-muted: #6b7280;
+  --tooltip-bg: #5d5757;
+  --tooltip-fg: #ffffff;
   --color-bg-cream: #fdfbf7;
   --border: #e5e7eb;
   --bg: var(--color-bg);
@@ -57,6 +60,8 @@
   --color-text-dim: #a8a29e;
   --color-text-primary: #f5f0eb;
   --color-text-muted: #a8a29e;
+  --tooltip-bg: #3f3a36;
+  --tooltip-fg: #f5f0eb;
   --color-bg-cream: #1c1917;
   --color-secondary: #3f3a36;
   --color-accent: #44403c;

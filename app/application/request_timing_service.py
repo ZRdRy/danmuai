@@ -27,6 +27,18 @@ class RequestTimingService:
     def clear_started(self) -> None:
         self.request_started_at_by_id.clear()
 
+    def purge_stale(self, *, now: float, max_age_sec: float = 120.0) -> int:
+        """移除超过 max_age_sec 仍未 consume 的 mark_started 条目（网络断开等孤儿请求）。"""
+        cutoff = float(now) - float(max_age_sec)
+        stale_keys = [
+            key
+            for key, started_at in self.request_started_at_by_id.items()
+            if float(started_at) < cutoff
+        ]
+        for key in stale_keys:
+            self.request_started_at_by_id.pop(key, None)
+        return len(stale_keys)
+
     def reset_rtt_history(self) -> None:
         self.rtt_history = []
 

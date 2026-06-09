@@ -10,6 +10,7 @@ const MIC_MODEL_CUSTOM_VALUE = '__mic_custom__';
 
 let catalogDeps = {
   updateMicModeHint: () => {},
+  onCatalogLoadFailed: () => {},
 };
 
 let catalogCache = { platforms: [] };
@@ -23,12 +24,17 @@ export function configureSettingsModelCatalog(deps) {
 
 export async function loadModelCatalog() {
   try {
-    catalogCache = await fetch(`${API.base}/api/model-catalog`).then((r) => r.json());
+    const res = await fetch(`${API.base}/api/model-catalog`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    catalogCache = await res.json();
   } catch (error) {
     catalogCache = { platforms: [] };
     if (!catalogLoadFailureLogged) {
       catalogLoadFailureLogged = true;
       console.warn('loadModelCatalog failed; using empty catalog fallback', error);
+      catalogDeps.onCatalogLoadFailed(error);
     }
   }
   if (!catalogCache.platforms) catalogCache.platforms = [];

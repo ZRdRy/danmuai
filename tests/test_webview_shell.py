@@ -2,6 +2,7 @@
 
 import queue
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 from app.webview_shell import (
@@ -28,7 +29,7 @@ def test_wait_for_http_server_success():
         status = 200
 
         def read(self):
-            return b'{"token":"abc","base_url":"http://127.0.0.1:18765"}'
+            return b'{"running":false,"danmu_count":0}'
 
         def __enter__(self):
             return self
@@ -40,12 +41,12 @@ def test_wait_for_http_server_success():
         assert wait_for_http_server("http://127.0.0.1:18765", timeout=1.0) is True
 
 
-def test_wait_for_http_server_rejects_missing_token():
+def test_wait_for_http_server_rejects_invalid_json():
     class FakeResp:
         status = 200
 
         def read(self):
-            return b'{"base_url":"http://127.0.0.1:18765"}'
+            return b"not-json"
 
         def __enter__(self):
             return self
@@ -345,7 +346,7 @@ def test_ensure_server_ready_verifies_http_when_startup_ok(monkeypatch):
     server.wait_ready.assert_not_called()
 
 
-def test_ensure_server_ready_false_notifies_and_optional_browser(monkeypatch):
+def test_ensure_server_ready_false_defers_without_notify(monkeypatch):
     from app import webview_shell
 
     server = MagicMock()
@@ -355,22 +356,20 @@ def test_ensure_server_ready_false_notifies_and_optional_browser(monkeypatch):
     server.bridge.danmu_app.logger = MagicMock()
 
     notified = []
-    fallbacks = []
     monkeypatch.setattr(
         webview_shell,
         "notify_web_console_failure",
         lambda app, key, **kw: notified.append((key, kw)),
     )
-    monkeypatch.setattr(webview_shell, "wait_for_http_server", lambda url, timeout: timeout == 3.0)
-    monkeypatch.setattr(
-        webview_shell,
-        "_fallback_to_system_browser",
-        lambda s, p, r: fallbacks.append((p, r)),
-    )
+    monkeypatch.setattr(webview_shell, "wait_for_http_server", lambda url, timeout: False)
+    monkeypatch.setattr(webview_shell, "_server_ready_probe_sec", lambda: 0.5)
 
+    started = time.monotonic()
     assert webview_shell._ensure_server_ready(server) is False
-    assert notified
-    assert fallbacks == []
+    assert time.monotonic() - started < 2.0
+    assert notified == []
+    server.wait_ready.assert_called_once()
+    assert server.wait_ready.call_args.kwargs["timeout"] == 0.5
 
 
 def test_fallback_to_system_browser_only_once(monkeypatch):

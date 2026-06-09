@@ -1,8 +1,16 @@
 import sqlite3
 import threading
+from base64 import b64encode
 
 import pytest
 from app.config_store import ConfigStore
+
+try:
+    from cryptography.fernet import Fernet  # noqa: F401
+
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
 
 
 def test_set_batch_writes_all_keys(tmp_path):
@@ -270,3 +278,20 @@ def test_with_write_lock_blocks_other_writer(tmp_path):
             except RuntimeError:
                 pass
         store.close()
+
+
+def test_legacy_base64_api_key_auto_upgrades_on_read(tmp_path):
+    if not _HAS_CRYPTO:
+        pytest.skip("cryptography not available")
+
+    db = tmp_path / "config.db"
+    store1 = ConfigStore(db_path=db)
+    plain = "upgrade-me"
+    store1.set("api_key_encoded", b64encode(plain.encode()).decode())
+    store1.close()
+
+    store2 = ConfigStore(db_path=db)
+    assert store2.get_api_key() == plain
+    assert store2.get("api_key_encoded", "") == ""
+    assert store2.get("api_key_encrypted", "") != ""
+    store2.close()

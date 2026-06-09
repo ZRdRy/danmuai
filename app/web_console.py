@@ -319,6 +319,9 @@ class WebConsoleServer:
         self.startup_ok = False
         self._startup_error_from_attach = False
         self._startup_failure_user_notified = False
+        # S-006: capped auto-restart state (WebConsoleServer only, not DanmuApp runtime).
+        self._restart_attempts = 0
+        self._last_restart_at = 0.0
 
     @property
     def base_url(self) -> str:
@@ -374,6 +377,7 @@ class WebConsoleServer:
         clear_startup_attach_error_if_needed(self)
 
     def stop(self) -> None:
+        """Request uvicorn shutdown; frozen builds use non-daemon thread — join in quit() (S-002)."""
         danmu_app = self.bridge.danmu_app
         danmu_app.stop_web_status_timer()
         danmu_app.detach_web_status_timer()
@@ -400,6 +404,31 @@ class WebConsoleServer:
 
     def _run_uvicorn_locked(self) -> None:
         run_uvicorn_locked(self)
+
+
+WEB_CONSOLE_MAX_RESTART_ATTEMPTS = 3
+WEB_CONSOLE_RESTART_BACKOFF_SEC = (2.0, 5.0, 10.0)
+
+
+def maybe_restart_web_console(server: WebConsoleServer) -> bool:
+    """S-006: retry dead uvicorn from main-thread status tick only (never HTTP/asyncio)."""
+    if classify_web_console_startup(server) != "failed":
+        return False
+    if server._restart_attempts >= WEB_CONSOLE_MAX_RESTART_ATTEMPTS:
+        return False
+    now = time.monotonic()
+    backoff_idx = min(server._restart_attempts, len(WEB_CONSOLE_RESTART_BACKOFF_SEC) - 1)
+    if now - server._last_restart_at < WEB_CONSOLE_RESTART_BACKOFF_SEC[backoff_idx]:
+        return False
+    server._restart_attempts += 1
+    server._last_restart_at = now
+    server.bridge.danmu_app.logger.warning(
+        "Web console auto-restart attempt %s/%s reason=web_console_auto_restart",
+        server._restart_attempts,
+        WEB_CONSOLE_MAX_RESTART_ATTEMPTS,
+    )
+    server.start()
+    return True
 
 
 def classify_web_console_startup(server: WebConsoleServer) -> WebConsoleStartupPhase:
@@ -481,8 +510,12 @@ def attach_web_console(danmu_app: "DanmuApp", port: int = DEFAULT_PORT) -> WebCo
         _notify_wait_ready_timeout(server, danmu_app)
 
     def _tick_status():
-        if classify_web_console_startup(server) == "ready":
+        phase = classify_web_console_startup(server)
+        if phase == "ready":
+            server._restart_attempts = 0
             clear_startup_attach_error_if_needed(server)
+        elif phase == "failed":
+            maybe_restart_web_console(server)
         if getattr(danmu_app, "web_bridge", None):
             danmu_app.web_bridge.publish_status()
 

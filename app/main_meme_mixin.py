@@ -19,7 +19,10 @@ _MEME_DISPLAY_MAX_PER_TICK = 2
 
 
 class _MemeBarrageBridge(QObject):
-    """QThreadPool 回调经 Qt 信号回主线程；勿在工作线程使用 QTimer.singleShot。"""
+    """QThreadPool 回调经 Qt 信号回主线程；勿在工作线程使用 QTimer.singleShot。
+
+    parent=DanmuApp（进程级单例）；随应用 quit() 停止 meme 定时器后不再接收新回调。
+    """
 
     fetch_done = pyqtSignal(object)
     fetch_failed = pyqtSignal()
@@ -37,7 +40,6 @@ class DanmuAppMemeMixin:
 
     def _init_meme_barrage_timers(self) -> None:
         self._meme_barrage_service = MemeBarrageService(self.config)
-        self._meme_ai_in_flight = False
         parent = self if isinstance(self, QObject) else None
         self._meme_barrage_bridge = _MemeBarrageBridge(parent)
         self._meme_barrage_bridge.fetch_done.connect(self._on_meme_fetch_success)
@@ -50,6 +52,7 @@ class DanmuAppMemeMixin:
 
         self._meme_display_timer = QTimer()
         self._meme_display_timer.timeout.connect(self._meme_display_tick)
+        self._meme_display_ticking = False
 
     def get_meme_barrage_status(self) -> dict[str, object]:
         enabled = meme_barrage_enabled(self.config)
@@ -73,20 +76,36 @@ class DanmuAppMemeMixin:
             "display_queue_size": 0,
         }
 
-    def apply_meme_barrage_settings(self, *, reset_cursors: bool = False) -> None:
-        settings = read_meme_barrage_settings(self.config)
-        if reset_cursors:
-            self._ensure_meme_barrage_service().reset_cursors()
-        collect_ms = int(settings["collect_interval_sec"]) * 1000
-        display_ms = int(settings["display_interval_sec"]) * 1000
+    def _sync_meme_barrage_timer_intervals(self, settings: dict[str, object]) -> None:
+        """Apply collect/display intervals; restart active timers so new cadence takes effect."""
+        collect_ms = max(1000, int(settings["collect_interval_sec"]) * 1000)
+        display_ms = max(1000, int(settings["display_interval_sec"]) * 1000)
         collect_timer = self.__dict__.get("_meme_collect_timer")
         display_timer = self.__dict__.get("_meme_display_timer")
         if collect_timer is not None:
-            collect_timer.setInterval(max(1000, collect_ms))
+            collect_timer.setInterval(collect_ms)
+            if collect_timer.isActive():
+                collect_timer.start(collect_ms)
         if display_timer is not None:
-            display_timer.setInterval(max(1000, display_ms))
+            display_timer.setInterval(display_ms)
+            if display_timer.isActive():
+                display_timer.start(display_ms)
+
+    def apply_meme_barrage_settings(self, *, reset_cursors: bool = False) -> None:
+        service = self._ensure_meme_barrage_service()
+        service.invalidate_settings_cache()
+        settings = read_meme_barrage_settings(self.config)
+        if reset_cursors:
+            self._ensure_meme_barrage_service().reset_cursors()
+        self._sync_meme_barrage_timer_intervals(settings)
         if bool(getattr(self.engine, "running", False)) and settings["enabled"]:
-            self._start_meme_barrage_timers()
+            # Hot reload: reschedule only; do not singleShot(0) or every save triggers fetch.
+            collect_timer = self.__dict__.get("_meme_collect_timer")
+            display_timer = self.__dict__.get("_meme_display_timer")
+            if collect_timer is not None and not collect_timer.isActive():
+                collect_timer.start()
+            if display_timer is not None and not display_timer.isActive():
+                display_timer.start()
         else:
             self._stop_meme_barrage_timers()
 
@@ -95,12 +114,12 @@ class DanmuAppMemeMixin:
             self._stop_meme_barrage_timers()
             return
         settings = read_meme_barrage_settings(self.config)
-        self._meme_collect_timer.setInterval(max(1000, int(settings["collect_interval_sec"]) * 1000))
-        self._meme_display_timer.setInterval(max(1000, int(settings["display_interval_sec"]) * 1000))
+        self._sync_meme_barrage_timer_intervals(settings)
         if not self._meme_collect_timer.isActive():
             self._meme_collect_timer.start()
         if not self._meme_display_timer.isActive():
             self._meme_display_timer.start()
+        # Engine start only: immediate first collect/display tick.
         QTimer.singleShot(0, self._meme_collect_tick)
         QTimer.singleShot(0, self._meme_display_tick)
 
@@ -115,7 +134,6 @@ class DanmuAppMemeMixin:
         if service is not None:
             service.set_fetch_in_flight(False)
             service.set_ai_select_in_flight(False)
-        self._meme_ai_in_flight = False
 
     def clear_meme_barrage_library(self) -> dict[str, object]:
         service = self._ensure_meme_barrage_service()
@@ -135,9 +153,9 @@ class DanmuAppMemeMixin:
         category = str(settings["category"])
 
         if category == "local":
+            # 本地库已含校验过的句，无需 ingest_collected_texts 二次 INSERT / is_overlay_safe。
             texts = service.collect_local_batch()
-            cleaned = service.ingest_collected_texts(texts)
-            self._meme_enqueue_for_display(service, cleaned, settings)
+            self._meme_enqueue_for_display(service, texts, settings)
             return
 
         service.set_fetch_in_flight(True)
@@ -230,7 +248,6 @@ class DanmuAppMemeMixin:
             return
 
         service.set_ai_select_in_flight(True)
-        self._meme_ai_in_flight = True
         pick_count = int(settings["display_batch_size"])
         fallback_n = pick_count
 
@@ -277,7 +294,6 @@ class DanmuAppMemeMixin:
     ) -> None:
         service = self._ensure_meme_barrage_service()
         service.set_ai_select_in_flight(False)
-        self._meme_ai_in_flight = False
         if selected:
             service.enqueue_display(selected)
         else:
@@ -287,36 +303,41 @@ class DanmuAppMemeMixin:
     def _on_meme_ai_select_failed(self, candidates: list[str], fallback_n: int) -> None:
         service = self._ensure_meme_barrage_service()
         service.set_ai_select_in_flight(False)
-        self._meme_ai_in_flight = False
         self.logger.warning("meme_ai_select_failed reason=request_failed")
         service.enqueue_display(candidates[:fallback_n])
 
     def _meme_display_tick(self) -> None:
-        if not bool(getattr(self.engine, "running", False)):
+        if self.__dict__.get("_meme_display_ticking", False):
             return
-        if not meme_barrage_enabled(self.config):
-            return
-        service = self._ensure_meme_barrage_service()
-        backlog: list[str] = list(self.__dict__.get("_meme_display_backlog") or [])
-        if not backlog:
-            settings = read_meme_barrage_settings(self.config)
-            batch_size = int(settings["display_batch_size"])
-            backlog = list(service.pop_display_batch(batch_size))
-        if not backlog:
-            self._meme_display_backlog = []
-            return
-        chunk = backlog[:_MEME_DISPLAY_MAX_PER_TICK]
-        self._meme_display_backlog = backlog[_MEME_DISPLAY_MAX_PER_TICK:]
-        scene_generation = int(getattr(self, "_scene_generation", 0))
-        for text in chunk:
-            item = self.engine.add_text(
-                text,
-                persona="",
-                batch_id=0,
-                scene_generation=scene_generation,
-                skip_dedup=True,
-            )
-            if item:
-                self._update_stats(success=True)
-        if self._meme_display_backlog:
-            QTimer.singleShot(0, self._meme_display_tick)
+        self.__dict__["_meme_display_ticking"] = True
+        try:
+            if not bool(getattr(self.engine, "running", False)):
+                return
+            if not meme_barrage_enabled(self.config):
+                return
+            service = self._ensure_meme_barrage_service()
+            backlog: list[str] = list(self.__dict__.get("_meme_display_backlog") or [])
+            if not backlog:
+                settings = read_meme_barrage_settings(self.config)
+                batch_size = int(settings["display_batch_size"])
+                backlog = list(service.pop_display_batch(batch_size))
+            if not backlog:
+                self._meme_display_backlog = []
+                return
+            chunk = backlog[:_MEME_DISPLAY_MAX_PER_TICK]
+            self._meme_display_backlog = backlog[_MEME_DISPLAY_MAX_PER_TICK:]
+            scene_generation = int(getattr(self, "_scene_generation", 0))
+            for text in chunk:
+                item = self.engine.add_text(
+                    text,
+                    persona="",
+                    batch_id=0,
+                    scene_generation=scene_generation,
+                    skip_dedup=True,
+                )
+                if item:
+                    self._update_stats(success=True)
+            if self._meme_display_backlog:
+                QTimer.singleShot(0, self._meme_display_tick)
+        finally:
+            self.__dict__["_meme_display_ticking"] = False

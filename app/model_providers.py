@@ -196,6 +196,24 @@ def resolve_api_transport(endpoint: str, api_mode: str) -> str:
     return _resolve(endpoint, api_mode)
 
 
+def validate_endpoint_mode_consistency(endpoint: str, api_mode: str) -> str | None:
+    """Return a translation key when a known provider host conflicts with api_mode."""
+    from app.providers.registry import match_host_entry
+
+    ep = normalize_endpoint(endpoint)
+    if not ep or not is_valid_endpoint(ep):
+        return None
+    entry = match_host_entry(ep)
+    if entry is None:
+        return None
+    mode = normalize_mode(api_mode)
+    if is_doubao_mode(mode) and entry.transport != "doubao":
+        return "config.error_endpoint_mode_mismatch"
+    if not is_doubao_mode(mode) and entry.transport == "doubao":
+        return "config.error_endpoint_mode_mismatch"
+    return None
+
+
 def resolve_active_model_id(config) -> str:
     """Model id used for API requests (matches ``AiWorker._resolve_request_credentials``)."""
     default_id = (config.get_default_model_id() or "").strip()
@@ -219,7 +237,8 @@ def resolve_openai_provider_id(model_id: str, endpoint: str, api_mode: str = "")
     ep = normalize_endpoint(endpoint)
     mode = normalize_mode(api_mode)
     if is_mimo_mic_model(model_id) and resolve_api_transport(ep, mode) == "openai":
-        return "mimo"
+        if guess_provider_from_endpoint(ep, mode) == "mimo":
+            return "mimo"
     return guess_provider_from_endpoint(ep, mode)
 
 
@@ -370,6 +389,13 @@ def validate_model_config(data: dict) -> list[str]:
         errors.append("custom_model.error_endpoint_invalid")
     if not api_key:
         errors.append("custom_model.error_api_key")
+
+    mode_key = validate_endpoint_mode_consistency(
+        endpoint,
+        (data.get("mode") or data.get("api_mode") or "doubao"),
+    )
+    if mode_key:
+        errors.append(mode_key)
 
     return errors
 

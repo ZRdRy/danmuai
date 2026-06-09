@@ -7,7 +7,7 @@ from app.web_console import (
     WebConsoleBridge,
 )
 
-from tests.web_console_helpers import build_ws_status_test_app
+from tests.web_console_helpers import build_ws_logs_test_app, build_ws_status_test_app
 
 
 def test_ws_status_websocket_accepts_valid_token_and_sends_status():
@@ -96,6 +96,27 @@ def test_ws_status_websocket_rejects_missing_token_with_1008():
     bridge.register_status_consumer.assert_not_called()
 
 
+def test_ws_status_client_can_reconnect_after_disconnect():
+    from fastapi.testclient import TestClient
+
+    token = "ws-reconnect-token"
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+    bridge = WebConsoleBridge(danmu_app)
+    bridge._last_status_payload = {"running": False, "danmu_count": 0, "queue_count": 0, "display_count": 0}
+    app = build_ws_status_test_app(bridge, token)
+    client = TestClient(app)
+    url = f"/ws/status?ws_token={token}"
+
+    with client.websocket_connect(url) as ws:
+        first = ws.receive_json()
+        assert first["running"] is False
+    with client.websocket_connect(url) as ws:
+        second = ws.receive_json()
+        assert second["running"] is False
+    assert len(bridge._ws_status_queues) == 0
+
+
 def test_ws_status_max_connections_capped():
     """BUG-038: reject excess /ws/status clients before register_status_consumer."""
     from contextlib import ExitStack
@@ -131,4 +152,34 @@ def test_ws_status_max_connections_capped():
         assert len(bridge._ws_status_queues) == _WS_MAX_STATUS_CONSUMERS
 
     assert len(bridge._ws_status_queues) == 0
+
+
+def test_ws_logs_max_connections_capped():
+    """S-026: reject excess /ws/logs clients before register_log_consumer."""
+    from contextlib import ExitStack
+
+    from app.web_console import _WS_MAX_LOG_CONSUMERS
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    token = "ws-test-token-logs-max"
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+    bridge = WebConsoleBridge(danmu_app)
+
+    app = build_ws_logs_test_app(bridge, token)
+    client = TestClient(app)
+    url = f"/ws/logs?ws_token={token}"
+
+    with ExitStack() as stack:
+        for _ in range(_WS_MAX_LOG_CONSUMERS):
+            stack.enter_context(client.websocket_connect(url))
+        assert len(bridge._ws_log_queues) == _WS_MAX_LOG_CONSUMERS
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            stack.enter_context(client.websocket_connect(url))
+        assert exc_info.value.code == 1008
+        assert len(bridge._ws_log_queues) == _WS_MAX_LOG_CONSUMERS
+
+    assert len(bridge._ws_log_queues) == 0
 

@@ -26,6 +26,41 @@ def persona_app(tmp_path):
     return app
 
 
+def test_get_template_detail_missing_persona_raises():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from app.config_store import ConfigStore
+    from app.personae import PersonaManager
+    from app.templates import TemplateManager
+
+    config = ConfigStore()
+    app = SimpleNamespace(
+        config=config,
+        personae=PersonaManager(config),
+        templates=TemplateManager(config),
+        config_changed=MagicMock(),
+    )
+    with pytest.raises(ValueError, match="人格不存在"):
+        persona_api.get_template_detail(app, "不存在的测试人格")
+
+
+def test_get_persona_template_route_returns_400_for_missing(persona_app):
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.danmu_app = persona_app
+    bridge.invoke_on_main.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+    register_web_routes(app, bridge, lambda _authorization=None: None)
+    client = TestClient(app)
+    res = client.get("/api/personae/不存在的测试人格/template")
+    assert res.status_code == 400
+    assert "人格不存在" in res.json()["detail"]
+
+
 def test_create_persona_rejects_slash_in_name(persona_app):
     with pytest.raises(ValueError, match="不能包含"):
         persona_api.create_persona(persona_app, "测试/人格")

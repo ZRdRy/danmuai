@@ -24,6 +24,9 @@ from app.application.diagnostic_snapshot import DiagnosticSnapshotBuilder, build
 from app.application.request_scheduler import RequestScheduler
 from app.application.request_timing_service import RequestTimingService
 from app.application.status_snapshot import StatusSnapshotBuilder
+from app.config_defaults import CONFIG_DEFAULTS
+from app.main_helpers import CAPTURE_FAIL_WARN_THRESHOLD
+from app.translations import tr
 from app.web_api.custom_models import MASKED_KEY
 
 
@@ -42,6 +45,22 @@ class DanmuAppWebFacadeMixin:
 
     def set_web_error_status(self, message: str, *, is_error: bool) -> None:
         self._set_error_status_safe(message, is_error=is_error)
+
+    def _note_capture_failure(self) -> None:
+        """S-009: surface repeated capture failures on Web status bar (not every tick)."""
+        self._capture_fail_streak += 1
+        if (
+            self._capture_fail_streak >= CAPTURE_FAIL_WARN_THRESHOLD
+            and not self._capture_error_active
+        ):
+            self._capture_error_active = True
+            self._set_error_status_safe(tr("app.capture_failed_repeated"), is_error=True)
+
+    def _note_capture_success(self) -> None:
+        self._capture_fail_streak = 0
+        if self._capture_error_active:
+            self._capture_error_active = False
+            self._set_error_status_safe("", is_error=False)
 
     def build_status_snapshot(self) -> dict[str, object]:
         return StatusSnapshotBuilder(self).build()
@@ -73,16 +92,17 @@ class DanmuAppWebFacadeMixin:
         api_endpoint: str = "",
         api_key: str = "",
         model: str = "",
-        api_mode: str = "doubao",
+        api_mode: str = "",
     ) -> dict[str, object]:
         resolved_key = api_key or ""
         if resolved_key == MASKED_KEY:
             resolved_key = self.config.get_api_key()
+        default_mode = CONFIG_DEFAULTS.get("api_mode", "openai")
         result = probe_connection(
             api_endpoint or self.config.get("api_endpoint", ""),
             resolved_key,
             model or self.config.get("model", ""),
-            api_mode or self.config.get("api_mode", "doubao"),
+            api_mode or self.config.get("api_mode", default_mode),
         )
         return {
             "ok": result.ok,
@@ -159,8 +179,8 @@ class DanmuAppWebFacadeMixin:
         self._publish_capture_region_status()
 
     def _on_app_focus_changed(self, _old_widget, _new_widget) -> None:
-        if self.engine.running and self.overlay.isVisible():
-            self.overlay.reassert_topmost_zorder()
+        if self.engine.running:
+            self._reassert_active_overlay_topmost()
 
     def _close_region_selector(self) -> None:
         from app.region_selector import close_region_selector

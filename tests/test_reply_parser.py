@@ -52,6 +52,29 @@ def test_parse_ai_reply_with_memory_envelope():
     assert update.scene_generation == 3
 
 
+def test_parse_ai_reply_payload_invalid_json_falls_back_to_plain_line():
+    """非 JSON 且无换行时整段作为单条纯文本。"""
+    assert parse_ai_reply_payload("{not json") == ["{not json"]
+
+
+def test_parse_ai_reply_payload_empty_array_returns_empty():
+    assert parse_ai_reply_payload("[]") == []
+
+
+def test_parse_ai_reply_payload_empty_and_whitespace():
+    assert parse_ai_reply_payload("") == []
+    assert parse_ai_reply_payload("   \n  ") == []
+
+
+def test_parse_ai_reply_payload_unclosed_array_falls_back_to_plain():
+    """流式截断且无法 json.loads 时退化为纯文本行。"""
+    assert parse_ai_reply_payload('["only start') == ['["only start']
+
+
+def test_parse_ai_reply_payload_json_object_without_comments_key():
+    assert parse_ai_reply_payload('{"scene_type": "game"}') == []
+
+
 def test_parse_ai_reply_payload_splits_duplicated_json_arrays():
     raw = (
         '["终于搞定这个bug啦", "修复方案挺清晰啊", "这代码界面好专业"]'

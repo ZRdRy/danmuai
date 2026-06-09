@@ -263,6 +263,21 @@ export function applyStatus(st) {
     }
   }
 
+  const compatBanner = document.getElementById('overlayCompatBanner');
+  if (compatBanner) {
+    const compatText = [
+      String(st.overlay_compat_warning || '').trim(),
+      String(st.screen_index_fallback_warning || '').trim(),
+    ].filter(Boolean).join(' ');
+    if (running && compatText) {
+      compatBanner.textContent = compatText;
+      compatBanner.classList.remove('hidden');
+    } else {
+      compatBanner.textContent = '';
+      compatBanner.classList.add('hidden');
+    }
+  }
+
   const banner = document.getElementById('errorBanner');
   const bannerMessage = document.getElementById('errorBannerMessage');
   if (st.error_message) {

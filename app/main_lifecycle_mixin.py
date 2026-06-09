@@ -115,6 +115,10 @@ class DanmuAppLifecycleMixin:
         self.ai_worker.finished.connect(self._on_ai_reply)
         self.ai_worker.error.connect(self._on_ai_error)
 
+        # W-MEDLOW-001（MS-001）：主线程启动期 eager 创建，_get_* 不再懒初始化。
+        self._request_scheduler = RequestScheduler()
+        self._request_timing_service = RequestTimingService()
+
         self.screenshot_round = 0
         self.screenshot_timer = QTimer()
         self.screenshot_timer.timeout.connect(self._on_screenshot_timer)
@@ -176,6 +180,8 @@ class DanmuAppLifecycleMixin:
         self._danmu_read_service = DanmuReadService(self)
         self.stats_state = StatsState()
         self._consecutive_failures = 0
+        self._capture_fail_streak = 0
+        self._capture_error_active = False
         self._failure_backoff_paused = False
         self._last_error_message = ""
         self.MAX_CONSECUTIVE_FAILURES = 5
@@ -184,6 +190,10 @@ class DanmuAppLifecycleMixin:
         self._live_status_timer = QTimer(self)
         self._live_status_timer.setInterval(500)
         self._live_status_timer.timeout.connect(self._publish_live_status)
+
+        self._topmost_health_timer = QTimer(self)
+        self._topmost_health_timer.setInterval(500)
+        self._topmost_health_timer.timeout.connect(self._on_topmost_health_tick)
 
     def _init_startup_services(self, log_startup) -> None:
         self.tray.show()
@@ -310,13 +320,13 @@ class DanmuAppLifecycleMixin:
             try:
                 pet_window.apply_config()
             except Exception as exc:
-                self.logger.debug(f"pet window apply_config skipped: {exc!r}")
+                self.logger.warning(f"pet window apply_config failed: {exc!r}")
         if fp_overlay is None:
             return
         try:
             fp_overlay.apply_config()
         except Exception as exc:
-            self.logger.debug(f"floating panel overlay apply_config skipped: {exc!r}")
+            self.logger.warning(f"floating panel overlay apply_config failed: {exc!r}")
 
     def _on_ai_error(
         self,
@@ -344,6 +354,7 @@ class DanmuAppLifecycleMixin:
             self._consume_request_timing(request_round, screenshot_id, scene_generation)
             return
 
+        self._get_request_timing_service().purge_stale(now=time.monotonic())
         self._consume_request_timing(request_round, screenshot_id, scene_generation)
         self._notify_pet_visual_error()
         self.logger.error(
@@ -359,10 +370,12 @@ class DanmuAppLifecycleMixin:
         )
 
         self._consecutive_failures += 1
+        self._capture_error_active = False
         self._last_error_message = msg
         lower_msg = msg.lower()
         is_fatal = (
             "401" in msg
+            or "402" in msg
             or "403" in msg
             or "api key" in lower_msg
             or "not configured" in lower_msg
@@ -471,6 +484,8 @@ class DanmuAppLifecycleMixin:
             self.engine.trigger_acceleration(60)
         self._sync_overlay_visibility()
         self._sync_floating_panel_visibility()
+        self._topmost_health_timer.start()
+        self._reassert_active_overlay_topmost()
         self._sync_pet_window_visibility()
         self._pool_topup_timer.start()
         self._start_meme_barrage_timers()
@@ -505,6 +520,10 @@ class DanmuAppLifecycleMixin:
         )
         self.screenshot_timer.stop()
         self._live_status_timer.stop()
+        self._topmost_health_timer.stop()
+        runtime = self._ensure_web_runtime_state()
+        runtime.set_overlay_compat_warning("")
+        runtime.set_screen_index_fallback_warning("")
         self._pending = False
         self.ai_worker.mark_stopping()
         self.ai_in_flight = 0
@@ -575,22 +594,41 @@ class DanmuAppLifecycleMixin:
 
         from PyQt6 import QtCore
 
-        pool_done = QtCore.QThreadPool.globalInstance().waitForDone(2000)
+        pool = QtCore.QThreadPool.globalInstance()
+        pool_done = pool.waitForDone(2000)
         if not pool_done:
-            self.logger.warning("quit timed out waiting for AI worker thread pool")
-        self.history_writer.stop()
-        self.ai_worker.close()
-        self.config.close()
-        self.overlay.hide()
+            self.logger.warning(
+                "quit timed out waiting for AI worker thread pool "
+                "active_threads=%s max_threads=%s",
+                pool.activeThreadCount(),
+                pool.maxThreadCount(),
+            )
+
+        # W-QUIT-TEARDOWN-001：先停 Web 控制台（含 meta 轮询），再关 config.db，
+        # 避免 HTTP 线程在 conn.close() 后仍读 meme_barrage_library。
+        self.stop_web_status_timer()
+        server = getattr(self, "web_server", None)
+        if server:
+            server.stop()
+            web_thread = getattr(server, "_thread", None)
+            if web_thread is not None and web_thread.is_alive():
+                web_thread.join(timeout=3.0)
+                if web_thread.is_alive():
+                    self.logger.warning(
+                        "quit timed out waiting for Web console thread "
+                        "startup_ok=%s bind_failed=%s",
+                        getattr(server, "startup_ok", False),
+                        bool(getattr(server, "_bind_failed", None) and server._bind_failed.is_set()),
+                    )
 
         shell = getattr(self, "webview_shell", None)
         if shell:
             shell.destroy()
 
-        self.stop_web_status_timer()
-        server = getattr(self, "web_server", None)
-        if server:
-            server.stop()
+        self.history_writer.stop()
+        self.ai_worker.close()
+        self.config.close()
+        self.overlay.hide()
 
         self.logger.info(tr("app.quit_done"))
         QApplication.quit()

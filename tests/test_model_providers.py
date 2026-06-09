@@ -102,6 +102,19 @@ def test_validate_model_config_invalid_endpoint():
     assert "custom_model.error_endpoint_invalid" in errors
 
 
+def test_validate_model_config_rejects_doubao_mode_on_openai_host():
+    errors = validate_model_config(
+        {
+            "name": "x",
+            "modelId": "m",
+            "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "apiKey": "k",
+            "mode": "doubao",
+        }
+    )
+    assert "config.error_endpoint_mode_mismatch" in errors
+
+
 def test_apply_provider_to_form_mimo():
     form = apply_provider_to_form("mimo")
     assert "api.xiaomimimo.com" in form["endpoint"]
@@ -231,10 +244,12 @@ def test_model_supports_mic_audio_catalog_lookup():
     )
 
 
-def test_resolve_openai_provider_id_mimo_v25_custom_endpoint():
+def test_resolve_openai_provider_id_mimo_v25_requires_mimo_host():
     ep = "https://my-mimo-proxy.com/v1"
-    assert resolve_openai_provider_id("mimo-v2.5", ep, "openai-compatible") == "mimo"
+    assert resolve_openai_provider_id("mimo-v2.5", ep, "openai-compatible") == DEFAULT_PROVIDER_ID
     assert resolve_openai_provider_id("gpt-4o", ep, "openai-compatible") == DEFAULT_PROVIDER_ID
+    official = "https://api.xiaomimimo.com/v1"
+    assert resolve_openai_provider_id("mimo-v2.5", official, "openai-compatible") == "mimo"
 
 
 def test_mic_audio_supported_for_mic_config_falls_back_to_visual():
@@ -301,12 +316,19 @@ def test_mic_audio_supported_for_config_custom_mimo_proxy():
     assert mic_audio_supported_for_config(cfg_unsupported) is False
 
 
-def test_get_openai_adapter_for_model_mimo_v25_custom_endpoint():
+def test_get_openai_adapter_for_model_mimo_v25_requires_official_host():
+    from app.providers.adapters.default_openai import DefaultOpenAIAdapter
     from app.providers.adapters.mimo import MimoOpenAIAdapter
 
-    adapter = get_openai_adapter_for_model(
+    proxy_adapter = get_openai_adapter_for_model(
         "mimo-v2.5",
         "https://my-mimo-proxy.com/v1",
         "openai-compatible",
     )
-    assert isinstance(adapter, MimoOpenAIAdapter)
+    assert isinstance(proxy_adapter, DefaultOpenAIAdapter)
+    official_adapter = get_openai_adapter_for_model(
+        "mimo-v2.5",
+        "https://api.xiaomimimo.com/v1",
+        "openai-compatible",
+    )
+    assert isinstance(official_adapter, MimoOpenAIAdapter)

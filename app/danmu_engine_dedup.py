@@ -1,10 +1,12 @@
 import os
 import time  # noqa: F401 — used as danmu_engine_dedup.time from app.danmu_engine
+from collections import deque
 from dataclasses import dataclass
 
 _LEVENSHTEIN_RATIO = None
 _LEVENSHTEIN_UNAVAILABLE = object()
 _DEDUP_PROFILE_FLAG: bool | None = None
+_DEDUP_THRESHOLD_FALLBACK = 0.5
 
 
 @dataclass
@@ -78,10 +80,91 @@ def _get_levenshtein_ratio():
     return _LEVENSHTEIN_RATIO
 
 
+def similarity(a: str, b: str) -> float:
+    """Levenshtein 相似度；无第三方库时用编辑距离回退。"""
+    profile = dedup_profile_enabled()
+    started = time.perf_counter_ns() if profile else 0
+
+    if not a or not b:
+        result = 0.0
+    else:
+        ratio_fn = _get_levenshtein_ratio()
+        if ratio_fn is not None:
+            result = ratio_fn(a, b)
+        else:
+            if profile:
+                _dedup_profile_stats.similarity_fallback_calls += 1
+            m, n = len(a), len(b)
+            if m > n:
+                a, b = b, a
+                m, n = n, m
+            prev_row = list(range(n + 1))
+            for i in range(1, m + 1):
+                curr = [i] + [0] * n
+                for j in range(1, n + 1):
+                    cost = 0 if a[i - 1] == b[j - 1] else 1
+                    curr[j] = min(curr[j - 1] + 1, prev_row[j] + 1, prev_row[j - 1] + cost)
+                prev_row = curr
+            dist = prev_row[n]
+            result = 1 - dist / max(len(a), len(b))
+
+    if profile:
+        _dedup_profile_stats.similarity_calls += 1
+        _dedup_profile_stats.similarity_ns += time.perf_counter_ns() - started
+    return result
+
+
+def is_duplicate_in_recent(
+    content: str,
+    recent: deque[str],
+    recent_exact_set: set[str],
+    config,
+    *,
+    threshold_fallback: float = _DEDUP_THRESHOLD_FALLBACK,
+) -> bool:
+    """横向/悬浮窗共用：exact_set → 长度剪枝 → Levenshtein。"""
+    profile = dedup_profile_enabled()
+    started = time.perf_counter_ns() if profile else 0
+
+    if content in recent_exact_set:
+        if profile:
+            _dedup_profile_stats.exact_set_hits += 1
+        result = True
+    elif not recent:
+        result = False
+    else:
+        threshold = config.get_float("dedup_threshold", threshold_fallback)
+        result = False
+        for prev in recent:
+            if content == prev:
+                result = True
+                break
+            if threshold >= 1.0:
+                continue
+            len_diff = abs(len(content) - len(prev))
+            max_len = max(len(content), len(prev))
+            if max_len > 0 and len_diff / max_len > (1 - threshold):
+                if profile:
+                    _dedup_profile_stats.length_pruned += 1
+                continue
+            if similarity(content, prev) > threshold:
+                result = True
+                break
+
+    if profile:
+        _dedup_profile_stats.duplicate_checks += 1
+        if result:
+            _dedup_profile_stats.duplicate_hits += 1
+        _dedup_profile_stats.is_duplicate_ns += time.perf_counter_ns() - started
+    return result
+
+
 __all__ = [
     "DedupProfileStats",
     "dedup_profile_enabled",
     "reset_dedup_profile_for_tests",
     "snapshot_dedup_profile",
     "log_dedup_profile_summary",
+    "is_duplicate_in_recent",
+    "similarity",
 ]

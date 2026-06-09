@@ -38,8 +38,10 @@ def test_runnable_request_uncaught_exception_emits_error():
     mock_pixmap.width.return_value = 100
     mock_pixmap.height.return_value = 80
 
+    import threading
+
     mock_worker = Mock()
-    mock_worker._stopping = False
+    mock_worker._stopping = threading.Event()
     mock_worker._request.side_effect = ValueError("bad config")
 
     runnable = AiRunnable(
@@ -61,6 +63,42 @@ def test_runnable_request_uncaught_exception_emits_error():
     call_args = mock_worker._emit_safe.call_args
     assert call_args[0][0] == "error"
     assert "bad config" in call_args[0][1]
+
+
+def test_request_doubao_wall_clock_skips_http_before_retry():
+    """S-012：墙上时钟已过时不再发起流式请求。"""
+    import time
+    from unittest.mock import MagicMock
+
+    from app.ai_client_requests import request_doubao
+
+    worker = MagicMock()
+    worker._request_deadline_at = time.monotonic() - 1.0
+    worker._resolve_request_credentials.return_value = (
+        "https://api.example/v1",
+        "key",
+        "model",
+        "doubao",
+    )
+    worker.config.get_float.return_value = 0.8
+    worker.config.get_int.return_value = 512
+    worker._deliver_outcome.return_value = None
+
+    request_doubao(
+        worker,
+        "data:image/jpeg;base64,abc",
+        "sys",
+        "user",
+        "p1",
+        1,
+        2,
+        0.0,
+        0,
+    )
+
+    worker._stream_doubao.assert_not_called()
+    worker._deliver_outcome.assert_called_once()
+    assert worker._deliver_outcome.call_args.kwargs["signal_name"] == "error"
 
 
 def test_runnable_request_failure_releases_in_flight():
@@ -247,35 +285,56 @@ def test_generation_pipeline_state_is_read_only_projection():
     assert state.latest_queued_screenshot_id == 11
     assert state.latest_displayed_screenshot_id == 10
 
-def test_consecutive_failures_triggers_backoff():
-    """测试连续失败达到阈值后自动暂停"""
+def test_consecutive_failures_triggers_backoff_at_production_threshold():
+    """W-TEST-AI-ERROR-001：连续 5 次失败（生产默认）后暂停并停截图定时器。"""
     app = make_minimal_danmu_app()
     app.ai_in_flight = 1
-    app.MAX_CONSECUTIVE_FAILURES = 3  # 降低阈值以便测试
+    app._on_ai_error = DanmuApp._on_ai_error.__get__(app, DanmuApp)
+    app.screenshot_timer.active = True
 
-    # 模拟连续 3 次失败
-    for i in range(3):
-        app._on_ai_error(f"AI ??????: error {i}", "persona-1", i, i, 1.0 + i, 0)
+    for i in range(4):
+        app._on_ai_error(f"AI timeout: error {i}", "persona-1", i, i, 1.0 + i, 0)
+        assert app._failure_backoff_paused is False
 
-    # 验证进入退避状态
-    assert app._consecutive_failures == 3
+    app._on_ai_error("AI timeout: error 4", "persona-1", 4, 4, 5.0, 0)
+
+    assert app._consecutive_failures == 5
     assert app._failure_backoff_paused is True
-
-    assert app._web_error_is_error is True
-    assert "连续" in app._web_error_message
+    assert app.screenshot_timer.active is False
 
 
 def test_fatal_error_immediate_backoff():
     """测试致命错误（如 401）立即暂停截图"""
     app = make_minimal_danmu_app()
     app.ai_in_flight = 1
+    app._on_ai_error = DanmuApp._on_ai_error.__get__(app, DanmuApp)
+    app.screenshot_timer.active = True
 
-    # 模拟致命错误（401 认证失败）
     app._on_ai_error("401 API Key failure", "persona-1", 1, 1, time.monotonic(), 0)
 
-    # 验证立即进入退避状态
     assert app._failure_backoff_paused is True
     assert app._consecutive_failures == 1
+    assert app.screenshot_timer.active is False
+
+
+def test_fatal_403_and_402_immediate_backoff():
+    """W-TEST-AI-ERROR-001：403 与 402 状态码立即暂停。"""
+    app = make_minimal_danmu_app()
+    app._on_ai_error = DanmuApp._on_ai_error.__get__(app, DanmuApp)
+
+    app.ai_in_flight = 1
+    app.screenshot_timer.active = True
+    app._on_ai_error("403 Forbidden", "persona-1", 1, 1, time.monotonic(), 0)
+    assert app._failure_backoff_paused is True
+    assert app.screenshot_timer.active is False
+
+    app._failure_backoff_paused = False
+    app._consecutive_failures = 0
+    app.screenshot_timer.active = True
+    app.ai_in_flight = 1
+    app._on_ai_error("HTTP 402 Payment Required", "persona-1", 2, 2, time.monotonic(), 0)
+    assert app._failure_backoff_paused is True
+    assert app.screenshot_timer.active is False
 
 
 def test_success_resets_failure_count():

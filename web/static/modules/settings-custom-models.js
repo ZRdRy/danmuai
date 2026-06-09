@@ -1,4 +1,5 @@
 import { apiFetch } from './transport.js';
+import { isMaskedApiKey } from './settings-defaults.js';
 
 let customModelDeps = {
   showToast: () => {},
@@ -96,7 +97,9 @@ export function openModelModal(index, model = {}) {
   document.getElementById('modelId').value = model.modelId || '';
   document.getElementById('modelMode').value = model.mode || 'doubao';
   document.getElementById('modelEndpoint').value = model.endpoint || '';
-  document.getElementById('modelApiKey').value = model.apiKey === '********' ? '********' : (model.apiKey || '');
+  document.getElementById('modelApiKey').value = isMaskedApiKey(model.apiKey)
+    ? model.apiKey
+    : (model.apiKey || '');
   document.getElementById('modelDescription').value = model.description || '';
   const supportsMicEl = document.getElementById('modelSupportsMic');
   if (supportsMicEl) supportsMicEl.checked = Boolean(model.supportsMic);

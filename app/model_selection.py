@@ -25,6 +25,7 @@ from app.model_providers import (
     normalize_endpoint,
     provider_label,
     resolve_active_model_id,
+    validate_endpoint_mode_consistency,
 )
 from app.translations import tr
 
@@ -142,6 +143,9 @@ def validate_web_config_patch(config, payload: dict[str, Any]) -> None:
 
     endpoint = str(payload.get("api_endpoint", config.get("api_endpoint", ""))).strip()
     api_mode = str(payload.get("api_mode", config.get("api_mode", "doubao")))
+    mode_mismatch = validate_endpoint_mode_consistency(endpoint, api_mode)
+    if mode_mismatch:
+        raise ValueError(tr(mode_mismatch))
     model_id = str(
         payload.get("model")
         or payload.get("default_model_id")

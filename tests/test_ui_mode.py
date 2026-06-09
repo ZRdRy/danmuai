@@ -23,3 +23,15 @@ def test_web_launch_env_browser():
     with patch.object(sys, "argv", ["main.py"]):
         with patch.dict(os.environ, {"DANMU_WEB_LAUNCH": "browser"}, clear=False):
             assert _web_launch_mode_from_argv() == "browser"
+
+
+def test_unknown_web_launch_env_falls_back_to_webview():
+    with patch.object(sys, "argv", ["main.py"]):
+        with patch.dict(os.environ, {"DANMU_WEB_LAUNCH": "totally-invalid"}, clear=False):
+            assert _web_launch_mode_from_argv() == "webview"
+
+
+def test_conflicting_argv_and_env_prefers_argv():
+    with patch.object(sys, "argv", ["main.py", "--web-browser"]):
+        with patch.dict(os.environ, {"DANMU_WEB_LAUNCH": "webview"}, clear=False):
+            assert _web_launch_mode_from_argv() == "browser"

@@ -118,5 +118,60 @@ def test_normal_on_ai_reply_path_unaffected():
     # 正常入队
     assert app._enqueue_reply_batch.call_count == 1
     assert len(enqueue_calls) == 1
+
+
+def test_visual_reply_enqueue_and_consume_to_engine(monkeypatch):
+    """W-TEST-MAIN-E2E-001：AI 回复 → 入队 → _consume_reply_queue 上屏（无 HTTP/Qt 窗）。"""
+    import main as main_mod
+
+    app = make_minimal_danmu_app()
+    app.engine.running = True
+    app._on_ai_reply = main_mod.DanmuApp._on_ai_reply.__get__(app, main_mod.DanmuApp)
+    app._consume_reply_queue = main_mod.DanmuApp._consume_reply_queue.__get__(app, main_mod.DanmuApp)
+    app._memory_enabled = lambda: False
+    app._notify_pet_visual_success = lambda: None
+
+    request_round = 2
+    screenshot_id = 5
+    app._register_request_meta(request_round, screenshot_id, 0, "visual")
+    app.ai_in_flight = 1
+
+    monkeypatch.setattr(
+        main_mod,
+        "normalize_reply_batch",
+        lambda raw_items, **kwargs: list(raw_items),
+    )
+
+    app._on_ai_reply(
+        '["弹幕一", "弹幕二"]',
+        "persona-1",
+        request_round,
+        screenshot_id,
+        time.monotonic(),
+        0,
+    )
+
+    assert not app.reply_buffer.is_empty()
+    app._consume_reply_queue()
+    assert app.engine.calls
+    assert app.engine.calls[0][0] == "弹幕一"
+
+
+def test_acquire_and_release_visual_inflight_atomic():
+    """W-MAIN-INFLIGHT-ATOMIC-001：acquire/release 同步清零三字段。"""
+    app = make_minimal_danmu_app()
+    app._acquire_visual_inflight(42, 3)
+    assert app.ai_in_flight == 1
+    assert app._inflight_screenshot_id == 42
+    assert app._inflight_scene_generation == 3
+    assert app._is_generating is True
+    assert app._inflight_started_at > 0
+
+    app._release_inflight_for_source("visual")
+    assert app.ai_in_flight == 0
+    assert app._inflight_screenshot_id == 0
+    assert app._inflight_scene_generation == 0
+    assert app._is_generating is False
+    assert app._inflight_started_at == 0.0
     # 不应有 stale_reply_dropped
     assert not any("stale_reply_dropped" in msg for msg in app.logger.warning_messages)

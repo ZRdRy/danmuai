@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import httpx
 
@@ -27,11 +28,23 @@ from app.model_providers import (
     normalize_endpoint,
     normalize_mode,
 )
-from app.providers import get_capabilities_for_endpoint, get_openai_adapter
+from app.providers import get_capabilities_for_endpoint, get_openai_adapter, provider_extra_headers
 from app.providers.constants import THINKING_DISABLED
 from app.translations import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _request_wall_clock_exceeded(worker) -> bool:
+    deadline = getattr(worker, "_request_deadline_at", None)
+    if deadline is None:
+        return False
+    return time.monotonic() > float(deadline)
+
+
+def _raise_if_wall_clock_exceeded(worker) -> None:
+    if _request_wall_clock_exceeded(worker):
+        raise httpx.TimeoutException("request wall clock exceeded")
 
 
 def get_model_config(config) -> dict:
@@ -83,6 +96,63 @@ def resolve_mic_request_credentials(config) -> tuple[str, str, str, str] | None:
     return endpoint, api_key, model_id, api_mode
 
 
+def credential_gap_translation_keys(config) -> list[str]:
+    """Translation keys for missing visual/custom-model credential fields."""
+    model_config = get_model_config(config)
+    if model_config:
+        gaps: list[str] = []
+        endpoint = normalize_endpoint(model_config.get("endpoint", ""))
+        if not endpoint or not is_valid_endpoint(endpoint):
+            gaps.append("custom_model.error_endpoint")
+        if not (model_config.get("apiKey") or "").strip():
+            gaps.append("custom_model.error_api_key")
+        if not (model_config.get("modelId") or "").strip():
+            gaps.append("custom_model.error_model_id")
+        return gaps
+
+    gaps = []
+    endpoint = normalize_endpoint(config.get("api_endpoint", ""))
+    if not endpoint or not is_valid_endpoint(endpoint):
+        gaps.append("custom_model.error_endpoint")
+    if not (config.get_api_key() or "").strip():
+        gaps.append("custom_model.error_api_key")
+    model_id = config.get_default_model_id() or config.get("model", "")
+    if not (model_id or "").strip():
+        gaps.append("custom_model.error_model_id")
+    return gaps
+
+
+def mic_credential_gap_translation_keys(config) -> list[str]:
+    """Translation keys for missing mic credential fields."""
+    if config.get("mic_use_visual_model", "1") == "1":
+        return credential_gap_translation_keys(config)
+    gaps: list[str] = []
+    endpoint = normalize_endpoint(config.get("mic_api_endpoint", ""))
+    if not endpoint or not is_valid_endpoint(endpoint):
+        gaps.append("custom_model.error_endpoint")
+    if not (config.get_mic_api_key() or "").strip():
+        gaps.append("custom_model.error_api_key")
+    if not (config.get("mic_model") or "").strip():
+        gaps.append("custom_model.error_model_id")
+    return gaps
+
+
+def _format_gap_error(config, gap_keys_fn) -> str:
+    gaps = gap_keys_fn(config)
+    if not gaps:
+        return tr("custom_model.error_incomplete")
+    fields = "、".join(tr(key) for key in gaps)
+    return tr("custom_model.error_incomplete_fields").format(fields=fields)
+
+
+def format_credential_error(config) -> str:
+    return _format_gap_error(config, credential_gap_translation_keys)
+
+
+def format_mic_credential_error(config) -> str:
+    return _format_gap_error(config, mic_credential_gap_translation_keys)
+
+
 def reset_worker_http_client(worker) -> httpx.Client:
     if hasattr(worker._thread_local, "client") and worker._thread_local.client is not None:
         try:
@@ -116,7 +186,7 @@ def request_doubao(
         return worker._deliver_outcome(
             emit=emit,
             signal_name="error",
-            message=tr("custom_model.error_incomplete"),
+            message=format_credential_error(worker.config),
             persona_id=persona_id,
             request_round=request_round,
             screenshot_id=screenshot_id,
@@ -175,6 +245,17 @@ def request_doubao(
 
     http_client = worker._get_http_client()
     for attempt in range(2):
+        if _request_wall_clock_exceeded(worker):
+            return worker._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("ai.error_timeout"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
+            )
         try:
             text, input_tokens, output_tokens, stream_error = worker._stream_doubao(
                 http_client,
@@ -261,7 +342,14 @@ def request_doubao(
 def stream_doubao(worker, http_client, url: str, headers: dict, data: dict) -> tuple[str, int, int, str]:
     from app.doubao_responses_stream import stream_doubao_responses
 
-    result = stream_doubao_responses(http_client, url, headers, data)
+    deadline_at = getattr(worker, "_request_deadline_at", None)
+    result = stream_doubao_responses(
+        http_client,
+        url,
+        headers,
+        data,
+        deadline_at=deadline_at,
+    )
     if not result.text:
         logger.warning(
             "doubao stream 返回空文本: input_tokens=%s output_tokens=%s "
@@ -295,7 +383,7 @@ def request_openai(
         return worker._deliver_outcome(
             emit=emit,
             signal_name="error",
-            message=tr("custom_model.error_incomplete"),
+            message=format_credential_error(worker.config),
             persona_id=persona_id,
             request_round=request_round,
             screenshot_id=screenshot_id,
@@ -359,8 +447,20 @@ def request_openai(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    headers.update(provider_extra_headers(endpoint))
 
     for attempt in range(2):
+        if _request_wall_clock_exceeded(worker):
+            return worker._deliver_outcome(
+                emit=emit,
+                signal_name="error",
+                message=tr("ai.error_timeout"),
+                persona_id=persona_id,
+                request_round=request_round,
+                screenshot_id=screenshot_id,
+                captured_at=captured_at,
+                scene_generation=scene_generation,
+            )
         try:
             text, input_tokens, output_tokens = worker._stream_openai(
                 http_client,
@@ -464,8 +564,9 @@ def stream_openai(
     with http_client.stream("POST", url, headers=headers, json=data) as resp:
         resp.raise_for_status()
         for line in resp.iter_lines():
-            if worker._stopping:
+            if worker._stopping.is_set():
                 break
+            _raise_if_wall_clock_exceeded(worker)
             if not line or not line.startswith("data: "):
                 continue
             payload = line[6:]

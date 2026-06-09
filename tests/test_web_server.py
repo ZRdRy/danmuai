@@ -120,6 +120,29 @@ def test_web_content_page_field_hints_wired():
     assert 'id="hintPersonaActiveTitle"' in html
 
 
+def test_web_api_mode_select_initialized():
+    from app.bundle_paths import project_root
+
+    root = project_root()
+    providers_js = (
+        root / "web" / "static" / "modules" / "settings-providers.js"
+    ).read_text(encoding="utf-8")
+    settings_html = (root / "web" / "static" / "partials" / "settings.html").read_text(
+        encoding="utf-8"
+    )
+    html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "API_MODE_OPTIONS" in providers_js
+    assert "function initApiModeSelect" in providers_js or "export function initApiModeSelect" in providers_js
+    assert "initApiModeSelect()" in providers_js
+    assert "applyApiModeValue" in providers_js
+    assert "syncApiModeLockState" in providers_js
+    assert 'id="api_mode"' in settings_html
+    assert 'option value="doubao"' in settings_html
+    assert 'option value="openai"' in settings_html
+    assert 'id="api_mode"' in html
+    assert 'option value="doubao"' in html
+
+
 def test_web_app_js_provider_switch_resets_vision_model():
     from app.bundle_paths import project_root
 
@@ -292,12 +315,38 @@ def test_notify_wait_ready_timeout_errors_when_thread_dead():
     assert server._startup_error_from_attach is True
 
 
+def test_maybe_restart_web_console_capped(monkeypatch):
+    """S-006: failed web console gets bounded auto-restart from main-thread helper."""
+    from app.web_console import (
+        WEB_CONSOLE_MAX_RESTART_ATTEMPTS,
+        WebConsoleBridge,
+        WebConsoleServer,
+        maybe_restart_web_console,
+    )
 
+    danmu_app = MagicMock()
+    danmu_app.logger = MagicMock()
+    bridge = WebConsoleBridge(danmu_app)
+    server = WebConsoleServer(bridge)
+    server._bind_failed.set()
+    server._thread = None
+    start_calls: list[int] = []
+    monkeypatch.setattr(server, "start", lambda: start_calls.append(1))
 
+    assert maybe_restart_web_console(server) is True
+    assert server._restart_attempts == 1
+    assert len(start_calls) == 1
+    assert maybe_restart_web_console(server) is False
 
+    server._last_restart_at = 0.0
+    while server._restart_attempts < WEB_CONSOLE_MAX_RESTART_ATTEMPTS:
+        maybe_restart_web_console(server)
 
-
-
+    assert server._restart_attempts == WEB_CONSOLE_MAX_RESTART_ATTEMPTS
+    server._last_restart_at = 0.0
+    before = len(start_calls)
+    assert maybe_restart_web_console(server) is False
+    assert len(start_calls) == before
 
 
 def test_startup_error_clears_when_uvicorn_started():

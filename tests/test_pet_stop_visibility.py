@@ -17,6 +17,7 @@ def test_stop_does_not_hide_pet_window():
     app.engine.running = True
     app.config.set_batch({"pet_enabled": "1", "pet_visible": "1"})
     app._pool_topup_timer = FakeTimer()
+    app._topmost_health_timer = FakeTimer()
     app._mic_orchestrator = Mock(stop_detector=Mock())
     app._sync_mic_service = Mock()
     app.overlay = Mock(stop_render_loop=Mock(), hide=Mock())

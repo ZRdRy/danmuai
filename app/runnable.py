@@ -11,6 +11,7 @@ from PyQt6.QtCore import QRunnable
 from app.ai_client import AiWorker
 from app.image_metrics import log_compress_metrics
 from app.logger import SanitizedLogger
+from app.main_helpers import REQUEST_WALL_CLOCK_SEC
 from app.mic_encode import pcm_to_wav_data_uri
 from app.translations import tr
 
@@ -56,7 +57,7 @@ class AiRunnable(QRunnable):
 
     def run(self):
         """QThreadPool 工作线程入口：压缩截图 → _request() → finished/error 信号回主线程。"""
-        if self.worker._stopping:
+        if self.worker._stopping.is_set():
             return
 
         logger = SanitizedLogger()
@@ -112,6 +113,7 @@ class AiRunnable(QRunnable):
         if self.mic_pcm and self.mic_attach_audio:
             audio_data_uri = pcm_to_wav_data_uri(self.mic_pcm)
 
+        self.worker._request_deadline_at = started + REQUEST_WALL_CLOCK_SEC
         try:
             self.worker._request(
                 image_data_uri,
@@ -125,7 +127,7 @@ class AiRunnable(QRunnable):
                 audio_data_uri=audio_data_uri,
             )
         except Exception as exc:
-            if not self.worker._stopping:
+            if not self.worker._stopping.is_set():
                 self.worker._emit_safe(
                     "error",
                     tr("ai.error_request_failed").format(error=exc),
@@ -140,3 +142,5 @@ class AiRunnable(QRunnable):
                 logger.debug(
                     f"ai request failed in runnable: {type(exc).__name__}: {exc}"
                 )
+        finally:
+            self.worker._request_deadline_at = None

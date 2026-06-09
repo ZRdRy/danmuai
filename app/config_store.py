@@ -82,6 +82,7 @@ class ConfigStore:
         self._load_cache()
         # 所有 REPLACE/commit 串行化，保证 _cache 与 DB 同事务一致
         self._write_lock = threading.Lock()
+        self._closed = False
         # W-FP-V2-002：须在 seed 之前写回，避免 seed 先落 danmu_render_mode=scrolling 盖掉遗留 display_mode
         self._migrate_legacy_display_mode_to_render_mode()
         if self.is_first_run or not self.get("danmu_speed"):
@@ -194,9 +195,12 @@ class ConfigStore:
         """
         with self._write_lock:
             try:
-                # Start explicit transaction
-                for k, v in items.items():
-                    self.conn.execute("REPLACE INTO config (key, value) VALUES (?, ?)", (k, v))
+                pairs = list(items.items())
+                if pairs:
+                    self.conn.executemany(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        pairs,
+                    )
                 self.conn.commit()
                 # Only update cache after successful commit
                 for k, v in items.items():
@@ -241,41 +245,50 @@ class ConfigStore:
 
     # --- API Key (Fernet encrypted) ---
 
-    def get_api_key(self) -> str:
-        """读取明文 API Key：优先 Fernet 解密 api_key_encrypted，否则回退 base64 的 api_key_encoded。"""
-        encrypted = self.get("api_key_encrypted", "")
+    def _encrypted_get(self, encrypted_key: str, encoded_key: str) -> str:
+        """读取加密或 legacy base64 编码的 API Key 明文。"""
+        encrypted = self.get(encrypted_key, "")
         if encrypted and _HAS_CRYPTO and self._fernet:
             try:
                 return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
             except Exception:
                 logger.warning(tr("config.decrypt_failed"))
-        # Legacy base64 fallback (not secure - only encoded, not encrypted)
-        encoded = self.get("api_key_encoded", "")
+        encoded = self.get(encoded_key, "")
         if not encoded:
             return ""
-        if _HAS_CRYPTO and self._fernet is None:
-            logger.warning(tr("config.insecure_read"))
         try:
-            return b64decode(encoded).decode("utf-8")
+            plaintext = b64decode(encoded).decode("utf-8")
         except Exception:
             return ""
+        # W-MEDLOW-004：安装 cryptography 后首次读取 legacy base64 时自动升级为 Fernet。
+        if _HAS_CRYPTO and self._fernet and not encrypted:
+            try:
+                self._encrypted_set(encrypted_key, encoded_key, plaintext)
+            except Exception as exc:
+                logger.warning(
+                    "config key auto-upgrade failed key=%s error=%s",
+                    encrypted_key,
+                    type(exc).__name__,
+                )
+        elif encrypted_key == "api_key_encrypted" and _HAS_CRYPTO and self._fernet is None:
+            logger.warning(tr("config.insecure_read"))
+        return plaintext
 
-    def set_api_key(self, key: str):
-        """写入 API Key：有 Fernet 则加密存 api_key_encrypted 并清除旧 base64 行。
-
-        无 cryptography 时仅 base64（不安全），日志会警告；生产环境应安装 cryptography。
-        锁提前获取，避免检查 _fernet 与使用之间被其他线程修改导致竞态条件。
-        """
+    def _encrypted_set(self, encrypted_key: str, encoded_key: str, key: str) -> None:
+        """写入 API Key：Fernet 加密或退化为 base64；持 _write_lock 保证 cache/DB 一致。"""
         with self._write_lock:
             if _HAS_CRYPTO and self._fernet:
                 encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
                 try:
-                    self.conn.execute("REPLACE INTO config (key, value) VALUES (?, ?)", ("api_key_encrypted", encrypted))
-                    if "api_key_encoded" in self._cache:
-                        self.conn.execute("DELETE FROM config WHERE key=?", ("api_key_encoded",))
-                        self._cache.pop("api_key_encoded", None)
+                    self.conn.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        (encrypted_key, encrypted),
+                    )
+                    if encoded_key in self._cache:
+                        self.conn.execute("DELETE FROM config WHERE key=?", (encoded_key,))
+                        self._cache.pop(encoded_key, None)
                     self.conn.commit()
-                    self._cache["api_key_encrypted"] = encrypted
+                    self._cache[encrypted_key] = encrypted
                 except sqlite3.OperationalError as e:
                     self.conn.rollback()
                     logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
@@ -283,91 +296,42 @@ class ConfigStore:
             else:
                 logger.warning(tr("config.insecure_store"))
                 encoded = b64encode(key.encode("utf-8")).decode("utf-8")
-                self.set("api_key_encoded", encoded)
+                # 已持 _write_lock；勿调 self.set()（threading.Lock 会死锁，见 ISSUE-042）
+                try:
+                    self.conn.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        (encoded_key, encoded),
+                    )
+                    self.conn.commit()
+                    self._cache[encoded_key] = encoded
+                except sqlite3.OperationalError as e:
+                    self.conn.rollback()
+                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
+                    raise
+
+    def get_api_key(self) -> str:
+        """读取明文 API Key：优先 Fernet 解密 api_key_encrypted，否则回退 base64 的 api_key_encoded。"""
+        return self._encrypted_get("api_key_encrypted", "api_key_encoded")
+
+    def set_api_key(self, key: str):
+        """写入 API Key：有 Fernet 则加密存 api_key_encrypted 并清除旧 base64 行。"""
+        self._encrypted_set("api_key_encrypted", "api_key_encoded", key)
 
     def get_tts_api_key(self) -> str:
         """读弹幕专用 TTS API Key（tts_api_key_encrypted）。"""
-        encrypted = self.get("tts_api_key_encrypted", "")
-        if encrypted and _HAS_CRYPTO and self._fernet:
-            try:
-                return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
-            except Exception:
-                logger.warning(tr("config.decrypt_failed"))
-        encoded = self.get("tts_api_key_encoded", "")
-        if not encoded:
-            return ""
-        try:
-            return b64decode(encoded).decode("utf-8")
-        except Exception:
-            return ""
+        return self._encrypted_get("tts_api_key_encrypted", "tts_api_key_encoded")
 
     def set_tts_api_key(self, key: str) -> None:
         """写入 TTS API Key（加密存储）。"""
-        if _HAS_CRYPTO and self._fernet:
-            encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
-            with self._write_lock:
-                try:
-                    self.conn.execute(
-                        "REPLACE INTO config (key, value) VALUES (?, ?)",
-                        ("tts_api_key_encrypted", encrypted),
-                    )
-                    if "tts_api_key_encoded" in self._cache:
-                        self.conn.execute(
-                            "DELETE FROM config WHERE key=?", ("tts_api_key_encoded",)
-                        )
-                        self._cache.pop("tts_api_key_encoded", None)
-                    self.conn.commit()
-                    self._cache["tts_api_key_encrypted"] = encrypted
-                except sqlite3.OperationalError as e:
-                    self.conn.rollback()
-                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
-                    raise
-        else:
-            logger.warning(tr("config.insecure_store"))
-            encoded = b64encode(key.encode("utf-8")).decode("utf-8")
-            self.set("tts_api_key_encoded", encoded)
+        self._encrypted_set("tts_api_key_encrypted", "tts_api_key_encoded", key)
 
     def get_mic_api_key(self) -> str:
         """读麦克风专用 API Key（mic_api_key_encrypted）。"""
-        encrypted = self.get("mic_api_key_encrypted", "")
-        if encrypted and _HAS_CRYPTO and self._fernet:
-            try:
-                return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
-            except Exception:
-                logger.warning(tr("config.decrypt_failed"))
-        encoded = self.get("mic_api_key_encoded", "")
-        if not encoded:
-            return ""
-        try:
-            return b64decode(encoded).decode("utf-8")
-        except Exception:
-            return ""
+        return self._encrypted_get("mic_api_key_encrypted", "mic_api_key_encoded")
 
     def set_mic_api_key(self, key: str) -> None:
         """写入麦克风专用 API Key（加密存储）。"""
-        if _HAS_CRYPTO and self._fernet:
-            encrypted = self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
-            with self._write_lock:
-                try:
-                    self.conn.execute(
-                        "REPLACE INTO config (key, value) VALUES (?, ?)",
-                        ("mic_api_key_encrypted", encrypted),
-                    )
-                    if "mic_api_key_encoded" in self._cache:
-                        self.conn.execute(
-                            "DELETE FROM config WHERE key=?", ("mic_api_key_encoded",)
-                        )
-                        self._cache.pop("mic_api_key_encoded", None)
-                    self.conn.commit()
-                    self._cache["mic_api_key_encrypted"] = encrypted
-                except sqlite3.OperationalError as e:
-                    self.conn.rollback()
-                    logger.error(tr("config.api_key_write_failed").format(error=type(e).__name__))
-                    raise
-        else:
-            logger.warning(tr("config.insecure_store"))
-            encoded = b64encode(key.encode("utf-8")).decode("utf-8")
-            self.set("mic_api_key_encoded", encoded)
+        self._encrypted_set("mic_api_key_encrypted", "mic_api_key_encoded", key)
 
     # --- 选区持久化 ---
 
@@ -402,11 +366,77 @@ class ConfigStore:
             "region_h": str(h),
         })
 
+    # --- Custom model profiles (apiKey encrypted inline in JSON) ---
+
+    def _custom_model_key_is_encrypted(self, value: str) -> bool:
+        """True when value is a Fernet token decryptable with this store's .key."""
+        if not value or not _HAS_CRYPTO or not self._fernet:
+            return False
+        try:
+            self._fernet.decrypt(value.encode("utf-8"))
+            return True
+        except Exception:
+            return False
+
+    def _encrypt_custom_model_api_key(self, key: str) -> str:
+        """Encrypt custom-model apiKey with the same Fernet key as api_key_encrypted."""
+        if not key:
+            return ""
+        if _HAS_CRYPTO and self._fernet:
+            return self._fernet.encrypt(key.encode("utf-8")).decode("utf-8")
+        logger.warning(tr("config.insecure_store"))
+        return b64encode(key.encode("utf-8")).decode("utf-8")
+
+    def _decrypt_custom_model_api_key(self, stored: str) -> str:
+        """Decrypt Fernet token; legacy plaintext or base64-only values pass through."""
+        if not stored:
+            return ""
+        if self._custom_model_key_is_encrypted(stored):
+            return self._fernet.decrypt(stored.encode("utf-8")).decode("utf-8")
+        try:
+            decoded = b64decode(stored).decode("utf-8")
+        except Exception:
+            return stored
+        if decoded.startswith("sk-") or decoded.startswith("Bearer "):
+            return decoded
+        return stored
+
     def get_custom_models(self) -> list:
-        return self.get_json("custom_models", [])
+        """Return custom models with decrypted apiKey; upgrade legacy plaintext on read."""
+        raw = self.get_json("custom_models", [])
+        if not isinstance(raw, list):
+            return []
+        result: list[dict] = []
+        needs_upgrade = False
+        for model in raw:
+            if not isinstance(model, dict):
+                continue
+            entry = dict(model)
+            stored_key = (entry.get("apiKey") or "").strip()
+            if stored_key:
+                entry["apiKey"] = self._decrypt_custom_model_api_key(stored_key)
+                if not self._custom_model_key_is_encrypted(stored_key):
+                    needs_upgrade = True
+            result.append(entry)
+        if needs_upgrade:
+            self.set_custom_models(result)
+        return result
 
     def set_custom_models(self, models: list):
-        self.set_json("custom_models", models)
+        """Persist custom models; each apiKey is Fernet-encrypted before JSON serialization."""
+        encrypted: list[dict] = []
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            entry = dict(model)
+            plain_key = (entry.get("apiKey") or "").strip()
+            if plain_key:
+                if self._custom_model_key_is_encrypted(plain_key):
+                    entry["apiKey"] = plain_key
+                else:
+                    entry["apiKey"] = self._encrypt_custom_model_api_key(plain_key)
+            encrypted.append(entry)
+        self.set_json("custom_models", encrypted)
 
     def get_custom_danmu_pool(self) -> list[str]:
         raw = self.get_json("custom_danmu_pool", [])
@@ -416,11 +446,21 @@ class ConfigStore:
 
     def set_custom_danmu_pool(self, items: list[str]) -> None:
         self.set_json("custom_danmu_pool", items)
+        self._invalidate_formula_text_cache()
 
     # --- Meme barrage library (meme_barrage_library table) ---
 
+    def _conn_usable(self) -> bool:
+        """False after close(); HTTP 退出竞态读库时避免 ProgrammingError。"""
+        return not getattr(self, "_closed", False)
+
     def meme_barrage_library_count(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) FROM meme_barrage_library").fetchone()
+        if not self._conn_usable():
+            return 0
+        try:
+            row = self.conn.execute("SELECT COUNT(*) FROM meme_barrage_library").fetchone()
+        except sqlite3.ProgrammingError:
+            return 0
         if not row or row[0] is None:
             return 0
         return int(row[0])
@@ -429,6 +469,7 @@ class ConfigStore:
         with self._write_lock:
             self.conn.execute("DELETE FROM meme_barrage_library")
             self.conn.commit()
+        self._invalidate_formula_text_cache()
 
     def meme_barrage_library_insert_many(
         self,
@@ -457,7 +498,23 @@ class ConfigStore:
                     continue
             self._trim_meme_barrage_library_locked(max_rows)
             self.conn.commit()
+        self._invalidate_formula_text_cache()
         return added
+
+    def meme_barrage_library_all_texts(self) -> list[str]:
+        """All meme library lines for formula-text cache warm-up (max LIBRARY_MAX_ROWS)."""
+        if not self._conn_usable():
+            return []
+        try:
+            from app.meme_barrage.store import LIBRARY_MAX_ROWS
+
+            rows = self.conn.execute(
+                "SELECT text FROM meme_barrage_library ORDER BY id ASC LIMIT ?",
+                (LIBRARY_MAX_ROWS,),
+            ).fetchall()
+        except sqlite3.ProgrammingError:
+            return []
+        return [str(row[0]).strip() for row in rows if row and row[0] and str(row[0]).strip()]
 
     def meme_barrage_library_contains_text(self, text: str) -> bool:
         """True when text exactly matches a row in meme_barrage_library."""
@@ -499,6 +556,12 @@ class ConfigStore:
             ")",
             (excess,),
         )
+        self._invalidate_formula_text_cache()
+
+    def _invalidate_formula_text_cache(self) -> None:
+        from app.danmu_pool import invalidate_formula_text_cache
+
+        invalidate_formula_text_cache(self)
 
     def get_default_model_id(self) -> str:
         model_id = self.get("default_model_id", "")
@@ -510,6 +573,7 @@ class ConfigStore:
         self.set("default_model_id", model_id)
 
     def close(self):
+        self._closed = True
         try:
             self.conn.close()
         except sqlite3.ProgrammingError:

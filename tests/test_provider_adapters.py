@@ -7,6 +7,7 @@ from app.providers import (
     get_openai_adapter,
     guess_provider_from_endpoint,
     match_host_entry,
+    provider_extra_headers,
     resolve_api_transport,
 )
 from app.providers.adapters.mimo import MimoOpenAIAdapter
@@ -116,6 +117,13 @@ def test_get_openai_adapter_selects_mimo():
         get_openai_adapter("https://api.xiaomimimo.com/v1", "openai-compatible"),
         MimoOpenAIAdapter,
     )
+
+
+def test_provider_extra_headers_openrouter():
+    headers = provider_extra_headers("https://openrouter.ai/api/v1")
+    assert "HTTP-Referer" in headers
+    assert headers["X-Title"] == "DanmuAI"
+    assert provider_extra_headers("https://api.deepseek.com/v1") == {}
 
 
 def test_openai_extensions_shim_siliconflow_empty():

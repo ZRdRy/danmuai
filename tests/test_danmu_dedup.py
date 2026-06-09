@@ -59,6 +59,15 @@ def test_clear_dedup_window_allows_repeat_after_scene_change(engine):
     assert engine.add_text(text) is not None
 
 
+def test_remember_content_caps_recent_window_at_thirty(engine):
+    for i in range(35):
+        engine._remember_content(f"msg-{i}")
+    assert len(engine.recent) == 30
+    assert len(engine.recent_exact_set) == 30
+    assert "msg-4" not in engine.recent_exact_set
+    assert "msg-34" in engine.recent_exact_set
+
+
 def test_remember_content_keeps_exact_set_in_sync_with_deque(engine):
     for i in range(31):
         engine._remember_content(f"msg-{i}")
@@ -361,6 +370,7 @@ def test_start_clears_dedup_window(monkeypatch, workspace_tmp):
         "_pool_topup_timer": timer,
         "reply_buffer": reply_buffer,
         "reply_timer": timer,
+        "_topmost_health_timer": timer,
         "lifetime_stats": type("L", (), {"flush_pending": _noop})(),
         "session_run_log": type("R", (), {"begin": _noop})(),
         "_scene_memory": type("M", (), {"reset": _noop})(),

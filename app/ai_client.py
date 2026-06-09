@@ -21,6 +21,8 @@ import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from app.ai_client_requests import (
+    format_credential_error,
+    format_mic_credential_error,
     request_doubao,
     request_openai,
     resolve_mic_request_credentials,
@@ -79,7 +81,8 @@ class AiWorker(QObject):
     def __init__(self, config: ConfigStore):
         super().__init__()
         self.config = config
-        self._stopping = False  # 优雅中断标志：stop() 时置 True，流式解析循环中检查并提前退出
+        # W-MEDLOW-004：Event 保证跨线程可见性；stop() 时 set，流式循环 is_set() 提前退出。
+        self._stopping = threading.Event()
         self._thread_local = threading.local()  # 线程局部存储：每个工作线程持有独立 httpx.Client
         self._client_lock = threading.Lock()  # 保护 _clients 集合的互斥锁
         self._clients: set[httpx.Client] = set()  # 所有已创建的 httpx 客户端，close() 时统一清理
@@ -90,6 +93,8 @@ class AiWorker(QObject):
         httpx.Client 非线程安全，必须每个线程独立实例。
         优先尝试 HTTP/2（http2=True），失败后降级到 HTTP/1.1。
         """
+        if self._stopping.is_set():
+            raise RuntimeError("AI client is stopping")
         if not hasattr(self._thread_local, "client") or self._thread_local.client is None:
             try:
                 client = httpx.Client(timeout=httpx.Timeout(30.0, connect=5.0), http2=True)
@@ -102,11 +107,11 @@ class AiWorker(QObject):
 
     def mark_stopping(self):
         """标记停止，流式解析循环中检查 _stopping 以优雅中断。"""
-        self._stopping = True
+        self._stopping.set()
 
     def reset_stopping(self):
         """新会话开始时重置，允许后续请求正常执行。"""
-        self._stopping = False
+        self._stopping.clear()
 
     def resolve_request_credentials(self) -> tuple[str, str, str, str] | None:
         """Public façade for credential resolution (Web/mic probe)."""
@@ -125,7 +130,7 @@ class AiWorker(QObject):
         system_pt: str = "",
     ) -> AiProbeResult:
         """Run one mic audio probe HTTP request without emitting finished/error signals."""
-        if self._stopping:
+        if self._stopping.is_set():
             return AiProbeResult(
                 signal="error",
                 message=tr("ai.error_request_failed").format(error="stopped"),
@@ -134,7 +139,7 @@ class AiWorker(QObject):
         if resolved is None:
             return AiProbeResult(
                 signal="error",
-                message=tr("custom_model.error_incomplete"),
+                message=format_mic_credential_error(self.config),
             )
         endpoint, _, _, api_mode = resolved
         persona_id = "mic_probe"
@@ -183,16 +188,21 @@ class AiWorker(QObject):
         audio_data_uri 用于麦克风插入：豆包 Responses（audio_url）或 MiMo Chat Completions（input_audio）。
         仅通过 finished/error 信号回传结果，禁止在此读写 DanmuApp / Overlay / 回复队列。
         """
-        if self._stopping:
+        if self._stopping.is_set():
             return
         if audio_data_uri:
             resolved = self.resolve_mic_request_credentials()
         else:
             resolved = self._resolve_request_credentials()
         if resolved is None:
+            err_msg = (
+                format_mic_credential_error(self.config)
+                if audio_data_uri
+                else format_credential_error(self.config)
+            )
             self._emit_result(
                 "error",
-                tr("custom_model.error_incomplete"),
+                err_msg,
                 persona_id,
                 request_round,
                 screenshot_id,
@@ -232,7 +242,7 @@ class AiWorker(QObject):
 
     def _emit_safe(self, signal_name, *args):
         """安全 emit：DanmuApp.stop() 后可能已销毁信号对象，捕获 RuntimeError 静默忽略。"""
-        if self._stopping:
+        if self._stopping.is_set():
             return
         try:
             getattr(self, signal_name).emit(*args)
@@ -386,6 +396,7 @@ class AiWorker(QObject):
 
     def close(self):
         """关闭所有 httpx 客户端连接。DanmuApp.quit() 时调用。"""
+        self.mark_stopping()
         with self._client_lock:
             clients = list(self._clients)
             self._clients.clear()

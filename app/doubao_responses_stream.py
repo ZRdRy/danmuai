@@ -12,8 +12,11 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+
+import httpx
 
 
 @dataclass
@@ -82,12 +85,18 @@ def _normalize_sse_line(raw: Any) -> str:
     return str(raw).strip()
 
 
-def consume_doubao_sse_lines(lines: Iterable[Any]) -> DoubaoResponsesResult:
+def consume_doubao_sse_lines(
+    lines: Iterable[Any],
+    *,
+    deadline_at: float | None = None,
+) -> DoubaoResponsesResult:
     collected: list[str] = []
     summary_parts: list[str] = []
     result = DoubaoResponsesResult()
 
     for raw in lines:
+        if deadline_at is not None and time.monotonic() > float(deadline_at):
+            raise httpx.TimeoutException("request wall clock exceeded")
         line = _normalize_sse_line(raw)
         if not line or not line.startswith("data: "):
             continue
@@ -176,6 +185,8 @@ def stream_doubao_responses(
     url: str,
     headers: dict[str, Any],
     data: dict[str, Any],
+    *,
+    deadline_at: float | None = None,
 ) -> DoubaoResponsesResult:
     with http_client.stream("POST", url, headers=headers, json=data) as resp:
         resp.raise_for_status()
@@ -191,4 +202,4 @@ def stream_doubao_responses(
             if isinstance(parsed, dict):
                 return parse_doubao_json_body(parsed)
             return DoubaoResponsesResult(error="invalid_json_response")
-        return consume_doubao_sse_lines(resp.iter_lines())
+        return consume_doubao_sse_lines(resp.iter_lines(), deadline_at=deadline_at)

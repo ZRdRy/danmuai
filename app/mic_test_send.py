@@ -122,9 +122,11 @@ def send_mic_probe(
 ) -> MicSendProbeResult:
     resolved = danmu_app.ai_worker.resolve_mic_request_credentials()
     if resolved is None:
+        from app.ai_client_requests import format_mic_credential_error
+
         return MicSendProbeResult(
             ok=False,
-            message=tr("custom_model.error_incomplete"),
+            message=format_mic_credential_error(danmu_app.config),
             error="incomplete_credentials",
         )
 

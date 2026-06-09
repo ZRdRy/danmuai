@@ -31,6 +31,7 @@ from app.api_schedule import ENGINE_BASE_FPS
 from app.danmu_engine_dedup import (  # noqa: F401 — re-exported for app.danmu_engine callers
     DedupProfileStats,
     dedup_profile_enabled,
+    is_duplicate_in_recent,
     log_dedup_profile_summary,
     reset_dedup_profile_for_tests,
     snapshot_dedup_profile,
@@ -662,80 +663,20 @@ class DanmuEngine(QObject):
         return snapshot_dedup_profile()
 
     def _is_duplicate(self, content: str) -> bool:
-        """去重：recent_exact_set O(1) → 长度预剪枝 → Levenshtein > dedup_threshold。"""
-        profile = dedup_profile_enabled()
-        started = dedup_profile.time.perf_counter_ns() if profile else 0
-
-        if content in self.recent_exact_set:
-            if profile:
-                dedup_profile._dedup_profile_stats.exact_set_hits += 1
-            result = True
-        elif not self.recent:
-            result = False
-        else:
-            threshold = self.config.get_float("dedup_threshold", _DEDUP_THRESHOLD_FALLBACK)
-            result = False
-            for prev in self.recent:
-                # 快速路径：完全相同
-                if content == prev:
-                    result = True
-                    break
-                # 快速跳过：长度差异太大时不需要计算相似度
-                if threshold >= 1.0:
-                    continue
-                len_diff = abs(len(content) - len(prev))
-                max_len = max(len(content), len(prev))
-                if max_len > 0 and len_diff / max_len > (1 - threshold):
-                    if profile:
-                        dedup_profile._dedup_profile_stats.length_pruned += 1
-                    continue
-                if self._similarity(content, prev) > threshold:
-                    result = True
-                    break
-
-        if profile:
-            dedup_profile._dedup_profile_stats.duplicate_checks += 1
-            if result:
-                dedup_profile._dedup_profile_stats.duplicate_hits += 1
-            dedup_profile._dedup_profile_stats.is_duplicate_ns += (
-                dedup_profile.time.perf_counter_ns() - started
-            )
-        return result
+        """去重：委托 danmu_engine_dedup.is_duplicate_in_recent（与悬浮窗共用）。"""
+        return is_duplicate_in_recent(
+            content,
+            self.recent,
+            self.recent_exact_set,
+            self.config,
+            threshold_fallback=_DEDUP_THRESHOLD_FALLBACK,
+        )
 
     @staticmethod
     def _similarity(a: str, b: str) -> float:
-        profile = dedup_profile_enabled()
-        started = dedup_profile.time.perf_counter_ns() if profile else 0
+        from app.danmu_engine_dedup import similarity
 
-        if not a or not b:
-            result = 0.0
-        else:
-            ratio_fn = _get_levenshtein_ratio()
-            if ratio_fn is not None:
-                result = ratio_fn(a, b)
-            else:
-                if profile:
-                    dedup_profile._dedup_profile_stats.similarity_fallback_calls += 1
-                m, n = len(a), len(b)
-                if m > n:
-                    a, b = b, a
-                    m, n = n, m
-                prev_row = list(range(n + 1))
-                for i in range(1, m + 1):
-                    curr = [i] + [0] * n
-                    for j in range(1, n + 1):
-                        cost = 0 if a[i - 1] == b[j - 1] else 1
-                        curr[j] = min(curr[j - 1] + 1, prev_row[j] + 1, prev_row[j - 1] + cost)
-                    prev_row = curr
-                dist = prev_row[n]
-                result = 1 - dist / max(len(a), len(b))
-
-        if profile:
-            dedup_profile._dedup_profile_stats.similarity_calls += 1
-            dedup_profile._dedup_profile_stats.similarity_ns += (
-                dedup_profile.time.perf_counter_ns() - started
-            )
-        return result
+        return similarity(a, b)
 
     def update(self, speed_factor: float = 1.0, dt_sec: float = 1.0 / 60.0):
         # 加速段：前 33% 进度升到 peak，后 67% 落回 1.0（与 trigger_acceleration 配对）

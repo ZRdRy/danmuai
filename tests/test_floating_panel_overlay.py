@@ -38,7 +38,7 @@ def test_timer_stops_when_queue_empty(fp_v2_setup, qapp):
     qapp.processEvents()
     overlay.add_danmu_text("once")
     overlay._tick_dt_sec = lambda: 0.5
-    for _ in range(30):
+    for _ in range(50):
         overlay._tick()
         if engine.visible_count() == 0:
             break
@@ -71,3 +71,29 @@ def test_show_for_screen_positions_panel(fp_v2_setup, qapp):
     qapp.processEvents()
     assert overlay.isVisible()
     assert overlay.width() >= 200
+
+
+def test_show_for_screen_reasserts_topmost(fp_v2_setup, qapp, monkeypatch):
+    _, _, overlay = fp_v2_setup
+    calls: list[str] = []
+    monkeypatch.setattr(
+        overlay,
+        "reassert_topmost_zorder",
+        lambda: calls.append("topmost"),
+    )
+    overlay.show_for_screen(0)
+    qapp.processEvents()
+    assert calls.count("topmost") >= 1
+
+
+def test_show_event_reasserts_topmost(fp_v2_setup, qapp, monkeypatch):
+    _, _, overlay = fp_v2_setup
+    calls: list[str] = []
+    monkeypatch.setattr(
+        overlay,
+        "reassert_topmost_zorder",
+        lambda: calls.append("topmost"),
+    )
+    overlay.show()
+    qapp.processEvents()
+    assert calls == ["topmost"]

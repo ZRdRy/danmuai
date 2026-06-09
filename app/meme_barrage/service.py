@@ -15,12 +15,16 @@ if TYPE_CHECKING:
 
 
 class MemeBarrageService:
-    """主线程持有：展示 FIFO 队列与采集分页游标。"""
+    """主线程持有：展示 FIFO 队列与采集分页游标。
+
+    _display_queue 的 enqueue/pop 组合仅在 Qt 主线程定时器内调用，无跨线程写入。
+    """
 
     def __init__(self, config: "ConfigStore") -> None:
         self._config = config
         self._store = MemeBarrageStore(config)
         self._display_queue: deque[str] = deque()
+        self._settings_cache: dict[str, object] | None = None
         self._page_num = 1
         self._local_read_offset = 0
         self._fetch_in_flight = False
@@ -56,6 +60,15 @@ class MemeBarrageService:
         self._display_queue.clear()
         self._store.clear()
         self.reset_cursors()
+        self.invalidate_settings_cache()
+
+    def invalidate_settings_cache(self) -> None:
+        self._settings_cache = None
+
+    def _cached_settings(self) -> dict[str, object]:
+        if self._settings_cache is None:
+            self._settings_cache = read_meme_barrage_settings(self._config)
+        return self._settings_cache
 
     def enqueue_display(self, texts: list[str]) -> int:
         added = 0
@@ -94,7 +107,7 @@ class MemeBarrageService:
         return out
 
     def collect_local_batch(self) -> list[str]:
-        settings = read_meme_barrage_settings(self._config)
+        settings = self._cached_settings()
         batch_size = int(settings["collect_batch_size"])
         texts, next_offset = self._store.fetch_batch_by_offset(self._local_read_offset, batch_size)
         self._local_read_offset = next_offset
@@ -131,4 +144,4 @@ class MemeBarrageService:
         return max(1, self._page_num)
 
     def settings(self) -> dict[str, object]:
-        return read_meme_barrage_settings(self._config)
+        return dict(self._cached_settings())

@@ -53,8 +53,23 @@ def test_save_settings_persists(meme_app):
     # 兼容旧单字符串 → 内部存为 JSON 数组
     assert json.loads(meme_app.config.get("meme_barrage_tag")) == ["07"]
     assert meme_app.config.get("meme_barrage_display_mode") == "ai"
+    assert meme_app.config.get_int("meme_barrage_collect_interval_sec") == 8
     assert meme_app.config.get_int("meme_barrage_collect_batch_size") == 30
     meme_app.config_changed.emit.assert_called()
+
+
+def test_save_settings_meta_reflects_input(meme_app):
+    payload = {
+        "enabled": True,
+        "collect_interval_sec": 12,
+        "collect_batch_size": 15,
+    }
+    meta = meme_api.save_settings(meme_app, payload)
+    assert meta["collect_interval_sec"] == 12
+    assert meta["collect_batch_size"] == 15
+    stored = meme_api.get_meta(meme_app)
+    assert stored["collect_interval_sec"] == 12
+    assert stored["collect_batch_size"] == 15
 
 
 def test_store_insert_and_clear(meme_app):
@@ -99,7 +114,13 @@ def test_meme_barrage_routes_registered(tmp_path):
 
     meta = client.get("/api/meme-barrage/meta")
     assert meta.status_code == 200
-    assert meta.json()["library_count"] == 0
+    body = meta.json()
+    assert body["library_count"] == 0
+    assert body["enabled"] is False
+    assert body["category"] == "random"
+    assert body["display_mode"] == "full"
+    assert "collect_interval_sec" in body
+    assert "display_interval_sec" in body
 
     tags = client.get("/api/meme-barrage/tags")
     assert tags.status_code == 200
@@ -132,6 +153,17 @@ def test_save_settings_caps_tag_list(meme_app):
     import json
 
     assert json.loads(meme_app.config.get("meme_barrage_tag")) == ["00", "01", "02"]
+
+
+def test_get_meta_after_config_close_returns_zero_counts(meme_app):
+    """W-QUIT-TEARDOWN-001：退出竞态下 closed DB 不得 500。"""
+    store = MemeBarrageStore(meme_app.config)
+    store.insert_many([("句A", "06", 1)])
+    assert meme_api.get_meta(meme_app)["library_count"] == 1
+    meme_app.config.close()
+    meta = meme_api.get_meta(meme_app)
+    assert meta["library_count"] == 0
+    assert meta["display_queue_size"] == 0
 
 
 def test_format_tags_for_remote_api_small_selection():

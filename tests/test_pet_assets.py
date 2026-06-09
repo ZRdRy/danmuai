@@ -1,9 +1,13 @@
+import json
+import shutil
 from pathlib import Path
 
 import pytest
 from app.bundle_paths import resource_path
 from app.pet.pet_assets import (
     BUILTIN_PET_DIR,
+    LAYOUT_PETDEX,
+    LAYOUT_YUEXIN_MIAO,
     PET_FRAME_H,
     PET_FRAME_W,
     PET_STATE_FRAME_COUNTS,
@@ -74,9 +78,52 @@ def test_state_frame_interval_sec(qapp):
 def test_validate_builtin_dimensions(qapp):
     meta, sheet, cols, rows = validate_pet_pack_dir(BUILTIN_PET_DIR)
     assert meta["id"] == "yuexin-miao-animated"
+    assert meta.get("spritesheetLayout") == LAYOUT_YUEXIN_MIAO
     assert sheet.name.endswith(".webp")
     assert cols == 8
     assert rows == 9
+
+
+def test_builtin_pack_uses_yuexin_miao_running_rows(qapp):
+    pack = load_pet_assets(FakeConfig({"pet_asset_source": "builtin"}))
+    assert pack.spritesheet_layout == LAYOUT_YUEXIN_MIAO
+    _, sy_right, _, _ = pack.frame_rect("running-right", 0)
+    assert sy_right == 2 * PET_FRAME_H
+    _, sy_left, _, _ = pack.frame_rect("running-left", 0)
+    assert sy_left == 1 * PET_FRAME_H
+
+
+def test_petdex_layout_running_rows(qapp, tmp_path):
+    meta = json.loads((BUILTIN_PET_DIR / "pet.json").read_text(encoding="utf-8"))
+    meta.pop("spritesheetLayout", None)
+    pack_dir = tmp_path / "petdex-pack"
+    pack_dir.mkdir()
+    (pack_dir / "pet.json").write_text(json.dumps(meta), encoding="utf-8")
+    shutil.copy(BUILTIN_PET_DIR / "spritesheet.webp", pack_dir / "spritesheet.webp")
+    pack = load_pet_assets(
+        FakeConfig(
+            {
+                "pet_asset_source": "local",
+                "pet_asset_path": str(pack_dir),
+            }
+        )
+    )
+    assert pack.spritesheet_layout == LAYOUT_PETDEX
+    _, sy_right, _, _ = pack.frame_rect("running-right", 0)
+    assert sy_right == 1 * PET_FRAME_H
+    _, sy_left, _, _ = pack.frame_rect("running-left", 0)
+    assert sy_left == 2 * PET_FRAME_H
+
+
+def test_invalid_spritesheet_layout_raises(qapp, tmp_path):
+    meta = json.loads((BUILTIN_PET_DIR / "pet.json").read_text(encoding="utf-8"))
+    meta["spritesheetLayout"] = "invalid-layout"
+    pack_dir = tmp_path / "bad-pack"
+    pack_dir.mkdir()
+    (pack_dir / "pet.json").write_text(json.dumps(meta), encoding="utf-8")
+    shutil.copy(BUILTIN_PET_DIR / "spritesheet.webp", pack_dir / "spritesheet.webp")
+    with pytest.raises(ValueError, match="spritesheetLayout"):
+        validate_pet_pack_dir(pack_dir)
 
 
 def test_local_pack_path_from_config(qapp):
@@ -93,6 +140,29 @@ def test_local_pack_path_from_config(qapp):
 
 def test_resource_path_pet_default_exists():
     assert resource_path("data", "pet", "default", "pet.json").is_file()
+
+
+def test_pet_window_defers_sprite_load_until_show_pet(qapp, monkeypatch):
+    """S-003: cold start must not decode spritesheet until show_pet."""
+    from app.pet.pet_window import PetWindow
+    from main import DanmuApp
+
+    from tests.conftest import bind_minimal_danmu_app
+
+    app = DanmuApp.__new__(DanmuApp)
+    bind_minimal_danmu_app(app, config=FakeConfig({"pet_asset_source": "builtin"}))
+    load_count = {"n": 0}
+    original_reload = PetWindow.reload_assets
+
+    def counting_reload(self):
+        load_count["n"] += 1
+        return original_reload(self)
+
+    monkeypatch.setattr(PetWindow, "reload_assets", counting_reload)
+    window = PetWindow(app)
+    assert load_count["n"] == 0
+    window.show_pet()
+    assert load_count["n"] == 1
 
 
 def test_sync_pet_window_visibility_shows_pet_when_enabled_and_visible():

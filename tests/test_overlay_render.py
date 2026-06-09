@@ -55,11 +55,13 @@ def test_show_for_screen_invalid_index_starts_render_with_content(
     monkeypatch.setattr("app.overlay.QApplication.screens", lambda: [mock_screen])
     engine.running = True
     _seed_visible_item(engine)
+    before_tracks = len(engine.tracks)
 
     overlay.show_for_screen(99)
     qapp.processEvents()
 
     assert overlay.isVisible()
+    assert len(engine.tracks) == before_tracks
     overlay.ensure_render_loop()
     assert overlay.timer.isActive()
 
@@ -186,9 +188,13 @@ def test_union_dirty_rect_smaller_than_widget(overlay_stack, qapp):
 
 
 def test_use_fast_danmu_render_for_long_formula_lines():
-    short = "短弹幕"
+    short_ascii = "hi"
+    short_cjk = "短弹幕"
+    short_emoji = "😀短弹幕"
     long_line = "x" * 40
-    assert _use_fast_danmu_render(short) is False
+    assert _use_fast_danmu_render(short_ascii) is False
+    assert _use_fast_danmu_render(short_cjk) is True
+    assert _use_fast_danmu_render(short_emoji) is True
     assert _use_fast_danmu_render(long_line) is True
 
 

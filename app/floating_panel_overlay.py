@@ -4,7 +4,6 @@ W-FP-V3-002：仅保留现有外观，运动学改为持续向上滚动。
 """
 from __future__ import annotations
 
-import ctypes
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -13,27 +12,12 @@ from PyQt6.QtCore import QElapsedTimer, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from app.danmu_pool import is_formula_danmu_text
 from app.floating_panel_engine import FloatingPanelEngine, FloatingPanelItem
+from app.win32_overlay_zorder import apply_overlay_exstyles, reassert_hwnd_topmost
 
 if TYPE_CHECKING:
     from app.config_store import ConfigStore
-
-if sys.platform == "win32":
-    _GWL_EXSTYLE = -20
-    _WS_EX_LAYERED = 0x00080000
-    _WS_EX_TRANSPARENT = 0x00000020
-    _HWND_TOPMOST = -1
-    _SWP_NOMOVE = 0x0002
-    _SWP_NOSIZE = 0x0001
-    _SWP_NOACTIVATE = 0x0010
-    _SWP_SHOWWINDOW = 0x0040
-    try:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW
-    except AttributeError:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongW
-    _SetWindowPos = ctypes.windll.user32.SetWindowPos
 
 _FRAME_DT = 1.0 / 60.0
 _INTERVAL_MS = 16
@@ -96,7 +80,12 @@ class FloatingPanelOverlay(QWidget):
         self._x_offset = _int("floating_panel_x_offset", 20, 0, 400)
         self._y_offset = _int("floating_panel_y_offset", 80, 0, 400)
         size = _int("floating_panel_font_size", 20, 12, 48)
-        family = str(self.config.get("floating_panel_font_family", "Microsoft YaHei") or "Microsoft YaHei").strip()
+        from app.config_defaults import DEFAULT_DANMU_FONT_FAMILY
+
+        family = str(
+            self.config.get("floating_panel_font_family", DEFAULT_DANMU_FONT_FAMILY)
+            or DEFAULT_DANMU_FONT_FAMILY
+        ).strip()
         bold = str(self.config.get("floating_panel_font_bold", "1") or "1").strip().lower() not in (
             "0",
             "false",
@@ -111,6 +100,7 @@ class FloatingPanelOverlay(QWidget):
         self._apply_config()
         for item in self.engine.visible_items():
             self._prepare_item_pixmap(item)
+        self.engine.relayout_vertical_gaps()
         if self.isVisible():
             self.update()
 
@@ -123,9 +113,18 @@ class FloatingPanelOverlay(QWidget):
     def _apply_win32_click_through(self) -> None:
         if sys.platform != "win32":
             return
-        hwnd = int(self.winId())
-        ex_style = _GetWindowLong(hwnd, _GWL_EXSTYLE)
-        _SetWindowLong(hwnd, _GWL_EXSTYLE, ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT)
+        apply_overlay_exstyles(int(self.winId()), click_through=True)
+
+    def reassert_topmost_zorder(self) -> None:
+        """Win32：恢复 HWND_TOPMOST，不抢焦点。"""
+        if not self.isVisible():
+            return
+        self.raise_()
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        reassert_hwnd_topmost(hwnd)
 
     def _estimate_item_height(self) -> float:
         if self._font_metrics is None:
@@ -186,8 +185,16 @@ class FloatingPanelOverlay(QWidget):
             painter.setFont(self._font)
             baseline_y = _CARD_V_PAD + self._font_metrics.ascent()
             text_x = _CARD_H_PAD
+            max_text_w = max(1, int(width - _CARD_H_PAD * 2))
+            draw_text = text
+            if is_formula_danmu_text(self.config, text):
+                draw_text = self._font_metrics.elidedText(
+                    text,
+                    Qt.TextElideMode.ElideRight,
+                    max_text_w,
+                )
             text_path = QPainterPath()
-            text_path.addText(text_x, baseline_y, self._font, text)
+            text_path.addText(text_x, baseline_y, self._font, draw_text)
             pen = QPen(_TEXT_OUTLINE)
             pen.setWidth(_OUTLINE_WIDTH)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -214,7 +221,7 @@ class FloatingPanelOverlay(QWidget):
         self.engine.set_panel_height(float(panel_h))
         self.show()
         self._apply_win32_click_through()
-        self.raise_()
+        self.reassert_topmost_zorder()
         if self.engine.running:
             self.ensure_render_loop()
 
@@ -273,6 +280,8 @@ class FloatingPanelOverlay(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self.reassert_topmost_zorder()
+        self._apply_win32_click_through()
         if self.engine.running:
             self.ensure_render_loop()
 

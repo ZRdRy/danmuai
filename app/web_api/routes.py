@@ -15,10 +15,16 @@
 写操作需 Bearer；须经 bridge.invoke_on_main（勿在 HTTP 线程直接写 Config / emit config_changed）。
 """
 
+import logging
 from typing import TYPE_CHECKING, Callable
 from urllib.parse import unquote
 
 from fastapi import Header, HTTPException
+
+logger = logging.getLogger(__name__)
+
+# W-MEDLOW-002：诊断 SSE 推送间隔（秒）；与 GET /api/diagnostics 解耦，仅控制流式刷新节奏。
+DIAGNOSTICS_SSE_INTERVAL_SEC = 2.5
 from pydantic import BaseModel
 
 from app.web_api import announcements_state
@@ -138,6 +144,13 @@ def register_web_routes(app, bridge: "WebConsoleBridge", check_token: Callable) 
             return bridge.invoke_on_main(fn, *args, **kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("invoke_on_main failed for %r", fn)
+            raise HTTPException(status_code=500, detail="internal error") from exc
 
     @app.get("/api/diagnostics")
     def get_diagnostics(authorization: str | None = Header(default=None)):
@@ -584,9 +597,8 @@ def register_diagnostics_sse_route(app, diagnostics_hub, bridge, check_token) ->
                 snapshot_data = json.dumps(snapshot, ensure_ascii=False)
                 yield f"event: diagnostic_snapshot\ndata: {snapshot_data}\n\n"
 
-                # 每 2.5 秒推送更新快照
                 while True:
-                    await asyncio.sleep(2.5)
+                    await asyncio.sleep(DIAGNOSTICS_SSE_INTERVAL_SEC)
                     snapshot = bridge.danmu_app.build_diagnostic_snapshot()
                     snapshot_data = json.dumps(snapshot, ensure_ascii=False)
                     yield f"event: diagnostic_snapshot\ndata: {snapshot_data}\n\n"

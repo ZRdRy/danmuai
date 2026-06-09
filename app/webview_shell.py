@@ -21,8 +21,9 @@ _START_TIMEOUT_SEC = 20.0
 _CREATED_TIMEOUT_SEC = 5.0
 _LOAD_TIMEOUT_SEC = 12.0
 _FROZEN_LOAD_TIMEOUT_SEC = 25.0
-_SERVER_POLL_SEC = 12.0
-_FROZEN_SERVER_POLL_SEC = 5.0
+# Short main-thread probe; slow bind is retried by open_web_console_when_ready (S-001).
+_SERVER_POLL_SEC = 2.0
+_FROZEN_SERVER_POLL_SEC = 1.5
 _NAV_POLL_SEC = 0.25
 _BROWSER_PROBE_SEC = 3.0
 _HANDSHAKE_POLL_MS = 50
@@ -42,8 +43,9 @@ def preferred_webview_gui() -> str | None:
         return "cocoa"
     return "gtk"
 def wait_for_http_server(base_url: str, timeout: float = _SERVER_POLL_SEC) -> bool:
+    """Probe public GET /api/status (W-SEC-001 locked down /api/session for curl)."""
     deadline = time.monotonic() + timeout
-    probe = f"{base_url.rstrip('/')}/api/session"
+    probe = f"{base_url.rstrip('/')}/api/status"
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(probe, timeout=0.6) as resp:
@@ -51,7 +53,7 @@ def wait_for_http_server(base_url: str, timeout: float = _SERVER_POLL_SEC) -> bo
                     continue
                 body = resp.read().decode("utf-8", errors="replace")
                 data = json.loads(body)
-                if data.get("token"):
+                if isinstance(data, dict):
                     return True
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
             time.sleep(0.15)
@@ -102,31 +104,35 @@ def notify_web_console_failure(danmu_app, reason_key: str, *, detail: str = "") 
             app.processEvents()
         QMessageBox.warning(None, tr("app.error_title"), message)
     QTimer.singleShot(0, _show)
+def _server_ready_probe_sec() -> float:
+    from app.startup_trace import web_console_ready_timeout
+
+    return float(web_console_ready_timeout())
+
+
 def _ensure_server_ready(server: WebConsoleServer) -> bool:
+    """Short non-blocking probe for pywebview begin_start (S-001).
+
+    Returns False while uvicorn is still starting; ``open_web_console_when_ready``
+    retries on a QTimer instead of blocking the Qt main thread for 12s.
+    """
+    probe = _server_ready_probe_sec()
+    # startup_ok can be set before HTTP answers; verify via GET /api/status (not /api/session).
+    http_probe = 1.0 if getattr(server, "startup_ok", False) else min(probe, 1.0)
     if getattr(server, "startup_ok", False):
-        if wait_for_http_server(server.base_url, timeout=1.5):
+        if wait_for_http_server(server.base_url, timeout=http_probe):
             log_startup("webview.ensure_server_ready", ok=True, verified=True)
             return True
         log_startup("webview.ensure_server_ready", ok=False, startup_ok_stale=True)
-    log_startup("webview.ensure_server_ready.begin")
-    poll = _FROZEN_SERVER_POLL_SEC if is_frozen() else _SERVER_POLL_SEC
-    if server.wait_ready(timeout=poll):
-        log_startup("webview.ensure_server_ready.end", ok=True, via="wait_ready")
-        return True
-    if wait_for_http_server(server.base_url, timeout=poll):
+    log_startup("webview.ensure_server_ready.begin", probe_sec=probe)
+    if server.wait_ready(timeout=probe):
+        if wait_for_http_server(server.base_url, timeout=http_probe):
+            log_startup("webview.ensure_server_ready.end", ok=True, via="wait_ready")
+            return True
+    if wait_for_http_server(server.base_url, timeout=http_probe):
         log_startup("webview.ensure_server_ready.end", ok=True, via="http_probe")
         return True
-    danmu_app = server.bridge.danmu_app
-    danmu_app.logger.error(
-        f"Web 控制台未就绪: {server.base_url}（请查 startup.log 或端口占用）"
-    )
-    append_frozen_log(f"web console not ready: {server.base_url}")
-    log_startup("webview.ensure_server_ready.end", ok=False)
-    notify_web_console_failure(
-        danmu_app,
-        "web_console.not_ready",
-        detail=server.base_url,
-    )
+    log_startup("webview.ensure_server_ready.end", ok=False, deferred=True)
     return False
 def _fallback_to_system_browser(server: WebConsoleServer, path: str, reason: str) -> None:
     if getattr(server, "_browser_launch_opened", False):
@@ -535,6 +541,7 @@ def attach_webview_shell(
             return
         if result == "failure" and on_handshake_failed is not None:
             if not getattr(server, "_browser_launch_opened", False):
+                server._webview_open_retry_active = False
                 on_handshake_failed()
                 log_startup("attach_webview_shell.end", ok=False, deferred_retry=True)
                 return
@@ -543,12 +550,25 @@ def attach_webview_shell(
                     "pywebview handshake failed after browser fallback skipped",
                     initial_path,
                 )
+            server._webview_open_retry_active = False
         log_startup("attach_webview_shell.end", ok=(result == "success"))
-    def _begin() -> None:
+        if result == "success":
+            server._webview_open_retry_active = False
+    def _begin(defer_attempt: int = 0) -> None:
         if shell.begin_start(initial_path):
             QTimer.singleShot(_HANDSHAKE_POLL_MS, _poll)
-        else:
-            log_startup("attach_webview_shell.end", ok=False)
+            return
+        from app.web_console import classify_web_console_startup
+
+        if (
+            defer_attempt < 40
+            and classify_web_console_startup(server) != "failed"
+            and not shell.handshake_failed
+        ):
+            QTimer.singleShot(500, lambda: _begin(defer_attempt + 1))
+            return
+        log_startup("attach_webview_shell.end", ok=False)
+        server._webview_open_retry_active = False
     QTimer.singleShot(0, _begin)
     return shell
 
@@ -560,6 +580,10 @@ def retry_webview_attach(
 ) -> None:
     """重试 WebView attach（从 DanmuApp 迁移）。"""
     from PyQt6.QtCore import QTimer
+
+    server = danmu_app.web_server
+    if server is not None:
+        server._webview_open_retry_active = False
 
     if schedule_attempt >= _WEBVIEW_ATTACH_MAX_ATTEMPTS:
         shell = getattr(danmu_app, "webview_shell", None)
@@ -595,7 +619,8 @@ def schedule_webview_attach(
         return
     from app.web_console import classify_web_console_startup
 
-    if classify_web_console_startup(danmu_app.web_server) == "failed":
+    phase = classify_web_console_startup(danmu_app.web_server)
+    if phase == "failed":
         return
     shell = getattr(danmu_app, "webview_shell", None)
     if shell and (shell.is_running() or shell.is_handshake_pending()):
@@ -603,6 +628,12 @@ def schedule_webview_attach(
     if attempt == 0:
         from app.bundle_paths import is_frozen
 
+        server = danmu_app.web_server
+        if server and not getattr(server, "_webview_start_hint_shown", False):
+            tray = getattr(danmu_app, "tray", None)
+            if tray is not None:
+                tray.show_webview_starting_hint()
+            server._webview_start_hint_shown = True
         delay_ms = 400 if is_frozen() else 800
         log_startup("webview_shell.scheduled", delay_ms=delay_ms)
         QTimer.singleShot(
@@ -641,7 +672,18 @@ def open_web_console_when_ready(
         open_web_console_browser,
     )
 
-    if classify_web_console_startup(server) == "failed":
+    if not use_browser and attempt == 0:
+        if getattr(server, "_webview_open_retry_active", None) is True:
+            shell = getattr(danmu_app, "webview_shell", None)
+            if shell and shell.is_running():
+                shell.open(path)
+            elif shell and shell.is_handshake_pending():
+                shell.request_navigate(path)
+            return
+        server._webview_open_retry_active = True
+
+    phase = classify_web_console_startup(server)
+    if phase == "failed":
         if not server._startup_failure_user_notified:
             notify_web_console_failure(danmu_app, "web_console.startup_failed")
             server._startup_failure_user_notified = True
@@ -673,9 +715,11 @@ def open_web_console_when_ready(
             server._startup_failure_user_notified = True
         return
 
-    if not server.startup_ok and not wait_for_http_server(
-        server.base_url, timeout=1.0
-    ):
+    # Do not trust startup_ok alone — verify via GET /api/status (see _ensure_server_ready).
+    http_ok = wait_for_http_server(server.base_url, timeout=1.0)
+    if not http_ok and getattr(server, "startup_ok", False):
+        http_ok = wait_for_http_server(server.base_url, timeout=2.0)
+    if not http_ok:
         if attempt < 40:
             QTimer.singleShot(
                 500,
@@ -687,6 +731,8 @@ def open_web_console_when_ready(
                 ),
             )
             return
+        if not use_browser:
+            server._webview_open_retry_active = False
         if not server._startup_failure_user_notified:
             notify_web_console_failure(danmu_app, "web_console.startup_failed")
             server._startup_failure_user_notified = True
@@ -695,6 +741,8 @@ def open_web_console_when_ready(
 
     shell = getattr(danmu_app, "webview_shell", None)
     if shell and shell.is_running():
+        if not use_browser:
+            server._webview_open_retry_active = False
         shell.open(path)
         return
     if shell and shell.is_handshake_pending():

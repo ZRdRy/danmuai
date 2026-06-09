@@ -51,7 +51,6 @@ WEB_CONFIG_KEYS = (
     "danmu_render_mode",
     "floating_panel_width",
     "floating_panel_max_items",
-    "floating_panel_lifetime_sec",
     "floating_panel_speed",
     "floating_panel_x_offset",
     "floating_panel_y_offset",
@@ -245,6 +244,27 @@ class ConfigService:
             except (TypeError, ValueError):
                 items["danmu_lines"] = str(DEFAULT_DANMU_LINES)
 
+        # W-CONFIG-UI-LINK-001 / W-RENDER-TOPMOST-BATCH-001：danmu_speed 钳位 0.5–10.0
+        if "danmu_speed" in items:
+            try:
+                from app.config_defaults import DANMU_SPEED_MAX, DANMU_SPEED_MIN, DEFAULT_DANMU_SPEED
+
+                speed = max(DANMU_SPEED_MIN, min(float(items["danmu_speed"]), DANMU_SPEED_MAX))
+                items["danmu_speed"] = f"{speed:.3f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                from app.config_defaults import CONFIG_DEFAULTS
+
+                items["danmu_speed"] = CONFIG_DEFAULTS["danmu_speed"]
+        if "dedup_threshold" in items:
+            try:
+                threshold = max(0.0, min(float(items["dedup_threshold"]), 1.0))
+                items["dedup_threshold"] = f"{threshold:.3f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                items["dedup_threshold"] = "0.5"
+        if "empty_accel" in items:
+            _v = str(items["empty_accel"]).strip().lower()
+            items["empty_accel"] = "1" if _v in ("1", "true", "yes", "on") else "0"
+
         if (
             "danmu_pending_entry_cap" in items
             or "danmu_track_retention_cap" in items
@@ -303,7 +323,9 @@ class ConfigService:
                 speed = max(0.5, min(float(items["floating_panel_speed"]), 5.0))
                 items["floating_panel_speed"] = f"{speed:.3f}".rstrip("0").rstrip(".")
             except (TypeError, ValueError):
-                items["floating_panel_speed"] = "1.5"
+                from app.config_defaults import DEFAULT_FLOATING_PANEL_SPEED
+
+                items["floating_panel_speed"] = DEFAULT_FLOATING_PANEL_SPEED
         _clamp_int_key(items, "floating_panel_x_offset", 20, 0, 400)
         _clamp_int_key(items, "floating_panel_y_offset", 80, 0, 400)
         _clamp_int_key(items, "floating_panel_opacity", 85, 0, 100)
@@ -350,6 +372,19 @@ class ConfigService:
                 items["pet_opacity"] = "1.0"
         _clamp_int_key(items, "pet_command_ttl_sec", 30, 5, 300)
         _clamp_int_key(items, "pet_command_apply_count", 1, 1, 5)
+        for _key in ("pet_position_x", "pet_position_y"):
+            if _key not in items:
+                continue
+            raw = str(items[_key] or "").strip().lower()
+            if not raw or raw in ("null", "none"):
+                items[_key] = ""
+                continue
+            try:
+                pos = int(raw)
+            except (TypeError, ValueError):
+                items[_key] = ""
+                continue
+            items[_key] = str(max(-32000, min(pos, 32000)))
 
     def _merge_custom_models(self, payload_models: list[Any]) -> list[dict[str, Any]]:
         from app.web_api.custom_models import MASKED_KEY

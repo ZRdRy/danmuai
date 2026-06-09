@@ -47,6 +47,21 @@ def test_validate_rejects_dashscope_endpoint_with_doubao_model():
         )
 
 
+def test_validate_web_config_rejects_doubao_mode_with_openai_host():
+    cfg = _Cfg(
+        {
+            "api_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_mode": "openai",
+            "model": "qwen-plus",
+        }
+    )
+    with pytest.raises(ValueError, match="不匹配|does not match"):
+        validate_web_config_patch(
+            cfg,
+            {"api_mode": "doubao"},
+        )
+
+
 def test_validate_allows_dashscope_catalog_model():
     dash_model = default_catalog_model_id("dashscope")
     validate_global_model_selection(

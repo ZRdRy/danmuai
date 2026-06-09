@@ -39,6 +39,7 @@ import {
   reloadConfigFromServer,
   switchSettingsTab,
 } from './modules/settings.js';
+import { isMaskedApiKey } from './modules/settings-defaults.js';
 import { initTheme } from './modules/theme.js';
 import {
   bindContentPageControls,
@@ -83,6 +84,11 @@ import {
 
 let danmuReadConfigCache = null;
 let danmuReadCatalog = null;
+
+function invalidateDanmuReadCache() {
+  danmuReadConfigCache = null;
+  danmuReadCatalog = null;
+}
 
 function showToast(message, isError = false) {
   const el = document.getElementById('toast');
@@ -296,11 +302,18 @@ async function ensureDanmuReadCatalog() {
 }
 
 async function loadDanmuReadPage() {
-  await ensureDanmuReadCatalog();
-  const cfg = await apiFetch('/api/danmu-read/config');
-  applyDanmuReadForm(cfg);
-  const status = document.getElementById('danmuReadStatus');
-  if (status) status.textContent = '';
+  invalidateDanmuReadCache();
+  try {
+    await ensureDanmuReadCatalog();
+    const cfg = await apiFetch('/api/danmu-read/config');
+    applyDanmuReadForm(cfg);
+    const status = document.getElementById('danmuReadStatus');
+    if (status) status.textContent = '';
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? 'unknown');
+    showToast(`读弹幕页加载失败: ${message}`, true);
+    throw error;
+  }
 }
 
 async function saveDanmuReadSettings() {
@@ -314,7 +327,7 @@ async function saveDanmuReadSettings() {
     ...customPayload,
   };
   const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
-  if (keyInput && keyInput !== '********') {
+  if (keyInput && !isMaskedApiKey(keyInput)) {
     body.api_key = keyInput;
   }
   const cfg = await apiFetch('/api/danmu-read/config', {
@@ -332,7 +345,7 @@ async function probeDanmuRead() {
   if (status) status.textContent = '试听请求中（约 10-20 秒）...';
   const body = { ...customPayload };
   const keyInput = document.getElementById('danmuReadApiKey')?.value?.trim();
-  if (keyInput && keyInput !== '********') {
+  if (keyInput && !isMaskedApiKey(keyInput)) {
     body.api_key = keyInput;
   }
   const result = await apiFetch('/api/danmu-read/probe', {
@@ -461,6 +474,11 @@ async function init() {
     onConfigSaved: () => {
       if (document.getElementById('personaSelect')?.value) {
         loadPersonaTemplate().catch(console.error);
+      }
+    },
+    onSettingsTabSwitch: (tabId) => {
+      if (tabId === 'danmu-read') {
+        loadDanmuReadPage().catch(() => {});
       }
     },
   });

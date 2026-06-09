@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from tests.diagnostics_helpers import read_sse_lines
 
 
-@pytest.mark.skip(reason="Sync TestClient blocks on infinite SSE; covered by DiagnosticsHub unit tests")
+@pytest.mark.skip(reason="Sync TestClient stream still deadlocks on infinite SSE in CI; see DiagnosticsHub unit tests")
 def test_diagnostics_sse_endpoint_returns_event_stream():
     """验证 SSE 端点返回正确的 text/event-stream 响应。"""
     import asyncio

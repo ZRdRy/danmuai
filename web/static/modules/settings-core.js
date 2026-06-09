@@ -17,6 +17,8 @@ let coreDeps = {
   syncVisionModelToHidden: () => {},
   syncMicModelToHidden: () => {},
   syncProviderPresetFromEndpoint: () => {},
+  applyApiModeValue: () => {},
+  syncApiModeLockState: () => {},
   syncVisionModelPickerFromForm: () => {},
   syncMicProviderPresetFromEndpoint: () => {},
   syncMicModelPickerFromForm: () => {},
@@ -114,12 +116,17 @@ function applySettingsDefaults(scope) {
   const micKeyEl = document.getElementById('mic_api_key');
   const apiKeySnapshot = apiKeyEl?.value ?? '';
   const micKeySnapshot = micKeyEl?.value ?? '';
+  const restoreMode = document.getElementById('danmu_render_mode')?.value || 'scrolling';
   keys.forEach((key) => {
-    applyDefaultToField(key, configDefaultsCache[key]);
+    applyDefaultToField(key, configDefaultValue(key, restoreMode));
   });
   if (apiKeyEl) apiKeyEl.value = apiKeySnapshot;
   if (micKeyEl) micKeyEl.value = micKeySnapshot;
   coreDeps.syncProviderPresetFromEndpoint();
+  coreDeps.applyApiModeValue(
+    document.getElementById('api_mode')?.value || configDefaultsCache.api_mode || '',
+  );
+  coreDeps.syncApiModeLockState();
   const modelId = configDefaultsCache.model || document.getElementById('model')?.value || '';
   coreDeps.syncVisionModelPickerFromForm(modelId);
   coreDeps.syncMicProviderPresetFromEndpoint();
@@ -176,14 +183,15 @@ export function collectFormData() {
 }
 
 export function fillForm(cfg) {
-  const cfgWithMode = { ...cfg, danmu_render_mode: resolveRenderModeFromCfg(cfg) };
+  const renderMode = resolveRenderModeFromCfg(cfg);
+  const cfgWithMode = { ...cfg, danmu_render_mode: renderMode };
   CONFIG_FIELDS.forEach((name) => {
     const el = document.getElementById(name);
     if (el && cfgWithMode[name] !== undefined) el.value = cfgWithMode[name];
   });
   const setIfEmpty = (id) => {
     const el = document.getElementById(id);
-    const fallback = configDefaultValue(id);
+    const fallback = configDefaultValue(id, renderMode);
     if (el && fallback && (cfg[id] === undefined || cfg[id] === '' || cfg[id] === null)) {
       el.value = fallback;
     }
@@ -250,13 +258,16 @@ export function fillForm(cfg) {
   }
   const normalInterval = document.getElementById('normal_recognition_interval_sec');
   if (normalInterval && !cfg.normal_recognition_interval_sec) {
-    normalInterval.value = configDefaultValue('normal_recognition_interval_sec') || '5';
+    normalInterval.value = configDefaultValue('normal_recognition_interval_sec', renderMode) || '5';
   }
   const normalCount = document.getElementById('normal_reply_count');
   if (normalCount && !cfg.normal_reply_count) {
-    normalCount.value = configDefaultValue('normal_reply_count') || '5';
+    normalCount.value = configDefaultValue('normal_reply_count', renderMode) || '5';
   }
   updateNormalBatchPreview();
+  coreDeps.syncProviderPresetFromEndpoint();
+  coreDeps.applyApiModeValue(cfg.api_mode);
+  coreDeps.syncApiModeLockState();
   const modelId = cfg.active_model_id || cfg.default_model_id || cfg.model || '';
   const modelEl = document.getElementById('model');
   if (modelEl) modelEl.value = modelId;

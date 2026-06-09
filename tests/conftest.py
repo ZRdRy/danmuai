@@ -138,6 +138,7 @@ def bind_minimal_danmu_app(app, **overrides):
         "history_writer": FakeHistoryWriter(),
         "reply_buffer": AIReplyFIFOBuffer(max_items=8),
         "reply_timer": FakeTimer(),
+        "_topmost_health_timer": FakeTimer(),
         "ai_in_flight": 0,
         "_local_fallback_active": False,
         "_queue_low_watermark": 3,
@@ -151,6 +152,8 @@ def bind_minimal_danmu_app(app, **overrides):
         "config": FakeConfig(),
         "web_runtime_state": WebRuntimeState(),
         "_consecutive_failures": 0,
+        "_capture_fail_streak": 0,
+        "_capture_error_active": False,
         "_failure_backoff_paused": False,
         "_last_error_message": "",
         "_scene_generation": 0,
@@ -328,6 +331,8 @@ def make_minimal_danmu_app():
     object.__setattr__(app, "_request_timing_service", RequestTimingService())
     app.web_runtime_state = WebRuntimeState()
     app._consecutive_failures = 0
+    app._capture_fail_streak = 0
+    app._capture_error_active = False
     app._failure_backoff_paused = False
     app._last_error_message = ""
     app.MAX_CONSECUTIVE_FAILURES = 5
@@ -340,6 +345,7 @@ def make_minimal_danmu_app():
     app._latest_queued_screenshot_id = 0
     app._latest_displayed_screenshot_id = 0
     app.screenshot_timer = FakeTimer()
+    app._topmost_health_timer = FakeTimer()
     app.capturer = FakeCapturer(None)
     app._is_generating = False
     app._batch_id = 0
@@ -375,6 +381,7 @@ def make_minimal_danmu_app():
     app.get_request_scheduler = DanmuApp.get_request_scheduler.__get__(app, DanmuApp)
     app.get_request_timing_service = DanmuApp.get_request_timing_service.__get__(app, DanmuApp)
     app._release_inflight_for_source = DanmuApp._release_inflight_for_source.__get__(app, DanmuApp)
+    app._acquire_visual_inflight = DanmuApp._acquire_visual_inflight.__get__(app, DanmuApp)
     app._ensure_stats_state = DanmuApp._ensure_stats_state.__get__(app, DanmuApp)
     app._update_stats = DanmuApp._update_stats.__get__(app, DanmuApp)
     app._estimated_reply_gap_ms = DanmuApp._estimated_reply_gap_ms.__get__(app, DanmuApp)

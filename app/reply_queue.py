@@ -17,8 +17,11 @@
 
 scene_generation 字段随请求携带供记忆/日志；运行期恒为 0。本队列不做 TTL 判定。
 """
+import logging
 from collections import deque
 from dataclasses import dataclass
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,14 +51,46 @@ class AIReplyFIFOBuffer:
         self._items = deque()
         self._max_items = max(0, max_items)
 
-    def _trim_overflow(self, *, drop_from_left: bool) -> None:
+    def _drop_one_tail_replaceable_fallback(self) -> bool:
+        for index in range(len(self._items) - 1, -1, -1):
+            item = self._items[index]
+            if item.is_fallback and item.replaceable and item.source == "fallback":
+                left = list(self._items)
+                left.pop(index)
+                self._items = deque(left)
+                return True
+        return False
+
+    def _trim_overflow(
+        self,
+        *,
+        drop_from_left: bool,
+        prefer_replaceable_fallback: bool = False,
+    ) -> None:
         if self._max_items <= 0:
             return
+        dropped = 0
         while len(self._items) > self._max_items:
+            if (
+                not drop_from_left
+                and prefer_replaceable_fallback
+                and self._drop_one_tail_replaceable_fallback()
+            ):
+                dropped += 1
+                continue
             if drop_from_left:
                 self._items.popleft()
             else:
                 self._items.pop()
+            dropped += 1
+        if dropped:
+            _logger.warning(
+                "reply_queue trim: dropped=%s max_items=%s drop_from_left=%s "
+                "reason=reply_queue_trim",
+                dropped,
+                self._max_items,
+                drop_from_left,
+            )
 
     def push(self, item: QueuedReply):
         """追加一条到队尾。"""
@@ -116,7 +151,8 @@ class AIReplyFIFOBuffer:
                     break
 
         self._items = deque([*items, *preserved])
-        self._trim_overflow(drop_from_left=False)
+        # S-017: prepend overflow drops replaceable fallback tail before AI batches.
+        self._trim_overflow(drop_from_left=False, prefer_replaceable_fallback=True)
 
     def drop_replaceable_fallbacks(
         self,

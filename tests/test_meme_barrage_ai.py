@@ -31,8 +31,8 @@ def test_ai_select_failed_enqueues_fallback_prefix(tmp_path):
     app = DanmuApp.__new__(DanmuApp)
     app.config = config
     app.logger = MagicMock()
-    app._meme_ai_in_flight = True
     service = MemeBarrageService(config)
+    service.set_ai_select_in_flight(True)
     app._meme_barrage_service = service
 
     candidates = [f"c{i}" for i in range(10)]
@@ -41,7 +41,7 @@ def test_ai_select_failed_enqueues_fallback_prefix(tmp_path):
     assert service.display_queue_size() == 3
     batch = service.pop_display_batch(3)
     assert batch == ["c0", "c1", "c2"]
-    assert app._meme_ai_in_flight is False
+    assert service.is_ai_select_in_flight() is False
 
 
 def test_ai_select_done_empty_falls_back(tmp_path):

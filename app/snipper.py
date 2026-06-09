@@ -11,12 +11,19 @@ from PyQt6.QtWidgets import QApplication
 logger = logging.getLogger(__name__)
 
 
-def resolve_screen_index(config=None) -> int:
+def resolve_screen_index_with_meta(config=None) -> tuple[int, bool]:
+    """返回 (有效 screen_index, 是否因屏数变化被 clamp)。"""
     screens = QApplication.screens()
     if not screens:
-        return 0
+        return 0, False
     raw = config.get_int("screen_index", 0) if config is not None else 0
-    return max(0, min(raw, len(screens) - 1))
+    clamped = max(0, min(raw, len(screens) - 1))
+    return clamped, raw != clamped
+
+
+def resolve_screen_index(config=None) -> int:
+    index, _ = resolve_screen_index_with_meta(config)
+    return index
 
 
 def resolve_capture_rect(config, screen_geometry) -> tuple[int, int, int, int]:

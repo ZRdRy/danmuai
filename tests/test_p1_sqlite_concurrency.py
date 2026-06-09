@@ -32,6 +32,10 @@ class MockConnection:
                 raise sqlite3.OperationalError("database is locked")
         return self._conn.execute(sql, params)
 
+    def executemany(self, sql, seq_of_parameters):
+        for params in seq_of_parameters:
+            self.execute(sql, params)
+
     def commit(self):
         self._commit_call_count += 1
         if self._commit_failures:

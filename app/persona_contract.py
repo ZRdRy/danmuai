@@ -121,9 +121,12 @@ def _clamp_normal_reply_count(value: int, default: int = DEFAULT_NORMAL_REPLY_CO
 def normal_reply_count_from_config(config: ConfigStore | None) -> int:
     if config is None:
         return DEFAULT_NORMAL_REPLY_COUNT
+    from app.config_defaults import default_normal_reply_count_for_mode, resolve_danmu_render_mode
+
+    default = default_normal_reply_count_for_mode(resolve_danmu_render_mode(config))
     return _clamp_normal_reply_count(
-        config.get_int("normal_reply_count", DEFAULT_NORMAL_REPLY_COUNT),
-        DEFAULT_NORMAL_REPLY_COUNT,
+        config.get_int("normal_reply_count", default),
+        default,
     )
 
 

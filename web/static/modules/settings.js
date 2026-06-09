@@ -84,12 +84,14 @@ import {
   syncVisionModelToHidden as syncVisionModelToHiddenImpl,
 } from './settings-model-catalog.js';
 import {
+  applyApiModeValue as applyApiModeValueImpl,
   applyMicProviderPreset as applyMicProviderPresetImpl,
   applyProviderPreset as applyProviderPresetImpl,
   configureSettingsProviders,
   guessProviderIdFromEndpoint,
   loadProviders,
   resolveProviderIdForPicker as resolveProviderIdForPickerImpl,
+  syncApiModeLockState as syncApiModeLockStateImpl,
   syncMicProviderPresetFromEndpoint as syncMicProviderPresetFromEndpointImpl,
   syncProviderPresetFromEndpoint as syncProviderPresetFromEndpointImpl,
 } from './settings-providers.js';
@@ -153,6 +155,9 @@ export function configureSettingsBindings(deps) {
   });
   configureSettingsModelCatalog({
     updateMicModeHint,
+    onCatalogLoadFailed: () => {
+      showToast('模型目录加载失败，视觉模型列表可能为空，请刷新页面重试', true);
+    },
   });
   configureSettingsMicTools({
     showToast,
@@ -181,6 +186,8 @@ export function configureSettingsBindings(deps) {
     syncVisionModelToHidden,
     syncMicModelToHidden,
     syncProviderPresetFromEndpoint,
+    applyApiModeValue,
+    syncApiModeLockState,
     syncVisionModelPickerFromForm,
     syncMicProviderPresetFromEndpoint,
     syncMicModelPickerFromForm,
@@ -237,6 +244,14 @@ function syncMicModelPickerFromForm(selectedModelId) {
 
 function syncProviderPresetFromEndpoint() {
   return syncProviderPresetFromEndpointImpl();
+}
+
+function applyApiModeValue(mode) {
+  return applyApiModeValueImpl(mode);
+}
+
+function syncApiModeLockState() {
+  return syncApiModeLockStateImpl();
 }
 
 function resolveProviderIdForPicker() {
@@ -349,15 +364,16 @@ export function updateMicModeHint() {
     return;
   }
   hint.classList.remove('hidden');
+  const prefix = '麦克风可能无法识别你的声音：';
   if (providerId === 'mimo') {
-    hint.textContent = `麦克风模式需使用 MiMo-V2.5（mimo-v2.5）。当前模型「${modelId || '未选'}」不支持开麦；请在麦克风标签改选 mimo-v2.5 或开启「与识图模型相同」，保存后再开始弹幕。`;
+    hint.textContent = `${prefix}需使用 MiMo-V2.5（mimo-v2.5）。当前模型「${modelId || '未选'}」不支持开麦；请在麦克风标签改选 mimo-v2.5 或开启「与识图模型相同」，保存后再开始弹幕。`;
     return;
   }
   if (apiMode !== 'doubao' && providerId !== 'doubao') {
-    hint.textContent = `当前模型「${modelId || '未选'}」未声明 mic_audio 支持。请在模型配置档案中勾选「支持麦克风」，或改用豆包/MiMo，或在麦克风标签单独配置。`;
+    hint.textContent = `${prefix}当前模型「${modelId || '未选'}」未声明 mic_audio 支持。请在模型配置档案中勾选「支持麦克风」，或改用豆包/MiMo，或在麦克风标签单独配置。`;
     return;
   }
-  hint.textContent = `当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），保存后再开始弹幕。`;
+  hint.textContent = `${prefix}当前模型「${modelId || '未选'}」可能听不懂麦克风。请改选带「支持麦克风」的模型（例如 doubao-seed-2-0-mini），保存后再开始弹幕。`;
 }
 
 function updateModelActiveSourceBanner(cfg) {

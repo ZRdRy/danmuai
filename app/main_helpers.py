@@ -18,8 +18,14 @@ from app.memory.types import MEMORY_MODE_OFF
 from app.personae import persona_display_name
 
 VISUAL_INFLIGHT_WARN_SEC = 45.0
+# Hung stream / no callback: force-release visual slot (S-011); before 60s double-retry ceiling (S-012).
+VISUAL_INFLIGHT_RECOVER_SEC = 48.0
+# AiRunnable wall clock: hung SSE must error before double-retry ceiling (S-012).
+REQUEST_WALL_CLOCK_SEC = 45.0
 MAX_IN_FLIGHT = 1
 MAX_MIC_IN_FLIGHT = 1
+# S-009: consecutive capture failures before surfacing Web status bar warning.
+CAPTURE_FAIL_WARN_THRESHOLD = 3
 
 
 class BatchTracker:

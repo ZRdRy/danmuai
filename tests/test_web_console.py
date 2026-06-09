@@ -35,7 +35,6 @@ def test_danmu_render_mode_defaults_exported():
     defaults = export_web_config_defaults()
     assert defaults["danmu_render_mode"] == "scrolling"
     assert defaults["floating_panel_width"] == "360"
-    assert defaults["floating_panel_lifetime_sec"] == "7"
 
 
 def test_danmu_render_mode_persists_via_config_service(tmp_path):
@@ -93,7 +92,6 @@ def test_floating_panel_v2_keys_round_trip(tmp_path):
     payload = {
         "floating_panel_width": "400",
         "floating_panel_max_items": "8",
-        "floating_panel_lifetime_sec": "10",
         "floating_panel_x_offset": "30",
         "floating_panel_y_offset": "60",
         "floating_panel_opacity": "90",
@@ -109,7 +107,6 @@ def test_config_defaults_include_v2_keys():
     for key in (
         "danmu_render_mode",
         "floating_panel_width",
-        "floating_panel_lifetime_sec",
     ):
         assert key in CONFIG_DEFAULTS
     assert "display_mode" not in CONFIG_DEFAULTS

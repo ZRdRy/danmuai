@@ -27,6 +27,7 @@ class DanmuAppStateMixin:
     """
 
     def _get_request_scheduler(self) -> RequestScheduler:
+        # W-MEDLOW-001：生产路径在 _init_request_pipeline_state eager 创建；以下为最小单测回退。
         try:
             return object.__getattribute__(self, "_request_scheduler")
         except AttributeError:
@@ -43,10 +44,18 @@ class DanmuAppStateMixin:
             return service
 
     def _normal_recognition_interval_ms(self) -> int:
+        from app.config_defaults import (
+            default_normal_recognition_interval_sec_for_mode,
+            resolve_danmu_render_mode,
+        )
+
+        default_sec = default_normal_recognition_interval_sec_for_mode(
+            resolve_danmu_render_mode(self.config)
+        )
         try:
-            sec = int(self.config.get("normal_recognition_interval_sec", "5"))
+            sec = int(self.config.get("normal_recognition_interval_sec", str(default_sec)))
         except (TypeError, ValueError):
-            sec = 5
+            sec = default_sec
         sec = max(1, min(sec, 60))
         return sec * 1000
 

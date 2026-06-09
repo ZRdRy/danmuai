@@ -12,9 +12,10 @@ import sys
 import time
 from datetime import datetime
 
-from PyQt6.QtCore import QThreadPool, QTimer
+from PyQt6.QtCore import QTimer
 
 from app.main_helpers import MAX_MIC_IN_FLIGHT
+from app.worker_pools import ai_worker_pool
 from app.mic_encode import pcm_to_wav_data_uri
 from app.mic_prompt import build_mic_insert_user_pt
 from app.mic_service import mic_mode_enabled
@@ -170,7 +171,7 @@ class DanmuAppMicMixin:
             mic_pcm=pcm,
             mic_attach_audio=True,
         )
-        QThreadPool.globalInstance().start(runnable)
+        ai_worker_pool().start(runnable)
 
     def _handle_mic_ai_reply(
         self,

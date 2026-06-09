@@ -8,13 +8,18 @@
 
 from __future__ import annotations
 
+import sys
 import time
+
+from PyQt6.QtWidgets import QApplication
 
 from app.config_defaults import resolve_danmu_render_mode
 from app.danmu_engine_models import DanmuItem
 from app.live_freshness import LiveStatusSnapshot
 from app.reply_queue import QueuedReply
-from app.snipper import resolve_screen_index
+from app.snipper import resolve_screen_index, resolve_screen_index_with_meta
+from app.translations import tr
+from app.win32_overlay_zorder import probe_exclusive_fullscreen_risk
 
 
 class DanmuAppDisplayMixin:
@@ -188,6 +193,117 @@ class DanmuAppDisplayMixin:
         else:
             overlay.stop_render_loop()
             overlay.hide()
+
+    def _active_overlay_layer(self):
+        """当前 danmu_render_mode 下可见的弹幕层（横向 Overlay 或 floating_panel）。"""
+        if not self.engine.running:
+            return None
+        if self._overlay_display_enabled():
+            layer = getattr(self, "overlay", None)
+            if layer is not None and layer.isVisible():
+                return layer
+            return None
+        if self._floating_panel_v2_enabled():
+            layer = self.__dict__.get("floating_panel_overlay")
+            if layer is not None and layer.isVisible():
+                return layer
+        return None
+
+    def _overlay_own_hwnds(self) -> tuple[int, ...]:
+        hwnds: list[int] = []
+        for key in ("overlay", "floating_panel_overlay", "pet_window"):
+            widget = self.__dict__.get(key)
+            if widget is None or not widget.isVisible():
+                continue
+            try:
+                hwnd = int(widget.winId())
+            except Exception:
+                hwnd = 0
+            if hwnd:
+                hwnds.append(hwnd)
+        return tuple(hwnds)
+
+    def _reassert_pet_above_overlays(self) -> None:
+        pet = self.__dict__.get("pet_window")
+        if pet is None or not pet.isVisible():
+            return
+        settings = getattr(pet, "_settings", None)
+        if settings is None or not getattr(settings, "always_on_top", False):
+            return
+        reassert = getattr(pet, "_reassert_topmost", None)
+        if callable(reassert):
+            reassert()
+
+    def _reassert_active_overlay_topmost(self) -> None:
+        layer = self._active_overlay_layer()
+        if layer is None:
+            return
+        reassert = getattr(layer, "reassert_topmost_zorder", None)
+        if callable(reassert):
+            reassert()
+        self._reassert_pet_above_overlays()
+
+    def _update_screen_index_fallback_warning(self) -> None:
+        runtime = self._ensure_web_runtime_state()
+        if not self.engine.running:
+            runtime.set_screen_index_fallback_warning("")
+            return
+        _, clamped = resolve_screen_index_with_meta(self.config)
+        message = tr("overlay.screen_index_fallback_hint") if clamped else ""
+        prev = str(getattr(runtime, "screen_index_fallback_warning", "") or "")
+        runtime.set_screen_index_fallback_warning(message)
+        if message != prev:
+            bridge = getattr(self, "web_bridge", None)
+            if bridge:
+                bridge.publish_status()
+
+    def _update_overlay_compat_warning(self) -> None:
+        runtime = self._ensure_web_runtime_state()
+        layer = self._active_overlay_layer()
+        if layer is None or sys.platform != "win32":
+            runtime.set_overlay_compat_warning("")
+            return
+        try:
+            overlay_hwnd = int(layer.winId())
+        except Exception:
+            runtime.set_overlay_compat_warning("")
+            return
+        screens = QApplication.screens()
+        if not screens:
+            runtime.set_overlay_compat_warning("")
+            return
+        screen_index = resolve_screen_index(self.config)
+        screen_index = max(0, min(screen_index, len(screens) - 1))
+        geo = screens[screen_index].geometry()
+        at_risk = probe_exclusive_fullscreen_risk(
+            overlay_hwnd=overlay_hwnd,
+            screen_x=geo.x(),
+            screen_y=geo.y(),
+            screen_w=geo.width(),
+            screen_h=geo.height(),
+            own_hwnds=self._overlay_own_hwnds(),
+        )
+        message = (
+            tr("overlay.exclusive_fullscreen_hint")
+            if at_risk
+            else ""
+        )
+        prev = str(getattr(runtime, "overlay_compat_warning", "") or "")
+        runtime.set_overlay_compat_warning(message)
+        if message != prev:
+            bridge = getattr(self, "web_bridge", None)
+            if bridge:
+                bridge.publish_status()
+
+    def _on_topmost_health_tick(self) -> None:
+        if not self.engine.running:
+            return
+        if self._active_overlay_layer() is None:
+            self._ensure_web_runtime_state().set_overlay_compat_warning("")
+            return
+        self._reassert_active_overlay_topmost()
+        self._update_overlay_compat_warning()
+        self._update_screen_index_fallback_warning()
 
     def _display_floating_panel_text(
         self,

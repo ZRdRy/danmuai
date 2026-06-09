@@ -7,6 +7,11 @@
 from __future__ import annotations
 
 import random
+from typing import Any
+
+# 按 config 实例缓存公式化句集合；池/烂梗库写入后须 invalidate_formula_text_cache。
+_formula_custom_sets: dict[int, set[str]] = {}
+_formula_meme_sets: dict[int, set[str]] = {}
 
 
 def danmu_pool_use_custom_from_config(config) -> bool:
@@ -88,6 +93,45 @@ def custom_pool_size(config) -> int:
     return len(load_custom_danmu_pool(config))
 
 
+def invalidate_formula_text_cache(config: Any | None = None) -> None:
+    """Drop cached formula-text sets after custom pool or meme library writes."""
+    if config is None:
+        _formula_custom_sets.clear()
+        _formula_meme_sets.clear()
+        return
+    key = id(config)
+    _formula_custom_sets.pop(key, None)
+    _formula_meme_sets.pop(key, None)
+
+
+def _custom_pool_text_set(config) -> set[str]:
+    key = id(config)
+    cached = _formula_custom_sets.get(key)
+    if cached is not None:
+        return cached
+    getter = getattr(config, "get_custom_danmu_pool", None)
+    if not callable(getter):
+        cached = set()
+    else:
+        cached = {str(item).strip() for item in getter() if str(item).strip()}
+    _formula_custom_sets[key] = cached
+    return cached
+
+
+def _meme_barrage_text_set(config) -> set[str]:
+    key = id(config)
+    cached = _formula_meme_sets.get(key)
+    if cached is not None:
+        return cached
+    bulk = getattr(config, "meme_barrage_library_all_texts", None)
+    if callable(bulk):
+        cached = {str(t).strip() for t in bulk() if str(t).strip()}
+    else:
+        cached = set()
+    _formula_meme_sets[key] = cached
+    return cached
+
+
 def is_stored_custom_pool_text(config, content: str) -> bool:
     """True when content exactly matches a saved custom pool line (full display, no truncation)."""
     if config is None:
@@ -98,7 +142,7 @@ def is_stored_custom_pool_text(config, content: str) -> bool:
     getter = getattr(config, "get_custom_danmu_pool", None)
     if not callable(getter):
         return False
-    return text in set(getter())
+    return text in _custom_pool_text_set(config)
 
 
 def is_stored_meme_barrage_text(config, content: str) -> bool:
@@ -108,10 +152,11 @@ def is_stored_meme_barrage_text(config, content: str) -> bool:
     text = str(content).strip()
     if not text:
         return False
-    checker = getattr(config, "meme_barrage_library_contains_text", None)
-    if not callable(checker):
+    if not callable(getattr(config, "meme_barrage_library_contains_text", None)) and not callable(
+        getattr(config, "meme_barrage_library_all_texts", None)
+    ):
         return False
-    return bool(checker(text))
+    return text in _meme_barrage_text_set(config)
 
 
 def is_formula_danmu_text(config, content: str) -> bool:
@@ -131,7 +176,8 @@ def maybe_pool_topup(engine, config, scene_generation: int) -> int:
     if not any_danmu_pool_source_enabled(config):
         return 0
     # W-DANMU-POOL-003: 用户配了 danmu_pending_entry_cap 时，避免入口区被池句占满
-    if getattr(engine, "entry_zone_overloaded", lambda: False)():
+    entry_checker = getattr(engine, "entry_zone_overloaded", None)
+    if callable(entry_checker) and entry_checker():
         return 0
     deficit = engine.deficit_below_min()
     if deficit <= 0:

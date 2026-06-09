@@ -102,9 +102,9 @@ def test_resolve_interaction_post_drag_waving_then_idle_mapper(qapp):
             drag_anim_state="waving",
             post_drag_waving_until=now - 0.1,
             now=now,
-            mapper_state="review",
+            mapper_state="idle",
         )
-        == "review"
+        == "idle"
     )
 
 

@@ -50,8 +50,10 @@ def test_compress_screenshot_failure_path():
     mock_pixmap.toImage.side_effect = RuntimeError("has been deleted")
 
     # 创建 mock worker
+    import threading
+
     mock_worker = Mock()
-    mock_worker._stopping = False
+    mock_worker._stopping = threading.Event()
 
     # 创建 runnable 并执行
     runnable = AiRunnable(
@@ -136,6 +138,38 @@ def test_invalid_pixmap_does_not_increment_screenshot_id():
     assert app._latest_screenshot_id == 5
     assert app._latest_screenshot is None
     assert any("invalid_pixmap" in msg for msg in app.logger.warning_messages)
+
+
+def test_repeated_capture_failure_sets_web_error_status():
+    """S-009: third consecutive capture failure surfaces Web status bar error."""
+    app = make_minimal_danmu_app()
+    app.engine.running = True
+    app.capturer = FakeCapturer(None)
+    errors: list[tuple[str, bool]] = []
+    app._set_error_status_safe = lambda msg, is_error: errors.append((msg, is_error))
+
+    for _ in range(3):
+        app._capture_screenshot()
+
+    assert app._capture_fail_streak == 3
+    assert errors
+    assert errors[-1][1] is True
+
+
+def test_capture_success_clears_capture_error_status():
+    app = make_minimal_danmu_app()
+    app.engine.running = True
+    app._capture_fail_streak = 3
+    app._capture_error_active = True
+    errors: list[tuple[str, bool]] = []
+    app._set_error_status_safe = lambda msg, is_error: errors.append((msg, is_error))
+    app.capturer = FakeCapturer(FakePixmap(0b1))
+
+    app._capture_screenshot()
+
+    assert app._capture_fail_streak == 0
+    assert app._capture_error_active is False
+    assert ("", False) in errors
 
 
 def test_capture_failure_reschedules_next_screenshot():

@@ -49,6 +49,17 @@ class StatusSnapshotBuilder:
         ):
             selection_state = "idle"
 
+        overlay_compat_warning = ""
+        screen_index_fallback_warning = ""
+        web_runtime = _safe_app_attr(self._app, "web_runtime_state")
+        if web_runtime is not None and state.running:
+            overlay_compat_warning = str(
+                getattr(web_runtime, "overlay_compat_warning", "") or ""
+            )
+            screen_index_fallback_warning = str(
+                getattr(web_runtime, "screen_index_fallback_warning", "") or ""
+            )
+
         return {
             "running": state.running,
             "danmu_count": state.danmu_count,
@@ -65,6 +76,8 @@ class StatusSnapshotBuilder:
             "runtime_sec": state.runtime_sec,
             "error_message": state.error_message,
             "is_error": state.is_error,
+            "overlay_compat_warning": overlay_compat_warning,
+            "screen_index_fallback_warning": screen_index_fallback_warning,
             "live_analyzing": bool(live_snapshot.analyzing) if live_snapshot else False,
             "live_local_fallback": bool(live_snapshot.local_fallback) if live_snapshot else False,
             "live_delay_sec": float(live_snapshot.delay_sec) if live_snapshot else 0.0,

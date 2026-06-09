@@ -6,9 +6,10 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.ai_client_support import sanitize_provider_error_snippet
 from app.ai_client import THINKING_DISABLED, format_http_status_error
 from app.model_providers import normalize_endpoint, normalize_mode, resolve_api_transport
-from app.providers import get_capabilities_for_endpoint, get_openai_adapter
+from app.providers import get_capabilities_for_endpoint, get_openai_adapter, provider_extra_headers
 from app.translations import tr
 
 
@@ -45,8 +46,11 @@ def probe_connection(
         return ProbeResult(False, tr("ai.error_timeout"))
     except httpx.HTTPStatusError as exc:
         return ProbeResult(False, format_http_status_error(exc), exc.response.status_code)
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return ProbeResult(False, tr("ai.error_connection_failed"))
     except Exception as exc:
-        return ProbeResult(False, tr("ai.error_request_failed").format(error=exc))
+        detail = sanitize_provider_error_snippet(str(exc))
+        return ProbeResult(False, tr("ai.error_request_failed").format(error=detail))
 
 
 def _probe_doubao(endpoint: str, api_key: str, model_id: str) -> ProbeResult:
@@ -91,6 +95,7 @@ def _probe_openai(endpoint: str, api_key: str, model_id: str, mode: str) -> Prob
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    headers.update(provider_extra_headers(endpoint))
     caps = get_capabilities_for_endpoint(endpoint, mode)
     adapter = get_openai_adapter(endpoint, mode)
     data = {

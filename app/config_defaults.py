@@ -32,10 +32,18 @@ if TYPE_CHECKING:
 
 # Numeric fallbacks when a key is missing from the store (keep in sync with CONFIG_DEFAULTS).
 DEFAULT_DANMU_SPEED = 2.0
+DANMU_SPEED_MIN = 0.5
+DANMU_SPEED_MAX = 10.0
 DEFAULT_FONT_SIZE = 24
+DEFAULT_DANMU_FONT_FAMILY = "Microsoft YaHei"
 DEFAULT_DEDUP_THRESHOLD = 0.5
 DEFAULT_IMAGE_MAX_WIDTH = 768
 DEFAULT_LANGUAGE = "zh"
+# 横屏 scrolling 与从下到上 floating_panel 的节奏默认值（仅键缺失时按 render mode 回落）
+SCROLLING_NORMAL_RECOGNITION_INTERVAL_SEC = 5
+FLOATING_PANEL_NORMAL_RECOGNITION_INTERVAL_SEC = 5
+FLOATING_PANEL_NORMAL_REPLY_COUNT = 10
+DEFAULT_FLOATING_PANEL_SPEED = "1"
 
 # String values aligned with runtime fallbacks in main.py / danmu_engine / ai_client.
 CONFIG_DEFAULTS: dict[str, str] = {
@@ -101,13 +109,11 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "danmu_render_mode": "scrolling",
     "floating_panel_width": "360",
     "floating_panel_max_items": "12",
-    "floating_panel_lifetime_sec": "7",
     "floating_panel_x_offset": "20",
     "floating_panel_y_offset": "80",
     "floating_panel_opacity": "85",
     "floating_panel_font_size": "20",
-    "floating_panel_speed": "1.5",
-    "floating_panel_click_through": "1",
+    "floating_panel_speed": DEFAULT_FLOATING_PANEL_SPEED,
     "imported_fonts": "[]",  # W-FONT-002：[{sha256, family, original_name, size, imported_at}, ...]
     # PET-003：桌宠显示与指令注入（无独立模型配置）
     "pet_enabled": "0",
@@ -163,11 +169,37 @@ def export_web_config_defaults() -> dict[str, str]:
     return defaults
 
 
+def default_normal_reply_count_for_mode(mode: str) -> int:
+    if mode == "floating_panel":
+        return FLOATING_PANEL_NORMAL_REPLY_COUNT
+    return DEFAULT_NORMAL_REPLY_COUNT
+
+
+def default_normal_recognition_interval_sec_for_mode(mode: str) -> int:
+    if mode == "floating_panel":
+        return FLOATING_PANEL_NORMAL_RECOGNITION_INTERVAL_SEC
+    return SCROLLING_NORMAL_RECOGNITION_INTERVAL_SEC
+
+
+def default_config_value_for_mode(key: str, mode: str) -> str:
+    """Mode-aware documented default (does not read the store)."""
+    if key == "normal_reply_count":
+        return str(default_normal_reply_count_for_mode(mode))
+    if key == "normal_recognition_interval_sec":
+        return str(default_normal_recognition_interval_sec_for_mode(mode))
+    if key == "floating_panel_speed":
+        return DEFAULT_FLOATING_PANEL_SPEED
+    return CONFIG_DEFAULTS.get(key, "")
+
+
 def config_value_with_default(config, key: str) -> str:
     """Return stored value or documented default (for API export / UI)."""
     val = config.get(key, "")
     if val != "":
         return val
+    if key in ("normal_reply_count", "normal_recognition_interval_sec", "floating_panel_speed"):
+        mode = resolve_danmu_render_mode(config)
+        return default_config_value_for_mode(key, mode)
     return CONFIG_DEFAULTS.get(key, "")
 
 

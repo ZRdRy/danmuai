@@ -1,5 +1,6 @@
 """Custom model web API service tests."""
 
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -143,3 +144,33 @@ def test_create_custom_model_normalizes_endpoint_on_save(model_app):
     stored = model_app.config.get_custom_models()[created["index"]]
     assert stored["endpoint"] == "https://openrouter.ai/api/v1"
     assert stored["mode"] == "openai-compatible"
+
+
+def test_custom_model_api_key_encrypted_at_rest_in_sqlite(model_app):
+    """W-TEST-COVER-005: apiKey is Fernet-encrypted in config.db; GET masks; get_custom_models decrypts."""
+    secret = "sk-plaintext-storage-test-key"
+    cm_api.create_custom_model(
+        model_app,
+        {
+            "name": "Plain",
+            "modelId": "plain-model",
+            "mode": "openai",
+            "endpoint": "https://api.example.com/v1",
+            "apiKey": secret,
+            "provider": "custom_openai",
+        },
+    )
+    listing = cm_api.list_custom_models(model_app)
+    assert listing["items"][0]["apiKey"] == "********"
+    assert model_app.config.get_custom_models()[0]["apiKey"] == secret
+
+    conn = sqlite3.connect(str(model_app.config.db_path))
+    try:
+        row = conn.execute(
+            "SELECT value FROM config WHERE key = ?",
+            ("custom_models",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert secret not in row[0]

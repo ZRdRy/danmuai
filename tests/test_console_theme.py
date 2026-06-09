@@ -88,12 +88,20 @@ def test_theme_static_assets_present():
     root = project_root()
     html = (root / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (root / "web" / "static" / "warm-tokens.css").read_text(encoding="utf-8")
+    base_css = (root / "web" / "static" / "warm-tokens-base.css").read_text(encoding="utf-8")
+    components_css = (root / "web" / "static" / "warm-tokens-components.css").read_text(
+        encoding="utf-8"
+    )
     theme_js = (root / "web" / "static" / "modules" / "theme.js").read_text(encoding="utf-8")
     app_js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="themeToggle"' in html
     assert "danmu_console_theme" in html
     assert '[data-theme="dark"]' in css
+    assert "--tooltip-bg" in base_css
+    assert "--tooltip-fg" in base_css
+    assert "background-color: var(--tooltip-bg)" in components_css
+    assert "color: var(--tooltip-fg)" in components_css
     assert "export function initTheme" in theme_js
     assert "from './modules/theme.js'" in app_js
     assert "initTheme()" in app_js

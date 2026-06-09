@@ -13,6 +13,7 @@ import time
 from app.api_schedule import min_api_interval_elapsed
 from app.danmu_engine import dedup_profile_enabled, log_dedup_profile_summary
 from app.main_helpers import (
+    VISUAL_INFLIGHT_RECOVER_SEC,
     density_right_target,
     memory_enabled,
     memory_mode_from_value,
@@ -57,6 +58,14 @@ class DanmuAppRequestContextMixin:
             return {}
         return meta
 
+    def _acquire_visual_inflight(self, screenshot_id: int, scene_generation: int) -> None:
+        """W-MAIN-INFLIGHT-ATOMIC-001：视觉 in-flight 计数与关联字段同处写入（主线程）。"""
+        self.ai_in_flight += 1
+        self._is_generating = True
+        self._inflight_screenshot_id = screenshot_id
+        self._inflight_scene_generation = scene_generation
+        self._inflight_started_at = time.monotonic()
+
     def _release_inflight_for_source(self, source: str) -> None:
         if source == "mic":
             self.mic_in_flight = max(0, self.mic_in_flight - 1)
@@ -66,6 +75,58 @@ class DanmuAppRequestContextMixin:
         self._inflight_started_at = 0.0
         self._inflight_screenshot_id = 0
         self._inflight_scene_generation = 0
+
+    def _pop_request_meta_for_inflight(
+        self,
+        screenshot_id: int,
+        scene_generation: int,
+    ) -> list[str]:
+        """Pop pending meta keys matching inflight screenshot/scene (main thread)."""
+        suffix = f":{screenshot_id}:{scene_generation}"
+        popped: list[str] = []
+        for key in list(self._pending_request_meta.keys()):
+            if not key.endswith(suffix):
+                continue
+            if self._pending_request_meta.pop(key, None) is not None:
+                popped.append(key)
+        return popped
+
+    def _try_recover_stale_visual_inflight(self) -> bool:
+        """Force-release visual in-flight when HTTP never completes (S-011 / S-024).
+
+        Main thread only. Complements W-015 (_request exception); does not bypass
+        RequestScheduler for future triggers — only clears a stuck slot and orphan meta.
+        """
+        if not self._has_visual_request_in_flight():
+            return False
+        if self._inflight_started_at <= 0:
+            return False
+        elapsed = time.monotonic() - self._inflight_started_at
+        if elapsed < VISUAL_INFLIGHT_RECOVER_SEC:
+            return False
+
+        screenshot_id = self._inflight_screenshot_id
+        scene_generation = self._inflight_scene_generation
+        popped_keys = self._pop_request_meta_for_inflight(screenshot_id, scene_generation)
+        timing_service = self._get_request_timing_service()
+        now = time.monotonic()
+        for key in popped_keys:
+            timing_service.consume_timing(request_id=key, now=now)
+        purged = timing_service.purge_stale(now=now)
+
+        self._release_inflight_for_source("visual")
+        self._consecutive_failures += 1
+        self.logger.error(
+            "视觉请求 in-flight 强制恢复: screenshot_id=%s scene_generation=%s "
+            "elapsed_ms=%s popped_meta=%s purged_timing=%s reason=inflight_watchdog_recover",
+            screenshot_id,
+            scene_generation,
+            int(elapsed * 1000),
+            popped_keys,
+            purged,
+        )
+        self._publish_live_status()
+        return True
 
     def _api_schedule_block_reason(self, *, enforce_min_interval: bool) -> str:
         """委托 RequestScheduler 判断视觉请求是否应阻塞。"""

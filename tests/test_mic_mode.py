@@ -112,6 +112,7 @@ def _bind_app_for_stop(app, *, mic_service, mic_orchestrator) -> None:
     app._mic_service = mic_service
     app._mic_orchestrator = mic_orchestrator
     app._mic_poll_timer = FakeTimer()
+    app._topmost_health_timer = FakeTimer()
     object.__setattr__(
         app,
         "_flush_session_runtime_to_lifetime",

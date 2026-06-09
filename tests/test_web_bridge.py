@@ -412,8 +412,8 @@ def test_quit_logs_warning_when_thread_pool_does_not_finish(monkeypatch):
 
     DanmuApp.quit(app)
 
-    app.logger.warning.assert_called_once_with(
-        "quit timed out waiting for AI worker thread pool"
-    )
+    app.logger.warning.assert_called_once()
+    args = app.logger.warning.call_args[0]
+    assert args[0].startswith("quit timed out waiting for AI worker thread pool")
 
 

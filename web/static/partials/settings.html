@@ -131,7 +131,7 @@
                 麦克风模式（实验）
               </label>
               <p class="text-xs text-gray-400 mt-1">开启后，说完一句话会额外生成几条接话弹幕，并插队显示，不影响看屏识图的节奏。请<strong>说完后停顿约半秒</strong>；环境较吵时启动后会自动校准。录音只在内存里处理，不会保存到硬盘。</p>
-              <p id="micModeHint" class="text-xs text-amber-600 mt-1 hidden"></p>
+              <div id="micModeHint" class="hidden mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert" aria-live="polite"></div>
               <p id="micActiveSourceBanner" class="text-xs text-sky-700 mt-2 hidden"></p>
             </div>
             <div class="md:col-span-2">
@@ -203,7 +203,7 @@
           </h3>
           <p class="text-sm text-gray-500 -mt-2">使用语音合成定时随机朗读当前屏幕上的一条弹幕</p>
           <div class="bg-softPeach/30 p-4 rounded-xl text-sm text-warmText border border-softPeach">
-            <p>默认使用<strong class="text-warmPink">小米 MiMo</strong>（<code class="text-xs">mimo-v2.5-tts</code>）；也可配置<strong> OpenAI 兼容</strong>的 chat/completions 音频接口（响应需含 <code class="text-xs">message.audio.data</code>）。TTS API Key 与助手设置中的视觉 API Key <strong>相互独立</strong>，请在本页单独填写。</p>
+            <p>默认使用<strong class="text-warmPink">小米 MiMo</strong>（<code class="text-xs">mimo-v2.5-tts</code>）；也可选用<strong class="text-warmPink">火山豆包语音</strong>、<strong class="text-warmPink">阿里百炼 Qwen3</strong>，或<strong> OpenAI 兼容</strong>的 chat/completions 音频接口（响应需含 <code class="text-xs">message.audio.data</code>）。TTS API Key 与助手设置中的视觉 API Key <strong>相互独立</strong>，请在本页单独填写。</p>
             <p class="mt-2">仅在<strong>已开始生成</strong>且屏幕上有可见弹幕时才会朗读；停止生成后不再请求。</p>
             <p class="mt-2 text-xs text-gray-500">MiMo 参数说明见 <a href="https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis-v2.5" target="_blank" rel="noopener noreferrer" class="text-warmPink underline">语音合成文档</a>。</p>
           </div>
@@ -218,24 +218,35 @@
               <p class="settings-section-hint mt-1">每隔若干秒随机选一条当前屏上可见弹幕合成语音（3–120 秒）。间隔过短会在上一句<strong>播完之前</strong>无法开始下一句；合成约需 10–20 秒，建议间隔 ≥15 秒。</p>
             </div>
             <div class="p-4 bg-cream/60 rounded-xl border border-softPeach space-y-3">
-              <h4 class="text-sm font-bold text-warmText">自定义 TTS 模型</h4>
+              <h4 class="text-sm font-bold text-warmText">TTS 平台与模型</h4>
               <p class="settings-section-hint -mt-1">读弹幕是<strong>语音合成（TTS）</strong>链路，与助手设置中的<strong>聊天/视觉模型</strong>不同。OpenRouter、One API 等普通聊天模型通常<strong>无法</strong>返回音频，请勿直接复用弹幕生成模型。</p>
               <div>
                 <label for="danmuReadProvider" class="block text-sm font-semibold mb-2 text-warmText">AI 平台</label>
                 <select id="danmuReadProvider" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
                   <option value="">小米 MiMo（默认）</option>
+                  <option value="doubao">火山豆包语音</option>
+                  <option value="dashscope_qwen">阿里百炼 Qwen3</option>
                   <option value="custom_openai">自定义（OpenAI 兼容）</option>
                 </select>
               </div>
-              <div>
+              <div id="danmuReadModelSelectWrap">
+                <label for="danmuReadModelSelect" class="block text-sm font-semibold mb-2 text-warmText">TTS 模型</label>
+                <select id="danmuReadModelSelect" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText"></select>
+              </div>
+              <div id="danmuReadAppIdWrap" hidden>
+                <label for="danmuReadAppId" class="block text-sm font-semibold mb-2 text-warmText">豆包 App ID（可选）</label>
+                <input type="text" id="danmuReadAppId" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="与 Access Token 配对使用时填写">
+                <p class="settings-section-hint mt-1">仅豆包语音需要；若仅用 API Key / Access Token 可留空。</p>
+              </div>
+              <div id="danmuReadCustomEndpointWrap" hidden>
                 <label for="danmuReadEndpoint" class="block text-sm font-semibold mb-2 text-warmText">API 地址</label>
                 <input type="url" id="danmuReadEndpoint" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="https://api.example.com/v1">
               </div>
-              <div>
+              <div id="danmuReadCustomModelWrap" hidden>
                 <label for="danmuReadModelId" class="block text-sm font-semibold mb-2 text-warmText">模型名称</label>
                 <input type="text" id="danmuReadModelId" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="例如 mimo-v2.5-tts">
               </div>
-              <p class="settings-section-hint">选择「默认」时不保存自定义字段，朗读使用 MiMo 出厂配置。自定义平台须同时填写 API 地址与模型名称。</p>
+              <p class="settings-section-hint">选择「默认」时不保存自定义字段，朗读使用 MiMo 出厂配置。豆包 / 百炼须选择 TTS 模型；自定义平台须同时填写 API 地址与模型名称。</p>
             </div>
             <div>
               <label for="danmuReadApiKey" class="block text-sm font-semibold mb-2 text-warmText">TTS API Key</label>
@@ -243,22 +254,12 @@
             </div>
             <div>
               <label for="danmuReadVoice" class="block text-sm font-semibold mb-2 text-warmText">预置音色</label>
-              <select id="danmuReadVoice" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                <option value="mimo_default">MiMo-默认</option>
-                <option value="冰糖">冰糖</option>
-                <option value="茉莉">茉莉</option>
-                <option value="苏打">苏打</option>
-                <option value="白桦">白桦</option>
-                <option value="Mia">Mia</option>
-                <option value="Chloe">Chloe</option>
-                <option value="Milo">Milo</option>
-                <option value="Dean">Dean</option>
-              </select>
+              <select id="danmuReadVoice" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText"></select>
             </div>
             <div>
               <label for="danmuReadStylePrompt" class="block text-sm font-semibold mb-2 text-warmText">风格指令（可选）</label>
               <textarea id="danmuReadStylePrompt" rows="4" class="w-full px-4 py-3 bg-cream rounded-xl text-warmText border border-softPeach" placeholder="温柔微颤语气，1.0倍速，温暖音色，独白式表达，句尾轻收配合自然呼吸停顿，情绪克制有层次，适配泪目治愈类弹幕"></textarea>
-              <p class="settings-section-hint mt-1">对应 API 中 role 为 user 的消息，用于控制语气与风格；新装默认已填泪目治愈向指令，留空则仅朗读弹幕正文。</p>
+              <p id="danmuReadStyleHint" class="settings-section-hint mt-1">对应 API 中 role 为 user 的消息，用于控制语气与风格；新装默认已填泪目治愈向指令，留空则仅朗读弹幕正文。</p>
             </div>
             <p id="danmuReadModelHint" class="text-xs text-gray-500">模型：<span id="danmuReadModelLabel">mimo-v2.5-tts</span> · 接口：<span id="danmuReadEndpointLabel">—</span></p>
           </div>

@@ -19,24 +19,15 @@ from app.pet.pet_state import PetSettings
 if TYPE_CHECKING:
     from main import DanmuApp
 
+from app.win32_overlay_zorder import (
+    apply_overlay_exstyles,
+    reassert_hwnd_topmost,
+    stack_hwnd_above,
+)
+
 if sys.platform == "win32":
     import ctypes
 
-    _GWL_EXSTYLE = -20
-    _WS_EX_LAYERED = 0x00080000
-    _WS_EX_TRANSPARENT = 0x00000020
-    _HWND_TOPMOST = -1
-    _SWP_NOMOVE = 0x0002
-    _SWP_NOSIZE = 0x0001
-    _SWP_NOACTIVATE = 0x0010
-    _SWP_SHOWWINDOW = 0x0040
-    try:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW
-    except AttributeError:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongW
-    _SetWindowPos = ctypes.windll.user32.SetWindowPos
     _DWMWA_WINDOW_CORNER_PREFERENCE = 33
     _DWMWCP_DONOTROUND = 1
 
@@ -176,15 +167,19 @@ class PetWindow(QWidget):
         self._anim_timer.setInterval(_ANIM_INTERVAL_MS)
         self._anim_timer.timeout.connect(self._on_anim_tick)
 
-        self.reload_assets()
         self._apply_window_geometry(reposition=True)
+
+    def _ensure_assets_loaded(self) -> None:
+        """S-003: defer spritesheet decode until first show_pet (cold-start perf)."""
+        if self._spritesheet is None and self._load_error is None:
+            self.reload_assets()
 
     def reload_assets(self) -> None:
         try:
             self._pack = load_pet_assets(self._app.config)
             self._spritesheet = QPixmap(str(self._pack.spritesheet_path))
             self._load_error = None
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             self._pack = None
             self._spritesheet = None
             self._load_error = str(exc)
@@ -219,6 +214,7 @@ class PetWindow(QWidget):
         self._anim_timer.stop()
 
     def show_pet(self) -> None:
+        self._ensure_assets_loaded()
         self._apply_window_geometry(reposition=True)
         self.show()
         self._sync_click_through()
@@ -287,13 +283,7 @@ class PetWindow(QWidget):
             )
         except OSError:
             pass
-        ex_style = _GetWindowLong(hwnd, _GWL_EXSTYLE)
-        if self._settings.click_through:
-            new_style = ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT
-        else:
-            # WS_EX_LAYERED is required on Win32 for Qt per-pixel alpha; stripping it yields opaque black.
-            new_style = (ex_style | _WS_EX_LAYERED) & ~_WS_EX_TRANSPARENT
-        _SetWindowLong(hwnd, _GWL_EXSTYLE, new_style)
+        apply_overlay_exstyles(hwnd, click_through=self._settings.click_through)
         self.update()
 
     def _sync_click_through(self) -> None:
@@ -306,15 +296,7 @@ class PetWindow(QWidget):
         hwnd = int(self.winId())
         if not hwnd:
             return
-        _SetWindowPos(
-            hwnd,
-            _HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
-        )
+        reassert_hwnd_topmost(hwnd)
         # Pet must stack above full-screen danmu / floating-panel overlays at the same screen point.
         for layer_key in ("overlay", "floating_panel_overlay"):
             layer = self._app.__dict__.get(layer_key)
@@ -325,15 +307,7 @@ class PetWindow(QWidget):
             except Exception:
                 layer_hwnd = 0
             if layer_hwnd:
-                _SetWindowPos(
-                    hwnd,
-                    layer_hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
-                    _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
-                )
+                stack_hwnd_above(hwnd, layer_hwnd)
         ctypes.windll.user32.BringWindowToTop(hwnd)
 
     def _mapper_animation(self) -> str:
@@ -526,9 +500,7 @@ class PetWindow(QWidget):
             self._show_command_box()
             event.accept()
 
-    def contextMenuEvent(self, event) -> None:
-        if self._settings.click_through:
-            return
+    def _build_context_menu(self) -> QMenu:
         menu = QMenu(self)
         running = bool(getattr(self._app.engine, "running", False))
         toggle_action = QAction("停止弹幕" if running else "开始弹幕", self)
@@ -551,7 +523,18 @@ class PetWindow(QWidget):
         close_action = QAction("关闭桌宠", self)
         close_action.triggered.connect(lambda: self._app.close_pet())
         menu.addAction(close_action)
-        menu.exec(event.globalPos())
+
+        # 与托盘「退出」同路径；分隔线与「关闭桌宠」区分语义（仅关桌宠 vs 退出进程）。
+        menu.addSeparator()
+        quit_action = QAction("退出应用", self)
+        quit_action.triggered.connect(self._app.quit)
+        menu.addAction(quit_action)
+        return menu
+
+    def contextMenuEvent(self, event) -> None:
+        if self._settings.click_through:
+            return
+        self._build_context_menu().exec(event.globalPos())
 
     def _open_settings_page(self) -> None:
         opener: Callable[[str], None] | None = getattr(self._app, "_open_web_console", None)

@@ -73,17 +73,21 @@ class TrayManager:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.app.show_settings()
 
+    def _tooltip_with_action_hint(self, state_key: str) -> str:
+        """S-005: surface double-click recovery on hover (tray has no window chrome)."""
+        return f"{tr(state_key)} — {tr('tray.tooltip_action_hint')}"
+
     def update_state(self, running: bool):
         if running:
             self.tray.setIcon(self._create_icon(QColor(80, 200, 80)))
-            self.tray.setToolTip(tr("tray.tooltip_running"))
+            self.tray.setToolTip(self._tooltip_with_action_hint("tray.tooltip_running"))
             self.toggle_action.setText(tr("tray.stop"))
         else:
             self.tray.setIcon(self._create_icon(QColor(100, 100, 100)))
             state_key = "tray.tooltip_stopped"
             if getattr(self.app.engine, "running", False):
                 state_key = "tray.tooltip_paused"
-            self.tray.setToolTip(tr(state_key))
+            self.tray.setToolTip(self._tooltip_with_action_hint(state_key))
             self.toggle_action.setText(tr("tray.start"))
 
     def show(self):
@@ -106,6 +110,17 @@ class TrayManager:
         self.tray.showMessage(
             "DanmuAI",
             tr("tray.minimize_message"),
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+
+    def show_webview_starting_hint(self):
+        """S-004: tray bubble while pywebview attach is pending (once per launch)."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray.showMessage(
+            "DanmuAI",
+            tr("tray.webview_starting_message"),
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )

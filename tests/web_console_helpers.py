@@ -100,7 +100,40 @@ def build_ws_status_test_app(bridge, token: str):
     return app
 
 
+def build_ws_logs_test_app(bridge, token: str):
+    """Mirror WebConsoleServer WebSocketRoute registration for /ws/logs."""
+    from app.web_console import _WS_MAX_LOG_CONSUMERS
+    from app.web_console_ws import _authenticate_websocket
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from starlette.routing import WebSocketRoute
+
+    app = FastAPI()
+
+    async def _ws_logs_endpoint(websocket: WebSocket):
+        if not await _authenticate_websocket(websocket, token):
+            return
+        log_queues = bridge._ws_log_queues
+        if isinstance(log_queues, list) and len(log_queues) >= _WS_MAX_LOG_CONSUMERS:
+            await websocket.close(code=1008, reason="连接数已满")
+            return
+        await websocket.accept()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+        bridge.register_log_consumer(queue)
+        try:
+            while True:
+                item = await queue.get()
+                await websocket.send_json(item)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            bridge.unregister_log_consumer(queue)
+
+    app.router.routes.insert(0, WebSocketRoute("/ws/logs", endpoint=_ws_logs_endpoint))
+    return app
+
+
 __all__ = [
+    "build_ws_logs_test_app",
     "build_ws_status_test_app",
     "make_status_app",
     "pump_qt_until",

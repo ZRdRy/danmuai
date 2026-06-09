@@ -92,3 +92,19 @@ def resolve_api_transport(endpoint: str, api_mode: str) -> str:
     if is_doubao_mode(api_mode):
         return "doubao"
     return "openai"
+
+
+# OpenRouter recommends Referer/Title for rate-limit priority; applied only when host matches.
+_OPENROUTER_REFERER = "https://github.com/PEPETII/danmuai"
+_OPENROUTER_APP_TITLE = "DanmuAI"
+
+
+def provider_extra_headers(endpoint: str) -> dict[str, str]:
+    """Optional provider-specific HTTP headers (e.g. OpenRouter Referer/Title)."""
+    normalized = normalize_endpoint(endpoint).lower()
+    if "openrouter.ai" in normalized:
+        return {
+            "HTTP-Referer": _OPENROUTER_REFERER,
+            "X-Title": _OPENROUTER_APP_TITLE,
+        }
+    return {}

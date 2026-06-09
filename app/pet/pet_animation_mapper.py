@@ -13,16 +13,9 @@ _ONE_SHOT_SEC = 1.5
 
 
 def resolve_base_animation(app: "DanmuApp") -> str:
-    if int(getattr(app, "ai_in_flight", 0) or 0) > 0:
-        return "review"
-    if bool(getattr(app, "_is_generating", False)):
-        return "review"
-    try:
-        visible = app.visible_display_count()
-    except Exception:
-        visible = 0
-    if visible > 0:
-        return "run"
+    # PET-017: idle is the only resting animation; Agent review/run linkage (PET-007)
+    # is intentionally disabled so untouched pets stay on row 0. One-shots and drag
+    # interaction still override via resolve_pet_animation_hint / resolve_interaction_animation.
     return "idle"
 
 

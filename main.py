@@ -40,6 +40,7 @@ from app.live_freshness import (
 from app.main_display_mixin import DanmuAppDisplayMixin
 from app.main_helpers import (
     MAX_IN_FLIGHT,
+    VISUAL_INFLIGHT_RECOVER_SEC,
     VISUAL_INFLIGHT_WARN_SEC,
     BatchTracker,  # noqa: F401 — re-exported for tests
 )
@@ -203,6 +204,7 @@ class DanmuApp(
         pixmap = self.capturer.grab()
         if pixmap is None:
             self.logger.warning(tr("app.capture_failed"))
+            self._note_capture_failure()
             return
         if pixmap.isNull() or pixmap.width() <= 0 or pixmap.height() <= 0:
             screen_index = self.config.get_int("screen_index", 0)
@@ -222,7 +224,9 @@ class DanmuApp(
                 region_w,
                 region_h,
             )
+            self._note_capture_failure()
             return
+        self._note_capture_success()
         self._latest_screenshot = pixmap
         self._latest_screenshot_time = time.monotonic()
         self._latest_screenshot_id += 1
@@ -251,7 +255,11 @@ class DanmuApp(
             if self._inflight_started_at > 0:
                 elapsed_ms = int((time.monotonic() - self._inflight_started_at) * 1000)
             warn_ms = int(VISUAL_INFLIGHT_WARN_SEC * 1000)  # 45s，模块常量（main_helpers），非 DanmuApp 字段
-            if elapsed_ms >= warn_ms:
+            recover_ms = int(VISUAL_INFLIGHT_RECOVER_SEC * 1000)
+            if elapsed_ms >= recover_ms:
+                if self._try_recover_stale_visual_inflight():
+                    return
+            elif elapsed_ms >= warn_ms:
                 self.logger.warning(
                     "视觉请求 in-flight 超时: screenshot_id=%s elapsed_ms=%s ai_in_flight=%s "
                     "reason=inflight_watchdog",
@@ -302,9 +310,9 @@ class DanmuApp(
         self._local_fallback_active = False
         self._get_request_scheduler().record_trigger_time(now=trigger_at)
         self._log_api_schedule(decision="fire", source=source)
-        pixmap = self._latest_screenshot
-        self._is_generating = True
-        self.ai_in_flight += 1
+        # W-MEDLOW-001（M-003）：QPixmap 显式 copy 后再交给 QThreadPool；单测 Mock 无 copy 时原样传递。
+        raw_pixmap = self._latest_screenshot
+        pixmap = raw_pixmap.copy() if hasattr(raw_pixmap, "copy") else raw_pixmap
         self.screenshot_round += 1
         request_round = self.screenshot_round
         screenshot_id = self._latest_screenshot_id
@@ -312,13 +320,20 @@ class DanmuApp(
         self._batch_id += 1
         batch_id = self._batch_id
         self._latest_requested_screenshot_id = screenshot_id
-        self._inflight_screenshot_id = screenshot_id
-        self._inflight_scene_generation = self._scene_generation
-        self._inflight_started_at = time.monotonic()
+        self._acquire_visual_inflight(screenshot_id, self._scene_generation)
         self._publish_live_status()
 
         persona = self.personae.pick_random()
         system_pt, user_pt = self.personae.get_prompt(persona)
+        if not (system_pt or "").strip():
+            self.logger.warning(
+                "skip api: reason=empty_persona_prompt persona=%s screenshot_id=%s",
+                persona,
+                screenshot_id,
+            )
+            self._release_inflight_for_source("visual")
+            self._publish_live_status()
+            return
         system_pt = append_nickname_to_system_pt(system_pt, self.config)  # W-NICKNAME-001
         system_pt = append_live_topic_to_system_pt(system_pt, self.config)  # W-LIVE-TOPIC-001
 
@@ -359,7 +374,7 @@ class DanmuApp(
         self._register_request_meta(request_round, screenshot_id, self._scene_generation, "visual")
 
         from app.runnable import AiRunnable
-        from PyQt6.QtCore import QThreadPool
+        from app.worker_pools import ai_worker_pool
 
         image_max_width = self.config.get_int("image_max_width", IMAGE_MAX_WIDTH)
         image_quality = self.config.get_int("image_quality", IMAGE_JPEG_QUALITY)
@@ -376,7 +391,7 @@ class DanmuApp(
             lambda p: compress_screenshot(p, image_max_width, image_quality),
             image_quality=image_quality,
         )
-        QThreadPool.globalInstance().start(runnable)
+        ai_worker_pool().start(runnable)
 
     def _danmu_pixels_per_second(self, speed: float | None = None) -> float:
         if speed is None:
@@ -487,6 +502,12 @@ class DanmuApp(
                     memory_update.scene_generation = scene_generation
                 self._scene_memory.update_from_visual_result(memory_update)
 
+        request_id = self._reply_request_id(request_round, screenshot_id, scene_generation)
+        self.reply_buffer.drop_replaceable_fallbacks(
+            request_id=request_id,
+            batch_id=self._batch_id,
+            scene_generation=scene_generation,
+        )
         self._enqueue_reply_batch(
             persona_id,
             request_round,
@@ -514,9 +535,11 @@ class DanmuApp(
         fallback/mic 可 skip_dedup。
         锚点弹幕滚到 75% 屏宽处的时间写入 batch.next_generation_time（debug/批次元数据）。
         拒因（去重/入口过载）不入历史。
-        floating_panel spacing 阻塞时 peek 不 pop，条目留在 reply_buffer 稍后重试。
+        floating_panel：间距阻塞 peek 不 pop；空文本/去重须在 pop 前判定并主动丢弃；
+        意外上屏失败时回插队首，避免静默丢失。
         """
-        if self._danmu_render_mode() == "floating_panel":
+        floating_panel = self._danmu_render_mode() == "floating_panel"
+        if floating_panel:
             queued_peek = self.reply_buffer.peek()
             if queued_peek is None:
                 return
@@ -528,6 +551,31 @@ class DanmuApp(
                     delay = fp_engine.estimate_entry_delay_ms(est_h)
                     if not self.reply_buffer.is_empty():
                         self.reply_timer.start(max(50, delay))
+                    return
+
+                display_peek = normalize_danmu_display_text(queued_peek.content, self.config)
+                skip_dedup_peek = queued_peek.is_fallback or queued_peek.source == "fallback"
+                if not display_peek:
+                    queued = self.reply_buffer.pop()
+                    self.logger.info(
+                        tr("app.danmu_not_entered").format(content=f"{queued.content[:20]}...")
+                        + " [悬浮窗/空文本]"
+                    )
+                    if not self.reply_buffer.is_empty():
+                        self.reply_timer.start(100)
+                    self._update_stats(success=False)
+                    self._maybe_pool_topup()
+                    return
+                if not skip_dedup_peek and fp_engine.is_duplicate(display_peek):
+                    queued = self.reply_buffer.pop()
+                    self.logger.info(
+                        tr("app.danmu_not_entered").format(content=f"{queued.content[:20]}...")
+                        + " [去重]"
+                    )
+                    if not self.reply_buffer.is_empty():
+                        self.reply_timer.start(100)
+                    self._update_stats(success=False)
+                    self._maybe_pool_topup()
                     return
 
         queued = self.reply_buffer.pop()
@@ -600,6 +648,11 @@ class DanmuApp(
                 tr("app.danmu_not_entered").format(content=f"{queued.content[:20]}...")
                 + f" [{reject}]"
             )
+            if floating_panel and reject == "悬浮窗":
+                self.reply_buffer.prepend_batch([queued])
+                self.logger.warning(
+                    "floating_panel display failed after pop; re-queued head item"
+                )
 
         if not self.reply_buffer.is_empty():
             delay = 100 if item is None else self._estimated_reply_gap_ms()

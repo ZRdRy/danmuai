@@ -74,3 +74,44 @@ def test_probe_dashscope_request_omits_stream_options(mock_client_cls):
     payload = mock_client.post.call_args.kwargs["json"]
     assert payload.get("stream") is False
     assert "stream_options" not in payload
+
+
+@patch("app.api_probe.httpx.Client")
+def test_probe_openai_connect_error_user_friendly(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+    mock_client_cls.return_value = mock_client
+
+    result = probe_connection(
+        "https://api.example.com/v1",
+        "sk-test",
+        "gpt-4o",
+        "openai-compatible",
+    )
+    assert result.ok is False
+    assert "Connection refused" not in result.message
+    assert "连接" in result.message or "connect" in result.message.lower()
+
+
+@patch("app.api_probe.httpx.Client")
+def test_probe_openai_adds_openrouter_headers(mock_client_cls):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = mock_resp
+    mock_client_cls.return_value = mock_client
+
+    probe_connection(
+        "https://openrouter.ai/api/v1",
+        "sk-test",
+        "openai/gpt-4o",
+        "openai-compatible",
+    )
+    headers = mock_client.post.call_args.kwargs["headers"]
+    assert headers.get("HTTP-Referer")
+    assert headers.get("X-Title") == "DanmuAI"

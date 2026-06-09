@@ -5,9 +5,14 @@ from app.application.config_service import (
 )
 from app.config_defaults import (
     CONFIG_DEFAULTS,
+    DEFAULT_FLOATING_PANEL_SPEED,
     DEFAULT_LANGUAGE,
+    FLOATING_PANEL_NORMAL_REPLY_COUNT,
+    default_normal_reply_count_for_mode,
+    resolve_danmu_render_mode,
     seed_config_defaults,
 )
+from app.persona_contract import normal_reply_count_from_config
 from app.config_store import ConfigStore
 
 
@@ -26,7 +31,6 @@ FP_KEYS = (
     "danmu_render_mode",
     "floating_panel_width",
     "floating_panel_max_items",
-    "floating_panel_lifetime_sec",
     "floating_panel_speed",
     "floating_panel_x_offset",
     "floating_panel_y_offset",
@@ -126,3 +130,29 @@ def test_imported_fonts_default_is_empty_list():
 
     assert CONFIG_DEFAULTS["imported_fonts"] == "[]"
     assert json.loads(CONFIG_DEFAULTS["imported_fonts"]) == []
+
+
+def test_floating_panel_speed_default_is_one():
+    assert CONFIG_DEFAULTS["floating_panel_speed"] == DEFAULT_FLOATING_PANEL_SPEED == "1"
+
+
+def test_removed_dead_floating_panel_keys_not_in_defaults_or_web():
+    """W-CONFIG-UI-LINK-001：废弃键不再出现在默认值或 Web 白名单。"""
+    for key in ("floating_panel_click_through", "floating_panel_lifetime_sec"):
+        assert key not in CONFIG_DEFAULTS
+        assert key not in WEB_CONFIG_KEYS
+
+
+def test_default_normal_reply_count_differs_by_render_mode():
+    assert default_normal_reply_count_for_mode("scrolling") == 5
+    assert default_normal_reply_count_for_mode("floating_panel") == FLOATING_PANEL_NORMAL_REPLY_COUNT == 10
+
+
+def test_normal_reply_count_from_config_uses_floating_panel_default(tmp_path):
+    store = ConfigStore(db_path=tmp_path / "fp_reply.db")
+    store.set("danmu_render_mode", "floating_panel")
+    store.set("normal_reply_count", "")
+    assert normal_reply_count_from_config(store) == 10
+    store.set("normal_reply_count", "7")
+    assert normal_reply_count_from_config(store) == 7
+    store.close()

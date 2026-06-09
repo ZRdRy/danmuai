@@ -8,7 +8,6 @@
 
 调用方：DanmuApp.start() → show_for_screen + start_render_loop；engine.add_text → prepare_item_pixmap。
 """
-import ctypes
 import logging
 import os
 import sys
@@ -30,23 +29,7 @@ from app.danmu_engine import (
     normalize_layout_mode,
     resolve_danmu_max_chars,
 )
-
-if sys.platform == "win32":
-    _GWL_EXSTYLE = -20
-    _WS_EX_LAYERED = 0x00080000
-    _WS_EX_TRANSPARENT = 0x00000020
-    _HWND_TOPMOST = -1
-    _SWP_NOMOVE = 0x0002
-    _SWP_NOSIZE = 0x0001
-    _SWP_NOACTIVATE = 0x0010
-    _SWP_SHOWWINDOW = 0x0040
-    try:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW
-    except AttributeError:
-        _SetWindowLong = ctypes.windll.user32.SetWindowLongW
-        _GetWindowLong = ctypes.windll.user32.GetWindowLongW
-    _SetWindowPos = ctypes.windll.user32.SetWindowPos
+from app.win32_overlay_zorder import apply_overlay_exstyles, reassert_hwnd_topmost
 
 _FRAME_DT = 1.0 / 60.0
 _INTERVAL_MS = 16
@@ -83,7 +66,10 @@ def overlay_profile_enabled() -> bool:
 
 def _use_fast_danmu_render(content: str) -> bool:
     """长文本/emoji 走 drawText 描边，避免 QPainterPath.addText 阻塞主线程数秒。"""
-    return len(content) >= _FAST_DANMU_RENDER_MIN_LEN
+    if len(content) >= _FAST_DANMU_RENDER_MIN_LEN:
+        return True
+    # S-021: short CJK/emoji strings still hit the slow QPainterPath path by length alone.
+    return any(ord(ch) > 127 for ch in content)
 
 
 def _paint_danmu_text(
@@ -164,12 +150,16 @@ class DanmuOverlay(QWidget):
         size = self.config.get_int("font_size", DEFAULT_FONT_SIZE)
         return max(12, min(72, size))
 
+    def _config_danmu_font_family(self) -> str:
+        from app.config_defaults import DEFAULT_DANMU_FONT_FAMILY
+
+        raw = self.config.get("danmu_font_family", DEFAULT_DANMU_FONT_FAMILY) or DEFAULT_DANMU_FONT_FAMILY
+        return str(raw).strip() or DEFAULT_DANMU_FONT_FAMILY
+
     def _sync_applied_display_settings_markers(self) -> None:
         self._applied_font_size = self._config_font_size()
         self._applied_danmu_max_chars = resolve_danmu_max_chars(self.config)
-        self._applied_danmu_font_family = str(
-            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
-        )
+        self._applied_danmu_font_family = self._config_danmu_font_family()
         self._applied_danmu_font_bold = str(
             self.config.get("danmu_font_bold", "1") or "1"
         ).strip().lower() not in ("0", "false", "no")
@@ -182,10 +172,7 @@ class DanmuOverlay(QWidget):
             self, "_applied_danmu_max_chars", -1
         ):
             return True
-        current_family = str(
-            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
-        )
-        if current_family != getattr(self, "_applied_danmu_font_family", ""):
+        if self._config_danmu_font_family() != getattr(self, "_applied_danmu_font_family", ""):
             return True
         current_bold = str(
             self.config.get("danmu_font_bold", "1") or "1"
@@ -214,9 +201,7 @@ class DanmuOverlay(QWidget):
             self.ensure_render_loop()
 
     def _apply_font_from_config(self) -> None:
-        family = str(
-            self.config.get("danmu_font_family", "Microsoft YaHei") or "Microsoft YaHei"
-        ).strip() or "Microsoft YaHei"
+        family = self._config_danmu_font_family()
         size = self._config_font_size()
         bold = str(self.config.get("danmu_font_bold", "1") or "1").strip().lower() not in (
             "0",
@@ -236,33 +221,18 @@ class DanmuOverlay(QWidget):
         """
         if sys.platform != "win32":
             return
-        hwnd = int(self.winId())
-        ex_style = _GetWindowLong(hwnd, _GWL_EXSTYLE)
-        _SetWindowLong(hwnd, _GWL_EXSTYLE,
-                       ex_style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT)
+        apply_overlay_exstyles(int(self.winId()), click_through=True)
 
     def reassert_topmost_zorder(self) -> None:
         """Win32：Alt+Tab / 其它置顶窗抢栈后，用 SetWindowPos 恢复 HWND_TOPMOST（不抢焦点）。"""
         if not self.isVisible():
             return
         self.raise_()
-        if sys.platform != "win32":
-            return
         try:
             hwnd = int(self.winId())
         except Exception:
             return
-        if not hwnd:
-            return
-        _SetWindowPos(
-            hwnd,
-            _HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
-        )
+        reassert_hwnd_topmost(hwnd)
 
     def _has_animatable_content(self) -> bool:
         """是否仍需 60fps：引擎内加速剩余、淡入淡出区或屏上可见条任一成立。"""
@@ -510,6 +480,8 @@ class DanmuOverlay(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.reassert_topmost_zorder()
+        # HWND 变化后须重设 Win32 穿透，不能仅依赖 show_for_screen 一次性设置。
+        self._apply_win32_click_through()
         if self.engine.running:
             self.ensure_render_loop()
 

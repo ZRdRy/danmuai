@@ -86,7 +86,7 @@ class MemeAiSelectRunnable(QRunnable):
         self.setAutoDelete(True)
 
     def run(self) -> None:
-        if self._worker._stopping:
+        if self._worker._stopping.is_set():
             _safe_emit(self._on_error, "stopping")
             return
         if not self._candidates:

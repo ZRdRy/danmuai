@@ -11,6 +11,7 @@ from app.providers.registry import (
     HOST_ENTRIES,
     guess_provider_from_endpoint,
     match_host_entry,
+    provider_extra_headers,
     resolve_api_transport,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "get_openai_adapter",
     "guess_provider_from_endpoint",
     "match_host_entry",
+    "provider_extra_headers",
     "resolve_api_transport",
 ]

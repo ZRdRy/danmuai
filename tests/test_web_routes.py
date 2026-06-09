@@ -423,6 +423,27 @@ def test_floating_panel_v2_config_keys_round_trip(tmp_path):
         assert store.get(key) == expected, key
 
 
+def test_danmu_speed_clamped_via_config_service(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+    from app.config_store import ConfigStore
+
+    store = ConfigStore(db_path=tmp_path / "danmu_speed.db")
+
+    class _PersonaeStub:
+        def set_active(self, _active):
+            return None
+
+    class _DanmuAppStub:
+        config_changed = MagicMock()
+
+    app = _DanmuAppStub()
+    app.config = store
+    app.personae = _PersonaeStub()
+
+    apply_web_config_patch(app, {"danmu_speed": "99"})
+    assert store.get("danmu_speed") == "10"
+
+
 def test_floating_panel_speed_clamped_via_config_service(tmp_path):
     from app.application.config_service import apply_web_config_patch
     from app.config_store import ConfigStore
@@ -515,6 +536,80 @@ def test_font_bold_truthy_strings_normalize_to_one(tmp_path):
 
     apply_web_config_patch(app, {"danmu_font_bold": "true"})
     assert store.get("danmu_font_bold") == "1"
+
+
+def _config_service_stub_app(tmp_path):
+    from app.config_store import ConfigStore
+
+    store = ConfigStore(db_path=tmp_path / "config.db")
+
+    class _PersonaeStub:
+        def set_active(self, _active):
+            return None
+
+    class _DanmuAppStub:
+        config_changed = MagicMock()
+
+    app = _DanmuAppStub()
+    app.config = store
+    app.personae = _PersonaeStub()
+    return app, store
+
+
+def test_danmu_speed_negative_clamps_to_min(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"danmu_speed": "-5"})
+    assert store.get("danmu_speed") == "0.5"
+
+
+def test_danmu_speed_over_max_clamps(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"danmu_speed": "999"})
+    assert store.get("danmu_speed") == "10"
+
+
+def test_danmu_speed_invalid_falls_back_to_default(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"danmu_speed": "not-a-number"})
+    assert store.get("danmu_speed") == "2"
+
+
+def test_dedup_threshold_over_one_clamps(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"dedup_threshold": "2"})
+    assert store.get("dedup_threshold") == "1"
+
+
+def test_empty_accel_truthy_string_normalizes_to_one(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"empty_accel": "true"})
+    assert store.get("empty_accel") == "1"
+
+
+def test_pet_position_x_invalid_clears_value(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"pet_position_x": "not-int"})
+    assert store.get("pet_position_x") == ""
+
+
+def test_pet_position_x_over_max_clamps(tmp_path):
+    from app.application.config_service import apply_web_config_patch
+
+    app, store = _config_service_stub_app(tmp_path)
+    apply_web_config_patch(app, {"pet_position_x": "999999"})
+    assert store.get("pet_position_x") == "32000"
 
 
 # W-FONT-002：字体导入 API（HTTP 契约；QFontDatabase 行为见 test_font_registry.py）
@@ -704,4 +799,60 @@ def test_delete_font_removes_from_list():
     )
     assert deleted.status_code == 200
     reg.delete.assert_called_once_with(sha)
+
+
+def test_invoke_main_maps_value_error_and_runtime_error_to_400():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    bridge.invoke_on_main.side_effect = ValueError("bad payload")
+    res = client.put(
+        "/api/danmu-pool/settings",
+        json={"custom_enabled": True},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"] == "bad payload"
+
+    bridge.invoke_on_main.side_effect = RuntimeError("engine not running")
+    res2 = client.put(
+        "/api/danmu-pool/settings",
+        json={"custom_enabled": False},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert res2.status_code == 400
+    assert res2.json()["detail"] == "engine not running"
+
+
+def test_invoke_main_unexpected_error_returns_500():
+    from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    bridge = MagicMock()
+    bridge.invoke_on_main.side_effect = TypeError("unexpected")
+
+    def _check_token(_authorization: str | None = None) -> None:
+        return None
+
+    register_web_routes(app, bridge, _check_token)
+    client = TestClient(app, raise_server_exceptions=False)
+    res = client.put(
+        "/api/danmu-pool/settings",
+        json={"min_on_screen": 3},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert res.status_code == 500
+    assert res.json()["detail"] == "internal error"
 

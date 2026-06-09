@@ -538,8 +538,76 @@ def test_request_openai_emits_incomplete_for_partial_custom_model():
     with patch.object(worker, "_emit_safe") as mock_emit:
         worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
         mock_emit.assert_called_once()
-        assert mock_emit.call_args[0][1]  # non-empty error message
+        assert "API Key" in mock_emit.call_args[0][1]
     worker.close()
+
+
+def test_format_credential_error_lists_missing_endpoint():
+    from app.ai_client_requests import format_credential_error
+
+    cfg = FakeConfig(
+        data={
+            "api_endpoint": "",
+            "api_mode": "openai",
+            "model": "gpt-4o",
+            "_api_key": "sk-test",
+        }
+    )
+    msg = format_credential_error(cfg)
+    assert "API Endpoint" in msg or "Endpoint" in msg
+
+
+def test_request_openai_strips_unsupported_mic_audio_and_logs(caplog):
+    import logging
+
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "openai-compatible",
+                "api_endpoint": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat",
+            }
+        )
+    )
+    captured: dict = {}
+
+    def capture(_http_client, _url, _headers, data, **kwargs):
+        captured["data"] = data
+        return ("ok", 1, 1)
+
+    with caplog.at_level(logging.INFO, logger="app.ai_client_requests"):
+        with patch.object(worker, "_stream_openai", side_effect=capture):
+            with patch.object(worker, "_emit_safe"):
+                worker._request_openai(
+                    "data:image/jpeg;base64,abc",
+                    "sys",
+                    "user",
+                    "p1",
+                    1,
+                    1,
+                    1.0,
+                    0,
+                    audio_data_uri="data:audio/wav;base64,abc",
+                )
+
+    user_content = captured["data"]["messages"][1]["content"]
+    assert not any(part.get("type") == "input_audio" for part in user_content if isinstance(part, dict))
+    assert any("mic audio stripped" in r.message for r in caplog.records)
+    worker.close()
+
+
+def test_format_credential_error_lists_missing_api_key():
+    from app.ai_client_requests import format_credential_error
+
+    cfg = FakeConfig(
+        data={
+            "api_endpoint": "https://api.example.com/v1",
+            "api_mode": "openai",
+            "model": "gpt-4o",
+        }
+    )
+    msg = format_credential_error(cfg)
+    assert "API Key" in msg
 
 
 def test_request_doubao_resolves_credentials_once():
@@ -622,6 +690,114 @@ def test_request_openai_direct_call_resolves_when_resolved_none():
             with patch.object(worker, "_emit_safe"):
                 worker._request_openai("data:image/jpeg;base64,abc", "sys", "user", "p1", 1, 1, 1.0, 0)
     mock_resolve.assert_called_once()
+    worker.close()
+
+
+def test_stream_openai_malformed_json_chunk_returns_empty_with_error():
+    worker = AiWorker(FakeConfig(data={"api_mode": "openai"}))
+    resolved = ("https://api.openai.com/v1", "sk-test", "gpt-4o", "openai")
+
+    class BrokenStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def iter_lines(self):
+            yield "not-json-at-all"
+
+        def raise_for_status(self):
+            return None
+
+    client = MagicMock()
+    client.stream.return_value = BrokenStream()
+    text, inp, out, err = worker._stream_openai(
+        client,
+        f"{resolved[0]}/chat/completions",
+        {},
+        {"model": "gpt-4o", "messages": []},
+        endpoint=resolved[0],
+        api_mode=resolved[3],
+    )
+    assert text == ""
+    assert inp == 0
+    assert out == 0
+    worker.close()
+
+
+def test_request_openai_http_429_surfaces_error_message():
+    worker = AiWorker(
+        FakeConfig(
+            data={
+                "api_mode": "openai",
+                "api_endpoint": "https://api.openai.com/v1",
+            },
+            api_key="sk-test",
+        )
+    )
+    resolved = ("https://api.openai.com/v1", "sk-test", "gpt-4o", "openai")
+    response = MagicMock()
+    response.status_code = 429
+    response.text = "rate limited"
+    err = httpx.HTTPStatusError("429", request=MagicMock(), response=response)
+
+    with patch.object(worker, "_stream_openai", side_effect=err):
+        with patch.object(worker, "_emit_safe") as mock_emit:
+            worker._request_openai(
+                "data:image/jpeg;base64,abc",
+                "sys",
+                "user",
+                "p1",
+                1,
+                1,
+                1.0,
+                0,
+                resolved=resolved,
+            )
+            mock_emit.assert_called_once()
+            assert mock_emit.call_args[0][0] == "error"
+    worker.close()
+
+
+def test_openrouter_endpoint_builds_chat_completions_url():
+    from app.ai_client_requests import request_openai
+
+    worker = AiWorker(
+        FakeConfig(
+            data={"api_mode": "openai-compatible"},
+            api_key="sk-test",
+        )
+    )
+    resolved = (
+        "https://openrouter.ai/api/v1",
+        "sk-test",
+        "anthropic/claude-3.5-sonnet",
+        "openai-compatible",
+    )
+    seen: dict = {}
+
+    def fake_stream(_client, url, _headers, data, **_kwargs):
+        seen["url"] = url
+        seen["model"] = data.get("model")
+        return ("ok", 0, 0)
+
+    with patch.object(worker, "_stream_openai", side_effect=fake_stream):
+        request_openai(
+            worker,
+            "data:image/jpeg;base64,abc",
+            "sys",
+            "user",
+            "p1",
+            1,
+            1,
+            1.0,
+            0,
+            resolved=resolved,
+            emit=False,
+        )
+    assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert seen["model"] == "anthropic/claude-3.5-sonnet"
     worker.close()
 
 

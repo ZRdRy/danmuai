@@ -17,20 +17,20 @@ def test_resolve_base_animation_idle():
     assert resolve_base_animation(app) == "idle"
 
 
-def test_resolve_base_animation_review_when_ai_in_flight():
+def test_resolve_base_animation_idle_when_ai_in_flight():
     app = _minimal_app(ai_in_flight=1)
-    assert resolve_base_animation(app) == "review"
+    assert resolve_base_animation(app) == "idle"
 
 
-def test_resolve_base_animation_review_when_generating():
+def test_resolve_base_animation_idle_when_generating():
     app = _minimal_app(_is_generating=True)
-    assert resolve_base_animation(app) == "review"
+    assert resolve_base_animation(app) == "idle"
 
 
-def test_resolve_base_animation_run_when_visible_danmu():
+def test_resolve_base_animation_idle_when_visible_danmu():
     app = _minimal_app()
     object.__setattr__(app, "visible_display_count", lambda: 1)
-    assert resolve_base_animation(app) == "run"
+    assert resolve_base_animation(app) == "idle"
 
 
 def test_resolve_pet_animation_hint_one_shot_jump():

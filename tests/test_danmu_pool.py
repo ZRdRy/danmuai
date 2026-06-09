@@ -115,3 +115,78 @@ def test_pool_topup_skips_recent_dedup_window(qapp, workspace_tmp):
         for item in track.items
     ]
     assert "撞车句" in all_texts
+
+
+def test_formula_text_cache_reuses_custom_pool_set(tmp_path, monkeypatch):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import is_stored_custom_pool_text
+
+    store = ConfigStore(db_path=tmp_path / "formula_cache_custom.db")
+    store.set_custom_danmu_pool(["公式句A"])
+    calls: list[int] = []
+    original = store.get_custom_danmu_pool
+
+    def _counting_get():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setattr(store, "get_custom_danmu_pool", _counting_get)
+    assert is_stored_custom_pool_text(store, "公式句A") is True
+    assert is_stored_custom_pool_text(store, "公式句A") is True
+    assert len(calls) == 1
+
+
+def test_formula_text_cache_invalidates_on_pool_write(tmp_path):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import is_stored_custom_pool_text
+
+    store = ConfigStore(db_path=tmp_path / "formula_cache_invalidate.db")
+    store.set_custom_danmu_pool(["旧句"])
+    assert is_stored_custom_pool_text(store, "旧句") is True
+    assert is_stored_custom_pool_text(store, "新句") is False
+    store.set_custom_danmu_pool(["旧句", "新句"])
+    assert is_stored_custom_pool_text(store, "新句") is True
+
+
+def test_formula_text_cache_reuses_meme_library_set(tmp_path, monkeypatch):
+    from app.config_store import ConfigStore
+    from app.danmu_pool import is_stored_meme_barrage_text
+
+    store = ConfigStore(db_path=tmp_path / "formula_cache_meme.db")
+    store.meme_barrage_library_insert_many(
+        [("烂梗句", None, None)],
+        collected_at=0.0,
+        max_rows=10_000,
+    )
+    calls: list[int] = []
+    original = store.meme_barrage_library_all_texts
+
+    def _counting_all():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setattr(store, "meme_barrage_library_all_texts", _counting_all)
+    assert is_stored_meme_barrage_text(store, "烂梗句") is True
+    assert is_stored_meme_barrage_text(store, "烂梗句") is True
+    assert len(calls) == 1
+
+
+def test_pool_topup_entry_zone_overloaded_non_callable_no_error(qapp, workspace_tmp):
+    from app.config_store import ConfigStore
+    from app.danmu_engine import DanmuEngine
+    from app.danmu_pool import maybe_pool_topup
+
+    store = ConfigStore(db_path=workspace_tmp / "pool_topup_bool.db")
+    store.set("danmu_pool_use_custom", "1")
+    store.set("min_on_screen", "5")
+    store.set_custom_danmu_pool(["句1"])
+
+    engine = DanmuEngine(store)
+    engine.set_screen_width(1920.0)
+    engine.set_screen_height(1080.0)
+    engine.reload_tracks()
+    engine.running = True
+    engine.entry_zone_overloaded = True  # bool, not callable — must not TypeError
+
+    added = maybe_pool_topup(engine, store, scene_generation=0)
+    assert added >= 0
