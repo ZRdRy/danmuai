@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
+from app.application.stats_state import StatsState
 from app.application.web_runtime_state import WebRuntimeState
 from app.config_store import ConfigStore
 from app.danmu_engine import DanmuEngine
@@ -13,8 +14,7 @@ from app.floating_panel_overlay import FloatingPanelOverlay
 from app.overlay import DanmuOverlay
 from app.win32_overlay_zorder import probe_exclusive_fullscreen_risk, reassert_hwnd_topmost
 from main import DanmuApp
-from PyQt6.QtCore import QRect
-from app.application.stats_state import StatsState
+
 from tests.conftest import FakeTimer, bind_minimal_danmu_app
 from tests.fakes import FakeConfig, FakeEngine, FakeLifetimeStats, FakeSessionRunLog
 
@@ -185,7 +185,6 @@ def test_probe_exclusive_fullscreen_risk(monkeypatch):
 
 
 def test_apply_overlay_exstyles_sets_layered_and_transparent_bits(monkeypatch):
-    import sys
 
     import app.win32_overlay_zorder as mod
 

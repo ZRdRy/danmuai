@@ -7,7 +7,6 @@ import time
 from unittest.mock import MagicMock
 
 import main as main_mod
-from main import DanmuApp
 
 from tests.conftest import make_minimal_danmu_app
 from tests.fakes import FakeLogger

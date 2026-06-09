@@ -7,8 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from PyQt6.QtGui import QPixmap
-
 from app.ai_client_support import AiProbeResult
 from app.config_store import ConfigStore
 from app.meme_barrage.ai_select import parse_meme_ai_selection
@@ -16,6 +14,7 @@ from app.meme_barrage.runnable import MemeAiSelectRunnable
 from app.meme_barrage.service import MemeBarrageService
 from app.screenshot_compress import compress_screenshot
 from main import DanmuApp
+from PyQt6.QtGui import QPixmap
 
 ROOT = Path(__file__).resolve().parent.parent
 

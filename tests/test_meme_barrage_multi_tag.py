@@ -125,10 +125,9 @@ def test_read_settings_caps_at_three_tags(meme_app):
 
 
 def _build_test_app():
+    from app.web_api.routes import register_web_routes
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-
-    from app.web_api.routes import register_web_routes
 
     app = FastAPI()
     bridge = MagicMock()
@@ -148,13 +147,11 @@ def _build_test_app():
 
 def test_pydantic_accepts_list_via_put(tmp_path):
     """PUT ``tag: ["06", "07"]`` 应被 Pydantic 接受并落库为 JSON 数组。"""
-    from pathlib import Path
-
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     from app.config_store import ConfigStore
     from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     db = tmp_path / "meme_pyd.db"
     config = ConfigStore(db_path=db)
@@ -175,11 +172,10 @@ def test_pydantic_accepts_list_via_put(tmp_path):
 
 def test_pydantic_accepts_empty_list_via_put(tmp_path):
     """PUT ``tag: []`` 应被接受；落库时由 save 层兜底为 ``["06"]``。"""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     from app.config_store import ConfigStore
     from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     db = tmp_path / "meme_pyd_empty.db"
     config = ConfigStore(db_path=db)
@@ -200,11 +196,10 @@ def test_pydantic_accepts_empty_list_via_put(tmp_path):
 
 def test_pydantic_rejects_non_string_list(tmp_path):
     """PUT ``tag: [123]``（非 str list）应被 Pydantic 422 拒绝。"""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     from app.config_store import ConfigStore
     from app.web_api.routes import register_web_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     db = tmp_path / "meme_pyd_reject.db"
     config = ConfigStore(db_path=db)

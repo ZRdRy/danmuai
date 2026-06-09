@@ -5,11 +5,9 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock
 
-import main as main_mod
 from app.ai_client_requests import resolve_request_credentials
 from app.application.config_service import apply_web_config_patch
 from app.config_store import ConfigStore
-from main import DanmuApp
 
 from tests.conftest import make_minimal_danmu_app
 from tests.fakes import FakeLogger

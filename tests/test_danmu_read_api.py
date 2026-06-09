@@ -3,9 +3,6 @@
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
-
 from app.config_store import ConfigStore
 from app.danmu_read_service import export_danmu_read_config
 from app.tts_providers import (
@@ -14,6 +11,8 @@ from app.tts_providers import (
 )
 from app.web_api.danmu_read import normalize_probe_payload, normalize_put_payload
 from app.web_api.routes import register_web_routes
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 
 def test_get_danmu_read_catalog():

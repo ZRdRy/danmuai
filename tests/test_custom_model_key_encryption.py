@@ -1,13 +1,12 @@
 """Custom model apiKey encryption in ConfigStore."""
 
 import json
-
-import pytest
-
-from app.config_store import ConfigStore
-from app.web_api import custom_models as cm_api
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
+from app.config_store import ConfigStore
+from app.web_api import custom_models as cm_api
 
 
 @pytest.fixture

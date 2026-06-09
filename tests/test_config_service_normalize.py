@@ -6,8 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-
-from app.application.config_service import ConfigService, MASKED_API_KEY
+from app.application.config_service import MASKED_API_KEY, ConfigService
 from app.config_store import ConfigStore
 
 

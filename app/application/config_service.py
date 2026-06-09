@@ -271,7 +271,10 @@ class ConfigService:
         # W-CONFIG-UI-LINK-001 / W-RENDER-TOPMOST-BATCH-001：danmu_speed 钳位 0.5–10.0
         if "danmu_speed" in items:
             try:
-                from app.config_defaults import DANMU_SPEED_MAX, DANMU_SPEED_MIN, DEFAULT_DANMU_SPEED
+                from app.config_defaults import (
+                    DANMU_SPEED_MAX,
+                    DANMU_SPEED_MIN,
+                )
 
                 speed = max(DANMU_SPEED_MIN, min(float(items["danmu_speed"]), DANMU_SPEED_MAX))
                 items["danmu_speed"] = f"{speed:.3f}".rstrip("0").rstrip(".")

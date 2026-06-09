@@ -16,8 +16,8 @@ import random
 
 from app.config_store import ConfigStore
 from app.persona_builtin import (
-    BUILTIN_PERSONAE,
     BUILTIN_PERSONA_PINNED_FIRST,
+    BUILTIN_PERSONAE,
     builtin_personae_names,
     normalize_persona_name,
 )

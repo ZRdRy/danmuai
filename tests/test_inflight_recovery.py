@@ -2,11 +2,9 @@
 
 import time
 
-import pytest
-
 from app.application.request_timing_service import RequestTimingService
 from app.main_helpers import VISUAL_INFLIGHT_RECOVER_SEC
-from main import DanmuApp
+
 from tests.conftest import bind_minimal_danmu_app, make_minimal_danmu_app
 
 

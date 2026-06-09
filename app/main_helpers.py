@@ -14,7 +14,6 @@ DanmuApp 通过 from app.main_helpers import ... 使用这些常量和函数。
 from __future__ import annotations
 
 from app.danmu_engine import DanmuItem
-from app.personae import persona_display_name
 
 VISUAL_INFLIGHT_WARN_SEC = 45.0
 # Hung stream / no callback: force-release visual slot (S-011); before 60s double-retry ceiling (S-012).

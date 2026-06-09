@@ -2,7 +2,6 @@ from app.tts_catalog import (
     default_voice_for_provider,
     list_catalog_for_api,
     normalize_catalog_voice,
-    voice_ids_for,
 )
 from app.tts_providers import TTS_PROVIDER_DASHSCOPE_QWEN, TTS_PROVIDER_MIMO
 

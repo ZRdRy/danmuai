@@ -9,11 +9,10 @@ from app.config_defaults import (
     DEFAULT_LANGUAGE,
     FLOATING_PANEL_NORMAL_REPLY_COUNT,
     default_normal_reply_count_for_mode,
-    resolve_danmu_render_mode,
     seed_config_defaults,
 )
-from app.persona_contract import normal_reply_count_from_config
 from app.config_store import ConfigStore
+from app.persona_contract import normal_reply_count_from_config
 
 
 def test_seed_includes_language_field_when_added(tmp_path):

@@ -10,9 +10,8 @@ from tests.fakes import FakeConfig
 
 
 def test_tray_double_click_opens_settings(qapp):
-    from PyQt6.QtWidgets import QSystemTrayIcon
-
     from app.tray import TrayManager
+    from PyQt6.QtWidgets import QSystemTrayIcon
 
     app = make_minimal_danmu_app()
     show_settings = MagicMock()

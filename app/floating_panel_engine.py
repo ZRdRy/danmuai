@@ -14,21 +14,12 @@ W-FP-V3-003：竖向 min_gap 准入与独立调度；间距逻辑与横向 ``Dan
 
 from __future__ import annotations
 
-
-
 from collections import deque
-
 from dataclasses import dataclass
-
 from typing import TYPE_CHECKING
 
-
-
 from app.danmu_engine import normalize_danmu_display_text
-
 from app.danmu_engine_dedup import is_duplicate_in_recent
-
-
 
 if TYPE_CHECKING:
 

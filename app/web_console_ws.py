@@ -57,7 +57,6 @@ async def _authenticate_websocket(websocket, expected_token: str, timeout_sec: f
     认证成功返回 True，失败或超时返回 False 并关闭连接。
     保留 query 参数 ws_token 作为向后兼容（优先使用首次消息认证）。
     """
-    import json
 
     # 优先检查 query 参数（向后兼容）
     query_token = websocket.query_params.get("ws_token")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.application.config_service import WEB_CONFIG_KEYS, apply_web_config_patch
 from app.config_store import ConfigStore
 

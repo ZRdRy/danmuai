@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from app.config_store import ConfigStore
-from app.personae import BUILTIN_PERSONAE, BUILTIN_PERSONA_PINNED_FIRST, PersonaManager
+from app.personae import BUILTIN_PERSONA_PINNED_FIRST, BUILTIN_PERSONAE, PersonaManager
 from app.templates import TemplateManager
 from app.web_api import persona as persona_api
 

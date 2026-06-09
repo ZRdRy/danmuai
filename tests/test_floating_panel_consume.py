@@ -9,6 +9,7 @@ from app.floating_panel_engine import FloatingPanelEngine
 from app.floating_panel_overlay import FloatingPanelOverlay
 from app.reply_queue import AIReplyFIFOBuffer, QueuedReply
 from main import DanmuApp
+
 from tests.conftest import FakeTimer, bind_minimal_danmu_app
 
 

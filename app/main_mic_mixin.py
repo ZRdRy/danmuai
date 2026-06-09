@@ -15,7 +15,6 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 
 from app.main_helpers import MAX_MIC_IN_FLIGHT
-from app.worker_pools import ai_worker_pool
 from app.mic_encode import pcm_to_wav_data_uri
 from app.mic_prompt import build_mic_insert_user_pt
 from app.mic_service import mic_mode_enabled
@@ -28,6 +27,7 @@ from app.screenshot_compress import (
     compress_screenshot,
 )
 from app.translations import tr
+from app.worker_pools import ai_worker_pool
 
 MIC_POLL_MS = 600
 MIC_POLL_PHASE_MS = 250

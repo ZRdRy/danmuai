@@ -229,7 +229,6 @@ def enrich_platform_models(
             cheapest_id = model.id
             break
 
-    pid = (provider_id or "").strip()
     result: list[dict[str, Any]] = []
     for model in items:
         payload = model.to_dict()

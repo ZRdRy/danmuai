@@ -13,7 +13,6 @@ from app.tts_providers import (
     MIMO_TTS_MODEL,
     MIMO_TTS_VOICES,
     TTS_PROBE_TEXT,
-    TTS_PROVIDER_DASHSCOPE_QWEN,
     DanmuTtsError,
     ResolvedTtsConfig,
     clamp_read_interval_sec,

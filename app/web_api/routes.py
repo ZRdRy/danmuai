@@ -20,11 +20,6 @@ from typing import TYPE_CHECKING, Callable
 from urllib.parse import unquote
 
 from fastapi import Header, HTTPException
-
-logger = logging.getLogger(__name__)
-
-# W-MEDLOW-002：诊断 SSE 推送间隔（秒）；与 GET /api/diagnostics 解耦，仅控制流式刷新节奏。
-DIAGNOSTICS_SSE_INTERVAL_SEC = 2.5
 from pydantic import BaseModel
 
 from app.web_api import announcements_state
@@ -39,6 +34,11 @@ from app.web_api import mic_test as mic_test_api
 from app.web_api import persona as persona_api
 from app.web_api import pet as pet_api
 from app.web_api.preview_compress import register_preview_compress_route
+
+logger = logging.getLogger(__name__)
+
+# W-MEDLOW-002：诊断 SSE 推送间隔（秒）；与 GET /api/diagnostics 解耦，仅控制流式刷新节奏。
+DIAGNOSTICS_SSE_INTERVAL_SEC = 2.5
 
 if TYPE_CHECKING:
     from app.web_console import WebConsoleBridge
