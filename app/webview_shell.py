@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import queue
 import sys
 import threading
@@ -10,10 +11,41 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen
 from app.startup_trace import log_startup
+
+# #region agent log
+_DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / "debug-1cd755.log"
+
+
+def _agent_debug_log(
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any] | None = None,
+    *,
+    run_id: str = "pre-fix",
+) -> None:
+    try:
+        payload = {
+            "sessionId": "1cd755",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
 
 if TYPE_CHECKING:
     from app.web_console import WebConsoleServer
@@ -133,6 +165,17 @@ def _ensure_server_ready(server: WebConsoleServer) -> bool:
         log_startup("webview.ensure_server_ready.end", ok=True, via="http_probe")
         return True
     log_startup("webview.ensure_server_ready.end", ok=False, deferred=True)
+    # #region agent log
+    _agent_debug_log(
+        "D",
+        "webview_shell.py:_ensure_server_ready",
+        "server not ready for pywebview",
+        {
+            "startup_ok": bool(getattr(server, "startup_ok", False)),
+            "base_url": server.base_url,
+        },
+    )
+    # #endregion
     return False
 def _fallback_to_system_browser(server: WebConsoleServer, path: str, reason: str) -> None:
     if getattr(server, "_browser_launch_opened", False):
@@ -180,10 +223,26 @@ def _webview_worker(
             window.show()
             append_frozen_log("pywebview window loaded")
             log_startup("pywebview.loaded")
+            put_ok = True
+            put_err = ""
             try:
                 ready_queue.put(_SIGNAL_LOADED)
-            except Exception:
-                pass
+            except Exception as exc:
+                put_ok = False
+                put_err = repr(exc)
+            # #region agent log
+            _agent_debug_log(
+                "A,C",
+                "webview_shell.py:on_loaded",
+                "loaded event fired in child",
+                {
+                    "pid": os.getpid(),
+                    "url": url,
+                    "put_ok": put_ok,
+                    "put_err": put_err,
+                },
+            )
+            # #endregion
         window = webview.create_window(
             title,
             url,
@@ -200,6 +259,14 @@ def _webview_worker(
         ready_queue.put(_SIGNAL_CREATED)
         append_frozen_log("pywebview created handshake sent")
         log_startup("pywebview.created_handshake")
+        # #region agent log
+        _agent_debug_log(
+            "A,B",
+            "webview_shell.py:_webview_worker",
+            "created handshake sent, calling webview.start",
+            {"pid": os.getpid(), "url": url, "gui": gui},
+        )
+        # #endregion
         threading.Thread(
             target=_nav_poll_loop,
             args=(window, nav_queue, stop_nav),
@@ -210,6 +277,14 @@ def _webview_worker(
             webview.start(debug=False, gui=gui)
         else:
             webview.start(debug=False)
+        # #region agent log
+        _agent_debug_log(
+            "A,B",
+            "webview_shell.py:_webview_worker",
+            "webview.start returned in child",
+            {"pid": os.getpid(), "url": url},
+        )
+        # #endregion
         stop_nav.set()
         try:
             nav_queue.put(None)
