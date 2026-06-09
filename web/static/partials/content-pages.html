@@ -12,6 +12,18 @@
         </div>
 
         <div id="danmuPoolTab-meme" class="danmu-pool-tab-panel active space-y-8" data-danmu-pool-panel="meme" role="tabpanel">
+          <div class="danmu-pool-section meme-source-credit">
+            <p class="meme-source-credit-text">
+              我们的烂梗库内容来自开源项目
+              <a
+                href="https://github.com/SEhzm/sb6657/"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="meme-source-credit-link"
+              >sb6657</a>
+              ，特此感谢作者与社区的无私分享。
+            </p>
+          </div>
           <div class="danmu-pool-section">
             <p class="settings-section-title">总开关</p>
             <label class="flex items-center gap-2 font-semibold text-warmText">
@@ -62,7 +74,7 @@
               <span>每</span>
               <input type="number" id="memeCollectInterval" min="1" max="60" value="5" class="settings-field-control w-20">
               <span>秒采集一次，每次采集</span>
-              <input type="number" id="memeCollectBatch" min="1" max="100" value="40" class="settings-field-control w-20">
+              <input type="number" id="memeCollectBatch" min="1" max="100" value="2" class="settings-field-control w-20">
               <span>个弹幕</span>
             </div>
           </div>
@@ -72,7 +84,7 @@
               <span>每</span>
               <input type="number" id="memeDisplayInterval" min="1" max="60" value="5" class="settings-field-control w-20">
               <span>秒展示</span>
-              <input type="number" id="memeDisplayBatch" min="1" max="50" value="20" class="settings-field-control w-20">
+              <input type="number" id="memeDisplayBatch" min="1" max="50" value="2" class="settings-field-control w-20">
               <span>个弹幕</span>
             </div>
           </div>

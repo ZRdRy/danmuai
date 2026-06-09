@@ -95,20 +95,21 @@
               <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-ruler"></use></svg>最大输出 Token</label>
               <input type="number" name="max_tokens" id="max_tokens" min="10" max="2000" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
             </div>
-            <div>
-              <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-brain"></use></svg>记忆模式（实验）</label>
-              <select id="memory_mode" name="memory_mode" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
-                <option value="off">关闭</option>
-                <option value="dedup_only">轻量（只防重复）</option>
-                <option value="scene_card">标准（记画面 + 防重复）</option>
-                <option value="strong">强记忆（更多上下文）</option>
-              </select>
-              <p class="text-xs text-gray-400 mt-1">只在本次运行期间记住最近弹幕和画面要点，关闭程序后不会保留；若记忆与当前屏幕不一致，以当前识图结果为准。</p>
+            <div class="flex items-center gap-3">
+              <input type="checkbox" id="scene_memory_enabled" name="scene_memory_enabled" class="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary">
+              <label for="scene_memory_enabled" class="text-sm font-semibold text-warmText">场景记忆</label>
             </div>
+            <p class="text-xs text-gray-400 -mt-2 settings-full-only">记住上一轮截图的一句场景简述，并在下次生成弹幕时注入；仅本次运行有效，关闭程序后清空。</p>
             <div>
-              <label class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-ruler"></use></svg>记忆窗口（条）</label>
-              <input type="number" id="memory_window" name="memory_window" min="1" max="20" step="1" value="10" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
+              <label for="scene_memory_interval_sec" class="block text-sm font-semibold mb-2 text-warmText"><svg class="ui-icon field-label-icon" aria-hidden="true"><use href="#i-ruler"></use></svg>记忆更新间隔（秒）</label>
+              <input type="number" id="scene_memory_interval_sec" name="scene_memory_interval_sec" min="1" max="60" step="1" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
+              <p class="text-xs text-gray-400 mt-1">须为「弹幕设置 → 识别间隔」的整数倍；间隔内仍使用上次场景简述辅助弹幕，到点再刷新简述。</p>
             </div>
+            <div class="flex items-center gap-3">
+              <input type="checkbox" id="prompt_dedup_enabled" name="prompt_dedup_enabled" class="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary" checked>
+              <label for="prompt_dedup_enabled" class="text-sm font-semibold text-warmText">避免重复弹幕</label>
+            </div>
+            <p class="text-xs text-gray-400 -mt-2 settings-full-only">在 AI 提示词中提醒最近上屏过的弹幕，引导换角度表达；与弹幕设置里的「去重阈值」（屏幕上拦截）无关。</p>
           </div>
           <div id="customModelsSection" class="settings-full-only space-y-3">
             <div class="flex justify-between items-center">
@@ -203,7 +204,7 @@
           </h3>
           <p class="text-sm text-gray-500 -mt-2">使用语音合成定时随机朗读当前屏幕上的一条弹幕</p>
           <div class="bg-softPeach/30 p-4 rounded-xl text-sm text-warmText border border-softPeach">
-            <p>默认使用<strong class="text-warmPink">小米 MiMo</strong>（<code class="text-xs">mimo-v2.5-tts</code>）；也可选用<strong class="text-warmPink">火山豆包语音</strong>、<strong class="text-warmPink">阿里百炼 Qwen3</strong>，或<strong> OpenAI 兼容</strong>的 chat/completions 音频接口（响应需含 <code class="text-xs">message.audio.data</code>）。TTS API Key 与助手设置中的视觉 API Key <strong>相互独立</strong>，请在本页单独填写。</p>
+            <p>默认使用<strong class="text-warmPink">小米 MiMo</strong>（<code class="text-xs">mimo-v2.5-tts</code>）；也可选用<strong class="text-warmPink">阿里百炼 Qwen3</strong>。TTS API Key 与助手设置中的视觉 API Key <strong>相互独立</strong>，请在本页单独填写。</p>
             <p class="mt-2">仅在<strong>已开始生成</strong>且屏幕上有可见弹幕时才会朗读；停止生成后不再请求。</p>
             <p class="mt-2 text-xs text-gray-500">MiMo 参数说明见 <a href="https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis-v2.5" target="_blank" rel="noopener noreferrer" class="text-warmPink underline">语音合成文档</a>。</p>
           </div>
@@ -224,29 +225,14 @@
                 <label for="danmuReadProvider" class="block text-sm font-semibold mb-2 text-warmText">AI 平台</label>
                 <select id="danmuReadProvider" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText">
                   <option value="">小米 MiMo（默认）</option>
-                  <option value="doubao">火山豆包语音</option>
                   <option value="dashscope_qwen">阿里百炼 Qwen3</option>
-                  <option value="custom_openai">自定义（OpenAI 兼容）</option>
                 </select>
               </div>
               <div id="danmuReadModelSelectWrap">
                 <label for="danmuReadModelSelect" class="block text-sm font-semibold mb-2 text-warmText">TTS 模型</label>
                 <select id="danmuReadModelSelect" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText"></select>
               </div>
-              <div id="danmuReadAppIdWrap" hidden>
-                <label for="danmuReadAppId" class="block text-sm font-semibold mb-2 text-warmText">豆包 App ID（可选）</label>
-                <input type="text" id="danmuReadAppId" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="与 Access Token 配对使用时填写">
-                <p class="settings-section-hint mt-1">仅豆包语音需要；若仅用 API Key / Access Token 可留空。</p>
-              </div>
-              <div id="danmuReadCustomEndpointWrap" hidden>
-                <label for="danmuReadEndpoint" class="block text-sm font-semibold mb-2 text-warmText">API 地址</label>
-                <input type="url" id="danmuReadEndpoint" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="https://api.example.com/v1">
-              </div>
-              <div id="danmuReadCustomModelWrap" hidden>
-                <label for="danmuReadModelId" class="block text-sm font-semibold mb-2 text-warmText">模型名称</label>
-                <input type="text" id="danmuReadModelId" autocomplete="off" class="w-full px-4 py-3 bg-cream border border-transparent rounded-xl text-warmText" placeholder="例如 mimo-v2.5-tts">
-              </div>
-              <p class="settings-section-hint">选择「默认」时不保存自定义字段，朗读使用 MiMo 出厂配置。豆包 / 百炼须选择 TTS 模型；自定义平台须同时填写 API 地址与模型名称。</p>
+              <p class="settings-section-hint">选择「默认」时不保存平台字段，朗读使用 MiMo 出厂配置。百炼须选择 TTS 模型。</p>
             </div>
             <div>
               <label for="danmuReadApiKey" class="block text-sm font-semibold mb-2 text-warmText">TTS API Key</label>

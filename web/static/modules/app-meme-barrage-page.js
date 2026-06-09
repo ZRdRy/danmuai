@@ -171,9 +171,9 @@ async function saveMemeBarrageSettings() {
     tag: Array.from(normalizeSelectedTags(selectedTags)),
     display_mode: getSelectedDisplayMode(),
     collect_interval_sec: parseInt(document.getElementById('memeCollectInterval')?.value, 10) || 5,
-    collect_batch_size: parseInt(document.getElementById('memeCollectBatch')?.value, 10) || 40,
+    collect_batch_size: parseInt(document.getElementById('memeCollectBatch')?.value, 10) || 2,
     display_interval_sec: parseInt(document.getElementById('memeDisplayInterval')?.value, 10) || 5,
-    display_batch_size: parseInt(document.getElementById('memeDisplayBatch')?.value, 10) || 20,
+    display_batch_size: parseInt(document.getElementById('memeDisplayBatch')?.value, 10) || 2,
   };
   const meta = await apiFetch('/api/meme-barrage/settings', {
     method: 'PUT',

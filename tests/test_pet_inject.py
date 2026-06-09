@@ -35,7 +35,7 @@ def test_trigger_api_call_fire_consumes_and_injects_prompt(monkeypatch):
     app._latest_screenshot_id = 2
     app._latest_screenshot_time = time.monotonic()
     app.personae = Mock(pick_random=Mock(return_value="吐槽型"), get_prompt=Mock(return_value=("sys", "user")))
-    app._append_scene_memory_to_user_pt = DanmuApp._append_scene_memory_to_user_pt.__get__(app, DanmuApp)
+    app._append_scene_context_to_user_pt = DanmuApp._append_scene_context_to_user_pt.__get__(app, DanmuApp)
 
     from app.pet.pet_command_service import PetCommandService
 

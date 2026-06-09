@@ -17,13 +17,14 @@ import random
 from app.config_store import ConfigStore
 from app.persona_builtin import (
     BUILTIN_PERSONAE,
+    BUILTIN_PERSONA_PINNED_FIRST,
     builtin_personae_names,
     normalize_persona_name,
 )
 from app.persona_contract import ensure_reply_contract
 from app.translations import tr
 
-_REMOVED_PERSONAE = frozenset({"阿静", "测试"})
+_REMOVED_PERSONAE = frozenset({"阿静", "测试", "专业分析型"})
 
 
 class PersonaManager:
@@ -37,8 +38,15 @@ class PersonaManager:
     线程安全：主线程构造 + 主线程/HTTP 线程读取；自定义人格写入后需 ``save_custom`` 显式持久化。
     """
 
-    DEFAULT_ACTIVE = ["路人惊讶型", "搞笑玩梗型", "专业分析型", "捧场活跃型", "轻度吐槽型"]
-    _ACTIVE_VERSION = 3
+    _TEST_DEFAULT_ACTIVE = BUILTIN_PERSONA_PINNED_FIRST
+    DEFAULT_ACTIVE = [
+        *_TEST_DEFAULT_ACTIVE,
+        "路人惊讶型",
+        "搞笑玩梗型",
+        "捧场活跃型",
+        "轻度吐槽型",
+    ]
+    _ACTIVE_VERSION = 5
 
     def __init__(self, config: ConfigStore):
         self.config = config
@@ -46,14 +54,24 @@ class PersonaManager:
         self._migrate_active_personae()
         self._purge_removed_personae()
 
+    def _merge_test_default_active(self, names: list[str]) -> list[str]:
+        filtered = self._filter_removed_active(names)
+        return list(self._TEST_DEFAULT_ACTIVE) + [
+            name for name in filtered if name not in self._TEST_DEFAULT_ACTIVE
+        ]
+
     def _migrate_active_personae(self):
         version = self.config.get_int("active_personae_version", 0)
         if version < self._ACTIVE_VERSION:
             if version < 2:
                 self.config.set_json("active_personae", self.DEFAULT_ACTIVE)
+            elif version < 5:
+                active = self.config.get_json("active_personae", self.DEFAULT_ACTIVE)
+                merged = self._merge_test_default_active(active if isinstance(active, list) else [])
+                self.config.set_json("active_personae", merged)
             else:
                 active = self.config.get_json("active_personae", self.DEFAULT_ACTIVE)
-                filtered = self._filter_removed_active(active)
+                filtered = self._filter_removed_active(active if isinstance(active, list) else [])
                 self.config.set_json("active_personae", filtered)
             self.config.set("active_personae_version", str(self._ACTIVE_VERSION))
 

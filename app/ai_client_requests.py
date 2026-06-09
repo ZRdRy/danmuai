@@ -28,7 +28,11 @@ from app.model_providers import (
     normalize_endpoint,
     normalize_mode,
 )
-from app.providers import get_capabilities_for_endpoint, get_openai_adapter, provider_extra_headers
+from app.providers import (
+    get_capabilities_for_endpoint,
+    get_openai_adapter,
+    provider_extra_headers,
+)
 from app.providers.constants import THINKING_DISABLED
 from app.translations import tr
 

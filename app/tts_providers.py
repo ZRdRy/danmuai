@@ -1,12 +1,9 @@
-"""读弹幕 TTS provider 注册表与适配层（MiMo 默认 + OpenAI-compat chat/audio）。
+"""读弹幕 TTS provider 注册表与适配层（MiMo 默认 + 百炼）。
 
 MiMo TTS + 播放链路：
 1. ``DanmuReadService._pick_and_synthesize`` 抽样一条可见弹幕 → ``resolve_tts_config``。
-2. ``synthesize_tts`` 按 ``resolved.provider`` 选 adapter：
-   - ``mimo``：``MimoTtsAdapter`` → MiMo ``/chat/completions`` + ``audio: {format: wav, voice: ...}``，
-     voice 走 ``MIMO_TTS_VOICES`` 白名单。
-   - ``custom_openai``：``OpenAiCompatAudioTtsAdapter`` → 同结构，voice 字段自由。
-3. 响应 ``choices[0].message.audio.data``（base64 WAV）→ ``DanmuTtsPlayback.play_wav_bytes``。
+2. ``synthesize_tts`` 按 ``resolved.provider`` 选 adapter（mimo / dashscope_qwen）。
+3. 响应音频 → ``DanmuTtsPlayback.play_wav_bytes``。
 
 新增 provider：实现 ``TtsSynthesisAdapter`` 子类并注册到 ``_ADAPTERS``；不需改主链路。
 """
@@ -14,15 +11,13 @@ MiMo TTS + 播放链路：
 from __future__ import annotations
 
 import base64
-import json
 import logging
-import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
 
-from app.model_providers import is_valid_endpoint, normalize_endpoint
+from app.model_providers import normalize_endpoint
 from app.tts_audio_utils import ensure_wav_bytes, pcm_to_wav
 
 logger = logging.getLogger(__name__)
@@ -44,13 +39,24 @@ DEFAULT_TTS_VOICE = "冰糖"
 TTS_PROBE_TEXT = "你好，这是一条读弹幕试听。"
 
 TTS_PROVIDER_MIMO = "mimo"
-TTS_PROVIDER_DOUBAO = "doubao"
 TTS_PROVIDER_DASHSCOPE_QWEN = "dashscope_qwen"
-TTS_PROVIDER_CUSTOM_OPENAI = "custom_openai"
+_LEGACY_TTS_CUSTOM_OPENAI = "custom_openai"
+_LEGACY_TTS_DOUBAO = "doubao"
+
+_UNSUPPORTED_CUSTOM_TTS_MSG = (
+    "不再支持自定义 OpenAI 兼容 TTS，请改选 MiMo/百炼"
+)
+_UNSUPPORTED_DOUBAO_TTS_MSG = "不再支持火山豆包语音 TTS，请改选 MiMo 或百炼"
 
 _PRESET_TTS_PROVIDERS = frozenset(
-    {TTS_PROVIDER_MIMO, TTS_PROVIDER_DOUBAO, TTS_PROVIDER_DASHSCOPE_QWEN}
+    {TTS_PROVIDER_MIMO, TTS_PROVIDER_DASHSCOPE_QWEN}
 )
+_NON_MIMO_PRESET_PROVIDERS = _PRESET_TTS_PROVIDERS - {TTS_PROVIDER_MIMO}
+
+
+def _reject_removed_doubao_tts(provider: str) -> None:
+    if (provider or "").strip() == _LEGACY_TTS_DOUBAO:
+        raise ValueError(_UNSUPPORTED_DOUBAO_TTS_MSG)
 
 
 class DanmuTtsError(Exception):
@@ -137,22 +143,10 @@ TTS_PROVIDERS: tuple[TtsProviderSpec, ...] = (
         default_model=MIMO_TTS_MODEL,
     ),
     TtsProviderSpec(
-        id=TTS_PROVIDER_DOUBAO,
-        label_zh="火山豆包语音",
-        default_endpoint="https://openspeech.bytedance.com/api/v3/tts/unidirectional",
-        default_model="seed-tts-2.0",
-    ),
-    TtsProviderSpec(
         id=TTS_PROVIDER_DASHSCOPE_QWEN,
         label_zh="阿里百炼 Qwen3",
         default_endpoint="https://dashscope.aliyuncs.com/api/v1",
         default_model="qwen3-tts-flash-2025-11-27",
-    ),
-    TtsProviderSpec(
-        id=TTS_PROVIDER_CUSTOM_OPENAI,
-        label_zh="自定义（OpenAI 兼容）",
-        default_endpoint="",
-        default_model="",
     ),
 )
 
@@ -168,7 +162,6 @@ class ResolvedTtsConfig:
     stored_provider: str
     stored_endpoint: str
     stored_model_id: str
-    app_id: str = ""
 
 
 def get_tts_provider(provider_id: str) -> TtsProviderSpec | None:
@@ -182,10 +175,18 @@ def _stored_custom_fields(config) -> tuple[str, str, str]:
     return provider, endpoint, model_id
 
 
+def _reject_legacy_custom_tts(provider: str, endpoint: str) -> None:
+    pid = (provider or "").strip()
+    _reject_removed_doubao_tts(pid)
+    if pid == _LEGACY_TTS_CUSTOM_OPENAI:
+        raise ValueError(_UNSUPPORTED_CUSTOM_TTS_MSG)
+    if (endpoint or "").strip() and pid not in _NON_MIMO_PRESET_PROVIDERS:
+        raise ValueError(_UNSUPPORTED_CUSTOM_TTS_MSG)
+
+
 def is_custom_tts_config(provider: str, endpoint: str, model_id: str) -> bool:
-    if (provider or "").strip() in _PRESET_TTS_PROVIDERS - {TTS_PROVIDER_MIMO}:
-        return True
-    return bool(provider or endpoint or model_id)
+    _reject_legacy_custom_tts(provider, endpoint)
+    return (provider or "").strip() in _NON_MIMO_PRESET_PROVIDERS
 
 
 def validate_custom_tts_fields(
@@ -195,22 +196,13 @@ def validate_custom_tts_fields(
 ) -> None:
     """按 provider 校验 TTS 配置字段。"""
     pid = (provider or "").strip()
+    _reject_legacy_custom_tts(pid, endpoint)
     if not is_custom_tts_config(pid, endpoint, model_id):
-        return
-    if pid == TTS_PROVIDER_DOUBAO:
-        if not model_id:
-            raise ValueError("请选择豆包语音模型版本")
         return
     if pid == TTS_PROVIDER_DASHSCOPE_QWEN:
         if not model_id:
             raise ValueError("请选择百炼 Qwen3 模型")
         return
-    if not endpoint:
-        raise ValueError("API 地址不能为空")
-    if not model_id:
-        raise ValueError("模型名称不能为空")
-    if not is_valid_endpoint(endpoint):
-        raise ValueError("API 地址格式无效")
 
 
 def resolve_tts_config(
@@ -220,7 +212,7 @@ def resolve_tts_config(
     endpoint_override: str | None = None,
     model_id_override: str | None = None,
 ) -> ResolvedTtsConfig:
-    from app.tts_catalog import DOUBAO_TTS_URL, default_model_for_provider
+    from app.tts_catalog import default_model_for_provider
 
     stored_provider, stored_endpoint, stored_model_id = _stored_custom_fields(config)
     provider = (provider_override if provider_override is not None else stored_provider).strip()
@@ -230,7 +222,7 @@ def resolve_tts_config(
     model_id = (
         (model_id_override if model_id_override is not None else stored_model_id) or ""
     ).strip()
-    app_id = (config.get("tts_app_id") or "").strip()
+    _reject_removed_doubao_tts(provider)
 
     if not is_custom_tts_config(provider, endpoint, model_id):
         default = get_tts_provider(TTS_PROVIDER_MIMO)
@@ -246,22 +238,7 @@ def resolve_tts_config(
         )
 
     validate_custom_tts_fields(provider, endpoint, model_id)
-    resolved_provider = provider or TTS_PROVIDER_CUSTOM_OPENAI
-
-    if resolved_provider == TTS_PROVIDER_DOUBAO:
-        spec = get_tts_provider(TTS_PROVIDER_DOUBAO)
-        assert spec is not None
-        resolved_model = model_id or default_model_for_provider(TTS_PROVIDER_DOUBAO)
-        return ResolvedTtsConfig(
-            provider=TTS_PROVIDER_DOUBAO,
-            endpoint=DOUBAO_TTS_URL,
-            model=resolved_model,
-            is_custom=True,
-            stored_provider=provider,
-            stored_endpoint="",
-            stored_model_id=resolved_model,
-            app_id=app_id,
-        )
+    resolved_provider = provider
 
     if resolved_provider == TTS_PROVIDER_DASHSCOPE_QWEN:
         spec = get_tts_provider(TTS_PROVIDER_DASHSCOPE_QWEN)
@@ -277,15 +254,7 @@ def resolve_tts_config(
             stored_model_id=resolved_model,
         )
 
-    return ResolvedTtsConfig(
-        provider=resolved_provider,
-        endpoint=endpoint,
-        model=model_id,
-        is_custom=True,
-        stored_provider=provider,
-        stored_endpoint=endpoint,
-        stored_model_id=model_id,
-    )
+    raise ValueError(_UNSUPPORTED_CUSTOM_TTS_MSG)
 
 
 class TtsSynthesisAdapter(Protocol):
@@ -406,127 +375,6 @@ class MimoTtsAdapter:
             normalize_voice=True,
         )
         return _post_chat_audio(api_key, resolved, payload, timeout_sec=timeout_sec)
-
-
-class OpenAiCompatAudioTtsAdapter:
-    """OpenAI-compat chat/completions + message.audio.data（与 MiMo TTS 同结构）。"""
-
-    def synthesize(
-        self,
-        api_key: str,
-        text: str,
-        *,
-        resolved: ResolvedTtsConfig,
-        style_prompt: str = "",
-        voice: str = DEFAULT_TTS_VOICE,
-        timeout_sec: float = 60.0,
-    ) -> bytes:
-        payload = _build_chat_audio_payload(
-            resolved,
-            text,
-            style_prompt=style_prompt,
-            voice=voice,
-            normalize_voice=False,
-        )
-        return _post_chat_audio(api_key, resolved, payload, timeout_sec=timeout_sec)
-
-
-def _doubao_append_line(chunks: list[bytes], line: bytes) -> None:
-    line = line.strip()
-    if not line:
-        return
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        return
-    code = obj.get("code")
-    if code == 0 and obj.get("data"):
-        chunks.append(base64.b64decode(obj["data"]))
-    elif code not in (0, 20000000, None) and code is not None:
-        msg = obj.get("message") or str(code)
-        raise DanmuTtsError(f"豆包 TTS: {msg}")
-
-
-class DoubaoTtsAdapter:
-    """火山豆包 V3 单向流式 HTTP TTS。"""
-
-    def synthesize(
-        self,
-        api_key: str,
-        text: str,
-        *,
-        resolved: ResolvedTtsConfig,
-        style_prompt: str = "",
-        voice: str = DEFAULT_TTS_VOICE,
-        timeout_sec: float = 60.0,
-    ) -> bytes:
-        from app.tts_catalog import infer_doubao_resource_id, model_supports_style
-
-        key = (api_key or "").strip()
-        app_id = (resolved.app_id or "").strip()
-        if not key:
-            raise DanmuTtsError("未配置豆包 TTS API Key（或 Access Token）")
-
-        speaker = normalize_tts_voice(
-            voice, provider=TTS_PROVIDER_DOUBAO, model_id=resolved.model
-        )
-        resource_id = resolved.model or infer_doubao_resource_id(speaker)
-        payload: dict[str, Any] = {
-            "user": {"uid": str(uuid.uuid4())},
-            "req_params": {
-                "text": (text or "").strip(),
-                "speaker": speaker,
-                "audio_params": {"format": "pcm", "sample_rate": 24000},
-            },
-        }
-        style = (style_prompt or "").strip()
-        if style and model_supports_style(TTS_PROVIDER_DOUBAO, resolved.model):
-            payload["req_params"]["additions"] = json.dumps(
-                {"context_texts": [style]}, ensure_ascii=False
-            )
-
-        headers: dict[str, str] = {
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Api-Resource-Id": resource_id,
-            "X-Api-Request-Id": str(uuid.uuid4()),
-        }
-        if app_id and key:
-            headers["X-Api-App-Id"] = app_id
-            headers["X-Api-Access-Key"] = key
-        elif key:
-            headers["X-Api-Key"] = key
-        else:
-            raise DanmuTtsError("豆包 TTS 需配置 API Key，或 App ID + Access Token")
-
-        url = resolved.endpoint or "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-        try:
-            with httpx.Client(timeout=httpx.Timeout(timeout_sec, connect=15.0)) as client:
-                with client.stream("POST", url, headers=headers, json=payload) as resp:
-                    if resp.status_code != 200:
-                        body = resp.read()
-                        raise DanmuTtsError(
-                            f"豆包 TTS HTTP {resp.status_code}: {body[:300]!r}"
-                        )
-                    chunks: list[bytes] = []
-                    buf = b""
-                    for part in resp.iter_bytes():
-                        buf += part
-                        while b"\n" in buf:
-                            line, buf = buf.split(b"\n", 1)
-                            _doubao_append_line(chunks, line)
-                    if buf.strip():
-                        _doubao_append_line(chunks, buf)
-                    pcm = b"".join(chunks)
-        except DanmuTtsError:
-            raise
-        except httpx.TimeoutException as exc:
-            raise DanmuTtsError("豆包 TTS 请求超时") from exc
-        except httpx.HTTPError as exc:
-            raise DanmuTtsError(f"豆包 TTS 网络错误: {exc}") from exc
-
-        if len(pcm) < 100:
-            raise DanmuTtsError("豆包 TTS 音频过短")
-        return pcm_to_wav(pcm)
 
 
 class QwenTtsHttpAdapter:
@@ -691,9 +539,7 @@ class QwenTtsRealtimeAdapter:
 
 _ADAPTERS: dict[str, TtsSynthesisAdapter] = {
     TTS_PROVIDER_MIMO: MimoTtsAdapter(),
-    TTS_PROVIDER_DOUBAO: DoubaoTtsAdapter(),
     TTS_PROVIDER_DASHSCOPE_QWEN: QwenTtsHttpAdapter(),
-    TTS_PROVIDER_CUSTOM_OPENAI: OpenAiCompatAudioTtsAdapter(),
 }
 
 
@@ -710,7 +556,7 @@ def get_tts_adapter(provider_id: str, *, model_id: str = "") -> TtsSynthesisAdap
     adapter = _ADAPTERS.get(pid)
     if adapter is not None:
         return adapter
-    return _ADAPTERS[TTS_PROVIDER_CUSTOM_OPENAI]
+    raise ValueError(f"不支持的 TTS 平台：{pid or '?'}")
 
 
 def synthesize_tts(

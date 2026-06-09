@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import os
 import queue
 import sys
 import threading
@@ -11,47 +10,17 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.bundle_paths import append_frozen_log, frozen_log_path, is_frozen
 from app.startup_trace import log_startup
 
-# #region agent log
-_DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / "debug-1cd755.log"
-
-
-def _agent_debug_log(
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: dict[str, Any] | None = None,
-    *,
-    run_id: str = "pre-fix",
-) -> None:
-    try:
-        payload = {
-            "sessionId": "1cd755",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-
-# #endregion
-
 if TYPE_CHECKING:
     from app.web_console import WebConsoleServer
 _START_TIMEOUT_SEC = 20.0
 _CREATED_TIMEOUT_SEC = 5.0
-_LOAD_TIMEOUT_SEC = 12.0
+# Aligned with frozen: WebView2 cold start on Windows can exceed 12s.
+_LOAD_TIMEOUT_SEC = 25.0
 _FROZEN_LOAD_TIMEOUT_SEC = 25.0
 # Short main-thread probe; slow bind is retried by open_web_console_when_ready (S-001).
 _SERVER_POLL_SEC = 2.0
@@ -59,6 +28,7 @@ _FROZEN_SERVER_POLL_SEC = 1.5
 _NAV_POLL_SEC = 0.25
 _BROWSER_PROBE_SEC = 3.0
 _HANDSHAKE_POLL_MS = 50
+_SLOW_START_PROMPT_SEC = 10.0
 _SPAWN_MAX_ATTEMPTS = 3
 _WEBVIEW_ATTACH_MAX_ATTEMPTS = 2
 _WEBVIEW_ATTACH_RETRY_MS = 1200
@@ -165,17 +135,6 @@ def _ensure_server_ready(server: WebConsoleServer) -> bool:
         log_startup("webview.ensure_server_ready.end", ok=True, via="http_probe")
         return True
     log_startup("webview.ensure_server_ready.end", ok=False, deferred=True)
-    # #region agent log
-    _agent_debug_log(
-        "D",
-        "webview_shell.py:_ensure_server_ready",
-        "server not ready for pywebview",
-        {
-            "startup_ok": bool(getattr(server, "startup_ok", False)),
-            "base_url": server.base_url,
-        },
-    )
-    # #endregion
     return False
 def _fallback_to_system_browser(server: WebConsoleServer, path: str, reason: str) -> None:
     if getattr(server, "_browser_launch_opened", False):
@@ -190,6 +149,65 @@ def _fallback_to_system_browser(server: WebConsoleServer, path: str, reason: str
     append_frozen_log(f"fallback to system browser: {reason}")
     log_startup("webview.fallback_browser", reason=reason)
     open_web_console_browser(server, path)
+
+
+def _maybe_prompt_slow_webview_start(shell: "WebViewShell", initial_path: str) -> None:
+    """Offer system browser while pywebview loaded handshake is still pending.
+
+    UX guard only — unlike ``_fallback_to_system_browser`` we do not terminate the
+    child process so the desktop shell may still appear later. Called from
+    ``poll_handshake`` on the Qt main thread (modal dialog blocks the 50 ms poll).
+    """
+    if shell._started:
+        return
+    if shell._attach_started_at <= 0:
+        return
+    if time.monotonic() - shell._attach_started_at < _SLOW_START_PROMPT_SEC:
+        return
+    server = shell.server
+    if getattr(server, "_slow_webview_prompt_shown", False):
+        return
+    if getattr(server, "_browser_launch_opened", False):
+        return
+    proc = shell._process
+    if proc is None or not proc.is_alive():
+        return
+    if not getattr(server, "startup_ok", False):
+        if not wait_for_http_server(server.base_url, timeout=0.25):
+            return
+
+    from PyQt6.QtWidgets import QMessageBox
+
+    from app.translations import tr
+    from app.web_console import open_web_console_browser
+
+    server._slow_webview_prompt_shown = True
+    base_url = server.base_url
+    title = tr("webview.slow_start_title", "DanmuAI 启动较慢")
+    message = tr(
+        "webview.slow_start_message",
+        "桌面窗口启动较慢，是否改用系统浏览器打开本地网页端？\n地址：{base_url}",
+    ).format(base_url=base_url)
+
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(message)
+    yes_btn = box.addButton(tr("common.yes"), QMessageBox.ButtonRole.YesRole)
+    no_btn = box.addButton(tr("common.no"), QMessageBox.ButtonRole.NoRole)
+    box.setDefaultButton(no_btn)
+    box.exec()
+
+    if box.clickedButton() == yes_btn:
+        path = shell._resolve_path(initial_path)
+        if not getattr(server, "_browser_launch_opened", False):
+            server._browser_launch_opened = True
+            open_web_console_browser(server, path)
+            log_startup("webview.slow_start.browser_opened", path=path)
+    else:
+        log_startup("webview.slow_start.continue_waiting")
+
+
 def _nav_poll_loop(window: Any, nav_queue: Any, stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
@@ -223,26 +241,10 @@ def _webview_worker(
             window.show()
             append_frozen_log("pywebview window loaded")
             log_startup("pywebview.loaded")
-            put_ok = True
-            put_err = ""
             try:
                 ready_queue.put(_SIGNAL_LOADED)
-            except Exception as exc:
-                put_ok = False
-                put_err = repr(exc)
-            # #region agent log
-            _agent_debug_log(
-                "A,C",
-                "webview_shell.py:on_loaded",
-                "loaded event fired in child",
-                {
-                    "pid": os.getpid(),
-                    "url": url,
-                    "put_ok": put_ok,
-                    "put_err": put_err,
-                },
-            )
-            # #endregion
+            except Exception:
+                pass
         window = webview.create_window(
             title,
             url,
@@ -259,14 +261,6 @@ def _webview_worker(
         ready_queue.put(_SIGNAL_CREATED)
         append_frozen_log("pywebview created handshake sent")
         log_startup("pywebview.created_handshake")
-        # #region agent log
-        _agent_debug_log(
-            "A,B",
-            "webview_shell.py:_webview_worker",
-            "created handshake sent, calling webview.start",
-            {"pid": os.getpid(), "url": url, "gui": gui},
-        )
-        # #endregion
         threading.Thread(
             target=_nav_poll_loop,
             args=(window, nav_queue, stop_nav),
@@ -277,14 +271,6 @@ def _webview_worker(
             webview.start(debug=False, gui=gui)
         else:
             webview.start(debug=False)
-        # #region agent log
-        _agent_debug_log(
-            "A,B",
-            "webview_shell.py:_webview_worker",
-            "webview.start returned in child",
-            {"pid": os.getpid(), "url": url},
-        )
-        # #endregion
         stop_nav.set()
         try:
             nav_queue.put(None)
@@ -322,6 +308,7 @@ class WebViewShell:
         self._last_launch_url: str = ""
         self._last_launch_gui: str | None = None
         self._defer_browser_fallback: bool = False
+        self._attach_started_at: float = 0.0
 
     def is_running(self) -> bool:
         return self._started and self._process is not None and self._process.is_alive()
@@ -370,6 +357,7 @@ class WebViewShell:
         )
         proc_started = time.perf_counter()
         self._process.start()
+        self._attach_started_at = time.monotonic()
         log_startup(
             "webview.process.start",
             ms=(time.perf_counter() - proc_started) * 1000.0,
@@ -469,6 +457,7 @@ class WebViewShell:
                 return "failure"
             self._fail_start("pywebview process exited early", resolved)
             return "failure"
+        _maybe_prompt_slow_webview_start(self, initial_path)
         now = time.monotonic()
         resolved = self._resolve_path(initial_path)
         if now > self._handshake_deadline:
@@ -514,7 +503,12 @@ class WebViewShell:
         if self._handshake_failed and fallback_browser:
             return False
         danmu_app = self.server.bridge.danmu_app
-        danmu_app.logger.error(f"pywebview 启动失败: {error}")
+        if fallback_browser:
+            danmu_app.logger.error(f"pywebview 启动失败: {error}")
+        else:
+            danmu_app.logger.warning(
+                f"pywebview 握手未完成，将重试: {error}"
+            )
         append_frozen_log(f"pywebview start failed: {error}")
         log_startup("webview.handshake.failed", error=error)
         self._handshake_failed = True
@@ -566,6 +560,7 @@ class WebViewShell:
         self._handshake_deadline = 0.0
         self._got_created = False
         self._load_deadline = 0.0
+        self._attach_started_at = 0.0
         if nav_queue is not None:
             try:
                 nav_queue.put(None)

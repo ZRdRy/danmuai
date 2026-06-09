@@ -231,3 +231,57 @@ def test_meme_collect_tick_uses_updated_batch_size(tmp_path, monkeypatch):
 
     app._meme_collect_tick()
     assert captured.get("page_size") == 10
+
+
+def test_local_read_offset_persists_across_service_restart(tmp_path):
+    config = ConfigStore(db_path=tmp_path / "meme_cursor_local.db")
+    config.set("meme_barrage_collect_batch_size", "2")
+
+    first = MemeBarrageService(config)
+    first.store.insert_many(
+        [(f"line-{i}", None, None) for i in range(6)],
+    )
+    batch1 = first.collect_local_batch()
+    assert batch1 == ["line-0", "line-1"]
+    assert config.get("meme_barrage_local_read_offset") == "2"
+
+    second = MemeBarrageService(config)
+    batch2 = second.collect_local_batch()
+    assert batch2 == ["line-2", "line-3"]
+    assert config.get("meme_barrage_local_read_offset") == "4"
+
+
+def test_remote_page_num_persists_across_service_restart(tmp_path):
+    config = ConfigStore(db_path=tmp_path / "meme_cursor_remote.db")
+    config.set("meme_barrage_remote_page_num", "3")
+
+    first = MemeBarrageService(config)
+    assert first.next_page_num() == 3
+
+    data = {
+        "data": {
+            "list": [{"barrage": "远程句", "tags": "06", "id": 1}],
+            "lastPage": False,
+        }
+    }
+    first.apply_remote_page(data)
+    assert config.get("meme_barrage_remote_page_num") == "4"
+
+    second = MemeBarrageService(config)
+    assert second.next_page_num() == 4
+
+
+def test_clear_all_resets_persisted_cursors(tmp_path):
+    config = ConfigStore(db_path=tmp_path / "meme_cursor_clear.db")
+    config.set("meme_barrage_local_read_offset", "8")
+    config.set("meme_barrage_remote_page_num", "5")
+
+    service = MemeBarrageService(config)
+    service.store.insert_many([("A", None, None)])
+    service.enqueue_display(["A"])
+    service.clear_all()
+
+    assert config.get("meme_barrage_local_read_offset") == "0"
+    assert config.get("meme_barrage_remote_page_num") == "1"
+    restarted = MemeBarrageService(config)
+    assert restarted.next_page_num() == 1

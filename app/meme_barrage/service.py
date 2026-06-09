@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from app.danmu_pool_overlay import is_overlay_safe
 from app.meme_barrage.client import parse_barrage_page
-from app.meme_barrage.config import read_meme_barrage_settings
+from app.meme_barrage.config import (
+    DEFAULT_LOCAL_READ_OFFSET,
+    DEFAULT_REMOTE_PAGE_NUM,
+    load_meme_barrage_cursors,
+    persist_meme_barrage_cursors,
+    read_meme_barrage_settings,
+)
 from app.meme_barrage.store import MemeBarrageStore
 
 if TYPE_CHECKING:
@@ -25,8 +31,9 @@ class MemeBarrageService:
         self._store = MemeBarrageStore(config)
         self._display_queue: deque[str] = deque()
         self._settings_cache: dict[str, object] | None = None
-        self._page_num = 1
-        self._local_read_offset = 0
+        local_offset, page_num = load_meme_barrage_cursors(config)
+        self._page_num = page_num
+        self._local_read_offset = local_offset
         self._fetch_in_flight = False
         self._ai_select_in_flight = False
 
@@ -53,8 +60,13 @@ class MemeBarrageService:
         self._ai_select_in_flight = bool(value)
 
     def reset_cursors(self) -> None:
-        self._page_num = 1
-        self._local_read_offset = 0
+        self._page_num = DEFAULT_REMOTE_PAGE_NUM
+        self._local_read_offset = DEFAULT_LOCAL_READ_OFFSET
+        persist_meme_barrage_cursors(
+            self._config,
+            local_offset=self._local_read_offset,
+            page_num=self._page_num,
+        )
 
     def clear_all(self) -> None:
         self._display_queue.clear()
@@ -111,6 +123,11 @@ class MemeBarrageService:
         batch_size = int(settings["collect_batch_size"])
         texts, next_offset = self._store.fetch_batch_by_offset(self._local_read_offset, batch_size)
         self._local_read_offset = next_offset
+        persist_meme_barrage_cursors(
+            self._config,
+            local_offset=self._local_read_offset,
+            page_num=self._page_num,
+        )
         return texts
 
     def ingest_collected_texts(self, texts: list[str], *, source_tag: str | None = None) -> list[str]:
@@ -135,9 +152,14 @@ class MemeBarrageService:
         items, last_page = parse_barrage_page(data)
         filtered = self.filter_remote_items(items)
         if last_page:
-            self._page_num = 1
+            self._page_num = DEFAULT_REMOTE_PAGE_NUM
         else:
             self._page_num += 1
+        persist_meme_barrage_cursors(
+            self._config,
+            local_offset=self._local_read_offset,
+            page_num=self._page_num,
+        )
         return filtered
 
     def next_page_num(self) -> int:

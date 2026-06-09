@@ -1,6 +1,6 @@
 """读弹幕 TTS 平台/模型/音色目录（Web 联动与 voice 白名单）。
 
-豆包音色按官方 resource 规则推断；百炼 qwen3 音色来自探测与文档。
+百炼 qwen3 音色来自探测与文档。
 """
 
 from __future__ import annotations
@@ -9,13 +9,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.tts_providers import (
-    TTS_PROVIDER_CUSTOM_OPENAI,
     TTS_PROVIDER_DASHSCOPE_QWEN,
-    TTS_PROVIDER_DOUBAO,
     TTS_PROVIDER_MIMO,
 )
 
-DOUBAO_TTS_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 DASHSCOPE_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
 
 
@@ -42,25 +39,6 @@ class TtsProviderCatalog:
     models: tuple[TtsModelSpec, ...]
     needs_app_id: bool = False
 
-
-def infer_doubao_resource_id(speaker: str) -> str:
-    if "_uranus_bigtts" in speaker or speaker.startswith("saturn_"):
-        return "seed-tts-2.0"
-    return "seed-tts-1.0"
-
-
-DOUBAO_VOICES: tuple[TtsVoiceSpec, ...] = (
-    TtsVoiceSpec("zh_female_vv_uranus_bigtts", "Vivi 2.0", supports_style=True),
-    TtsVoiceSpec("zh_male_ruyayichen_uranus_bigtts", "儒雅逸辰 2.0", supports_style=True),
-    TtsVoiceSpec("zh_female_tianmeixiaoyuan_uranus_bigtts", "甜美小源 2.0", supports_style=True),
-    TtsVoiceSpec("zh_male_m191_uranus_bigtts", "云舟", supports_style=True),
-    TtsVoiceSpec("zh_female_cancan_mars_bigtts", "灿灿 / Shiny"),
-    TtsVoiceSpec("zh_male_qingshuangnanda_mars_bigtts", "清爽男大"),
-    TtsVoiceSpec("zh_female_linjianvhai_moon_bigtts", "邻家女孩"),
-    TtsVoiceSpec("zh_male_yuanboxiaoshu_moon_bigtts", "渊博小叔"),
-    TtsVoiceSpec("ICL_zh_male_badaozongcai_v1_tob", "霸道总裁"),
-    TtsVoiceSpec("ICL_zh_female_wenrounvshen_239eff5e8ffa_tob", "温柔女神"),
-)
 
 DASHSCOPE_VOICES: tuple[TtsVoiceSpec, ...] = (
     TtsVoiceSpec("Cherry", "芊悦"),
@@ -101,32 +79,6 @@ TTS_CATALOG: tuple[TtsProviderCatalog, ...] = (
         ),
     ),
     TtsProviderCatalog(
-        id=TTS_PROVIDER_DOUBAO,
-        label_zh="火山豆包语音",
-        needs_app_id=True,
-        models=(
-            TtsModelSpec(
-                id="seed-tts-2.0",
-                label_zh="豆包语音合成 2.0",
-                voices=tuple(v for v in DOUBAO_VOICES if infer_doubao_resource_id(v.id) == "seed-tts-2.0"),
-                supports_style=True,
-                transport="http",
-            ),
-            TtsModelSpec(
-                id="seed-tts-1.0",
-                label_zh="豆包语音合成 1.0",
-                voices=tuple(v for v in DOUBAO_VOICES if infer_doubao_resource_id(v.id) == "seed-tts-1.0"),
-                transport="http",
-            ),
-            TtsModelSpec(
-                id="seed-tts-1.1",
-                label_zh="豆包语音合成 1.1",
-                voices=DOUBAO_VOICES,
-                transport="http",
-            ),
-        ),
-    ),
-    TtsProviderCatalog(
         id=TTS_PROVIDER_DASHSCOPE_QWEN,
         label_zh="阿里百炼 Qwen3",
         models=(
@@ -148,18 +100,6 @@ TTS_CATALOG: tuple[TtsProviderCatalog, ...] = (
                 voices=DASHSCOPE_VOICES,
                 supports_style=True,
                 transport="websocket",
-            ),
-        ),
-    ),
-    TtsProviderCatalog(
-        id=TTS_PROVIDER_CUSTOM_OPENAI,
-        label_zh="自定义（OpenAI 兼容）",
-        models=(
-            TtsModelSpec(
-                id="",
-                label_zh="自定义模型",
-                voices=(TtsVoiceSpec("", "（在下方手动填写音色）"),),
-                transport="chat_audio",
             ),
         ),
     ),

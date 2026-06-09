@@ -522,6 +522,31 @@
   border-top: 1px dashed rgba(93, 87, 87, 0.12);
 }
 
+.meme-source-credit {
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  background: rgba(255, 218, 185, 0.35);
+  border: 1px solid rgba(255, 182, 193, 0.45);
+}
+
+.meme-source-credit-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--color-text-muted, #6b7280);
+}
+
+.meme-source-credit-link {
+  font-weight: 700;
+  color: var(--color-primary-hover, #e879a9);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.meme-source-credit-link:hover {
+  color: var(--color-primary, #ff8fab);
+}
+
 .danmu-pool-textarea {
   resize: vertical;
   min-height: 8rem;

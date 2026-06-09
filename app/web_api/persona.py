@@ -29,6 +29,23 @@ if TYPE_CHECKING:
     from main import DanmuApp
 
 
+def _default_user_pt_for_save(name: str) -> str:
+    if name in BUILTIN_PERSONAE:
+        prompt = BUILTIN_PERSONAE[name]
+        if Translator.get_language() == "en":
+            return prompt["user_en"]
+        return prompt["user_zh"]
+    return default_user_prompt()
+
+
+def _resolve_user_pt_for_save(name: str, user_pt: str, existing_user: str) -> str:
+    if (user_pt or "").strip():
+        return user_pt
+    if (existing_user or "").strip():
+        return existing_user
+    return _default_user_pt_for_save(name)
+
+
 def get_template_detail(app: "DanmuApp", name: str) -> dict[str, Any]:
     personae: PersonaManager = app.personae
     templates: TemplateManager = app.templates
@@ -73,8 +90,7 @@ def save_template(app: "DanmuApp", name: str, system_custom: str, user_pt: str) 
     reply_contract = get_reply_contract(app.config)
 
     _, existing_user = app.templates.load(name)
-    if not (user_pt or "").strip():
-        user_pt = existing_user or default_user_prompt()
+    user_pt = _resolve_user_pt_for_save(name, user_pt, existing_user)
 
     custom = (system_custom or "").strip()
     if custom:

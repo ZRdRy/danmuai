@@ -495,3 +495,4 @@ export function getMicConfigProviderId(apiMode, modelId, endpoint, options = {})
   });
   return { providerId, micSupported };
 }
+

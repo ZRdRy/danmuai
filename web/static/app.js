@@ -25,6 +25,7 @@ import {
   initCaptureRegionControls,
   initNormalBatchControls,
   initFloatingPanelV2Controls,
+  initSceneMemoryIntervalControls,
   initRestoreDefaultsControls,
   initContentPageFieldHints,
   initSettingsFieldHints,
@@ -131,7 +132,7 @@ function populateDanmuReadModelSelect(providerId, selectedModelId) {
   modelSelect.innerHTML = '';
   const models = cat?.models || [];
   models.forEach((m) => {
-    if (!m.id && providerId === 'custom_openai') return;
+    if (!m.id) return;
     const opt = document.createElement('option');
     opt.value = m.id;
     opt.textContent = m.label || m.id;
@@ -155,13 +156,7 @@ function populateDanmuReadVoiceSelect(providerId, modelId, selectedVoice) {
   }
   voiceEl.innerHTML = '';
   voices.forEach((v) => {
-    if (!v.id && providerId === 'custom_openai') {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = v.label || '自定义';
-      voiceEl.appendChild(opt);
-      return;
-    }
+    if (!v.id) return;
     const opt = document.createElement('option');
     opt.value = v.id;
     opt.textContent = v.label || v.id;
@@ -201,21 +196,12 @@ function handleDanmuReadModelChange() {
   const modelLabel = document.getElementById('danmuReadModelLabel');
   const endpointLabel = document.getElementById('danmuReadEndpointLabel');
   if (modelLabel) modelLabel.textContent = modelId || 'mimo-v2.5-tts';
-  if (endpointLabel) endpointLabel.textContent = provider === 'custom_openai' ? '自定义' : provider || 'MiMo';
+  if (endpointLabel) endpointLabel.textContent = provider || 'MiMo';
 }
 
 function syncDanmuReadCustomFieldsUi() {
   const provider = document.getElementById('danmuReadProvider')?.value || '';
-  const useCustom = provider === 'custom_openai';
-  const usePreset = provider === 'doubao' || provider === 'dashscope_qwen';
-  const modelSelectWrap = document.getElementById('danmuReadModelSelectWrap');
-  const customEndpointWrap = document.getElementById('danmuReadCustomEndpointWrap');
-  const customModelWrap = document.getElementById('danmuReadCustomModelWrap');
-  const appIdWrap = document.getElementById('danmuReadAppIdWrap');
-  if (modelSelectWrap) modelSelectWrap.hidden = useCustom;
-  if (customEndpointWrap) customEndpointWrap.hidden = !useCustom;
-  if (customModelWrap) customModelWrap.hidden = !useCustom;
-  if (appIdWrap) appIdWrap.hidden = provider !== 'doubao';
+  const usePreset = provider === 'dashscope_qwen';
   if (usePreset || !provider) {
     const modelId = document.getElementById('danmuReadModelSelect')?.value || '';
     populateDanmuReadModelSelect(provider, modelId);
@@ -225,38 +211,20 @@ function syncDanmuReadCustomFieldsUi() {
 
 function collectDanmuReadCustomPayload() {
   const provider = document.getElementById('danmuReadProvider')?.value || '';
-  const endpoint = document.getElementById('danmuReadEndpoint')?.value?.trim() || '';
-  const customModelId = document.getElementById('danmuReadModelId')?.value?.trim() || '';
   const presetModelId = document.getElementById('danmuReadModelSelect')?.value?.trim() || '';
-  const appId = document.getElementById('danmuReadAppId')?.value?.trim() || '';
   if (!provider) {
-    return { provider: '', endpoint: '', model_id: '', app_id: '' };
+    return { provider: '', endpoint: '', model_id: '' };
   }
-  if (provider === 'custom_openai') {
-    return { provider, endpoint, model_id: customModelId, app_id: '' };
-  }
-  return { provider, endpoint: '', model_id: presetModelId, app_id: appId };
+  return { provider, endpoint: '', model_id: presetModelId };
 }
 
 function validateDanmuReadCustomFields(payload) {
   const provider = payload.provider || '';
-  const endpoint = payload.endpoint || '';
   const modelId = payload.model_id || '';
   if (!provider) return true;
-  if (provider === 'doubao' || provider === 'dashscope_qwen') {
+  if (provider === 'dashscope_qwen') {
     if (!modelId) {
       showToast('请选择 TTS 模型', true);
-      return false;
-    }
-    return true;
-  }
-  if (provider === 'custom_openai') {
-    if (!endpoint) {
-      showToast('请填写 API 地址', true);
-      return false;
-    }
-    if (!modelId) {
-      showToast('请填写模型名称', true);
       return false;
     }
   }
@@ -271,22 +239,23 @@ function applyDanmuReadForm(cfg) {
   const voiceEl = document.getElementById('danmuReadVoice');
   const styleEl = document.getElementById('danmuReadStylePrompt');
   const providerEl = document.getElementById('danmuReadProvider');
-  const endpointEl = document.getElementById('danmuReadEndpoint');
-  const modelIdEl = document.getElementById('danmuReadModelId');
-  const appIdEl = document.getElementById('danmuReadAppId');
   const modelLabel = document.getElementById('danmuReadModelLabel');
   const endpointLabel = document.getElementById('danmuReadEndpointLabel');
   if (enabledEl) enabledEl.checked = Boolean(cfg.enabled);
   if (intervalEl) intervalEl.value = String(cfg.interval_sec ?? 10);
   if (keyEl) keyEl.value = cfg.api_key || '';
   if (styleEl) styleEl.value = cfg.style_prompt || '';
-  const storedProvider = cfg.provider || (cfg.use_custom_model ? 'custom_openai' : '');
+  let storedProvider = cfg.provider || '';
+  if (storedProvider === 'custom_openai') {
+    storedProvider = '';
+    showToast('已不再支持自定义 OpenAI 兼容 TTS，请重新选择平台并保存', true);
+  } else if (storedProvider === 'doubao') {
+    storedProvider = '';
+    showToast('已不再支持火山豆包语音 TTS，请改选 MiMo 或百炼并保存', true);
+  }
   if (providerEl) providerEl.value = storedProvider || '';
-  if (endpointEl) endpointEl.value = cfg.custom_endpoint || '';
-  if (modelIdEl) modelIdEl.value = cfg.custom_model_id || '';
-  if (appIdEl) appIdEl.value = cfg.app_id || '';
   const effProvider = storedProvider || '';
-  const effModel = cfg.custom_model_id || cfg.model_id || cfg.model || '';
+  const effModel = cfg.model_id || cfg.model || '';
   populateDanmuReadModelSelect(effProvider, effModel);
   syncDanmuReadCustomFieldsUi();
   populateDanmuReadVoiceSelect(effProvider, effModel, cfg.voice || '');
@@ -467,6 +436,7 @@ async function init() {
   initCaptureRegionControls();
   initRestoreDefaultsControls();
   initFloatingPanelV2Controls();
+  initSceneMemoryIntervalControls();
 
   bindSettingsControls({
     showToast,

@@ -1,50 +1,64 @@
-"""Types and config helpers for scene memory.
-
-四档 memory_mode 取值（与 ``app/config_defaults.py`` 的 ``memory_mode`` 字段对应）：
-- ``off``：关闭记忆
-- ``dedup_only``：仅弹幕去重段
-- ``scene_card``：场景卡片 + 去重段（**默认**）
-- ``strong``：场景 + 活动 + 去重，字符预算最大
-
-弹幕/场景/活动相关常量见 ``MEMORY_MODES``、``STABLE_FACTS_MAX``、``OPEN_THREADS_MAX`` 等。
-``clamp_memory_window`` 用于钳位 ``memory_window`` 配置项（1~20，默认 10）。
-"""
+"""Types and helpers for scene brief + prompt dedup memory."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 MAX_BULLET_SNIPPET_LEN = 15
-DEFAULT_MEMORY_WINDOW = 10
-MEMORY_WINDOW_MIN = 1
-MEMORY_WINDOW_MAX = 20
+DEFAULT_PROMPT_DEDUP_WINDOW = 10
+PROMPT_DEDUP_WINDOW_MIN = 1
+PROMPT_DEDUP_WINDOW_MAX = 20
 
-MEMORY_MODES = frozenset({"off", "dedup_only", "scene_card", "strong"})
-MEMORY_MODE_OFF = "off"
-MEMORY_MODE_DEDUP_ONLY = "dedup_only"
-MEMORY_MODE_SCENE_CARD = "scene_card"
-MEMORY_MODE_STRONG = "strong"
-
-STABLE_FACTS_MAX = 5
-VOLATILE_FACTS_MAX = 8
-OPEN_THREADS_MAX = 4
-SCENE_SUMMARY_MAX_LEN = 40
-STABLE_CONFIDENCE_THRESHOLD = 0.6
-INFERRED_CONFIDENCE = 0.4
+SCENE_BRIEF_MAX_LEN_ZH = 20
+SCENE_BRIEF_MAX_LEN_EN = 40
+SCENE_MEMORY_INTERVAL_MULTIPLIER_MAX = 12
+DEFAULT_SCENE_MEMORY_INTERVAL_SEC = 5
 
 
-def clamp_memory_window(raw: int | str | None, *, default: int = DEFAULT_MEMORY_WINDOW) -> int:
+def snap_scene_memory_interval_sec(interval_sec: int, recognition_sec: int) -> int:
+    """Snap interval to the nearest multiple of recognition_sec (min 1x, max 12x)."""
+    recognition_sec = max(1, int(recognition_sec))
+    try:
+        interval_sec = int(interval_sec)
+    except (TypeError, ValueError):
+        interval_sec = recognition_sec
+    multiplier = max(1, (interval_sec + recognition_sec - 1) // recognition_sec)
+    multiplier = min(multiplier, SCENE_MEMORY_INTERVAL_MULTIPLIER_MAX)
+    return multiplier * recognition_sec
+
+
+def scene_memory_interval_from_config(config) -> int:
+    recognition = max(1, config.get_int("normal_recognition_interval_sec", 5))
+    raw = config.get_int("scene_memory_interval_sec", recognition)
+    return snap_scene_memory_interval_sec(raw, recognition)
+
+
+def scene_memory_tick_multiplier(config) -> int:
+    recognition = max(1, config.get_int("normal_recognition_interval_sec", 5))
+    interval = scene_memory_interval_from_config(config)
+    return max(1, interval // recognition)
+
+
+def clamp_prompt_dedup_window(
+    raw: int | str | None,
+    *,
+    default: int = DEFAULT_PROMPT_DEDUP_WINDOW,
+) -> int:
     if raw in (None, ""):
         return default
     try:
         value = int(raw)
     except (TypeError, ValueError):
         return default
-    return max(MEMORY_WINDOW_MIN, min(value, MEMORY_WINDOW_MAX))
+    return max(PROMPT_DEDUP_WINDOW_MIN, min(value, PROMPT_DEDUP_WINDOW_MAX))
 
 
-def memory_window_from_config(config) -> int:
-    return clamp_memory_window(config.get("memory_window", ""), default=DEFAULT_MEMORY_WINDOW)
+def prompt_dedup_window_from_config(config) -> int:
+    """Internal window size; legacy memory_window key still honored if present."""
+    return clamp_prompt_dedup_window(
+        config.get("memory_window", ""),
+        default=DEFAULT_PROMPT_DEDUP_WINDOW,
+    )
 
 
 def bullet_angle_from_index(content_index: int, scene_count: int) -> str:
@@ -53,16 +67,19 @@ def bullet_angle_from_index(content_index: int, scene_count: int) -> str:
     return f"filler_{content_index - scene_count}"
 
 
-@dataclass
-class VisualMemoryUpdate:
-    scene_generation: int
-    scene_type: str = ""
-    scene_summary: str = ""
-    stable_facts: list[str] = field(default_factory=list)
-    volatile_facts: list[str] = field(default_factory=list)
-    open_threads: list[str] = field(default_factory=list)
-    last_focus: str = ""
-    confidence: float = INFERRED_CONFIDENCE
+def truncate_scene_brief(text: str, *, lang: str = "zh") -> str:
+    from app.translations import Translator
+
+    effective_lang = lang or Translator.get_language()
+    max_len = (
+        SCENE_BRIEF_MAX_LEN_EN
+        if effective_lang == "en"
+        else SCENE_BRIEF_MAX_LEN_ZH
+    )
+    cleaned = (text or "").strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[:max_len]
 
 
 @dataclass

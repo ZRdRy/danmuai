@@ -1,6 +1,5 @@
 import base64
 import io
-import json
 import wave
 
 import numpy as np
@@ -22,10 +21,8 @@ from app.danmu_tts import (
 )
 from app.danmu_tts_playback import DanmuTtsPlayback
 from app.tts_providers import (
-    TTS_PROVIDER_CUSTOM_OPENAI,
     TTS_PROVIDER_DASHSCOPE_QWEN,
-    TTS_PROVIDER_DOUBAO,
-    synthesize_tts,
+    TTS_PROVIDER_MIMO,
 )
 
 from tests.fakes import FakeConfig
@@ -119,17 +116,15 @@ def test_resolve_tts_config_defaults():
     assert resolved.is_custom is False
 
 
-def test_resolve_tts_config_doubao():
+def test_resolve_tts_config_rejects_doubao():
     cfg = FakeConfig(
         {
-            "tts_provider": TTS_PROVIDER_DOUBAO,
+            "tts_provider": "doubao",
             "tts_model_id": "seed-tts-2.0",
         }
     )
-    resolved = resolve_tts_config(cfg)
-    assert resolved.provider == TTS_PROVIDER_DOUBAO
-    assert resolved.model == "seed-tts-2.0"
-    assert resolved.is_custom is True
+    with pytest.raises(ValueError, match="火山豆包"):
+        resolve_tts_config(cfg)
 
 
 def test_resolve_tts_config_dashscope():
@@ -144,121 +139,16 @@ def test_resolve_tts_config_dashscope():
     assert resolved.model == "qwen3-tts-flash-2025-11-27"
 
 
-def test_synthesize_doubao_tts_parses_pcm_chunks(monkeypatch):
-    pcm = b"\x00\x01" * 1200
-    chunk = {
-        "code": 0,
-        "data": base64.b64encode(pcm).decode("ascii"),
-    }
-    end = {"code": 20000000}
-    body = (json.dumps(chunk) + "\n" + json.dumps(end) + "\n").encode("utf-8")
-
-    class FakeStream:
-        status_code = 200
-
-        def iter_bytes(self):
-            yield body
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self):
-            return b""
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def stream(self, method, url, headers, json):
-            return FakeStream()
-
-    monkeypatch.setattr("app.tts_providers.httpx.Client", FakeClient)
-    resolved = ResolvedTtsConfig(
-        provider=TTS_PROVIDER_DOUBAO,
-        endpoint="https://openspeech.bytedance.com/api/v3/tts/unidirectional",
-        model="seed-tts-2.0",
-        is_custom=True,
-        stored_provider=TTS_PROVIDER_DOUBAO,
-        stored_endpoint="",
-        stored_model_id="seed-tts-2.0",
-    )
-    out = synthesize_tts(
-        "test-key",
-        "你好",
-        resolved=resolved,
-        voice="zh_female_vv_uranus_bigtts",
-    )
-    assert out[:4] == b"RIFF"
-
-
-def test_resolve_tts_config_custom():
+def test_resolve_tts_config_rejects_custom_openai():
     cfg = FakeConfig(
         {
-            "tts_provider": TTS_PROVIDER_CUSTOM_OPENAI,
+            "tts_provider": "custom_openai",
             "tts_endpoint": "https://tts.example.com/v1",
             "tts_model_id": "my-tts-model",
         }
     )
-    resolved = resolve_tts_config(cfg)
-    assert resolved.is_custom is True
-    assert resolved.model == "my-tts-model"
-    assert resolved.endpoint == "https://tts.example.com/v1"
-
-
-def test_synthesize_mimo_tts_custom_model(monkeypatch):
-    wav = _fake_wav_bytes()
-    payload = {
-        "choices": [
-            {"message": {"audio": {"data": base64.b64encode(wav).decode("ascii")}}}
-        ]
-    }
-    captured: dict = {}
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return payload
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, json, headers):
-            captured["url"] = url
-            captured["json"] = json
-            return FakeResponse()
-
-    monkeypatch.setattr("app.tts_providers.httpx.Client", FakeClient)
-    resolved = ResolvedTtsConfig(
-        provider=TTS_PROVIDER_CUSTOM_OPENAI,
-        endpoint="https://tts.example.com/v1",
-        model="custom-tts-v1",
-        is_custom=True,
-        stored_provider=TTS_PROVIDER_CUSTOM_OPENAI,
-        stored_endpoint="https://tts.example.com/v1",
-        stored_model_id="custom-tts-v1",
-    )
-    out = synthesize_mimo_tts("sk-test", "你好", resolved=resolved)
-    assert out == wav
-    assert captured["json"]["model"] == "custom-tts-v1"
-    assert captured["url"] == "https://tts.example.com/v1/chat/completions"
+    with pytest.raises(ValueError, match="不再支持自定义 OpenAI 兼容 TTS"):
+        resolve_tts_config(cfg)
 
 
 def test_synthesize_mimo_tts_missing_key():
@@ -295,13 +185,13 @@ def test_synthesize_mimo_tts_text_only_response(monkeypatch):
 
     monkeypatch.setattr("app.tts_providers.httpx.Client", FakeClient)
     resolved = ResolvedTtsConfig(
-        provider=TTS_PROVIDER_CUSTOM_OPENAI,
-        endpoint="https://openrouter.ai/api/v1",
+        provider=TTS_PROVIDER_MIMO,
+        endpoint=MIMO_TTS_ENDPOINT,
         model="openrouter/chat-model",
-        is_custom=True,
-        stored_provider=TTS_PROVIDER_CUSTOM_OPENAI,
-        stored_endpoint="https://openrouter.ai/api/v1",
-        stored_model_id="openrouter/chat-model",
+        is_custom=False,
+        stored_provider="",
+        stored_endpoint="",
+        stored_model_id="",
     )
     with pytest.raises(DanmuTtsError, match="不支持读弹幕 TTS 音频输出"):
         synthesize_mimo_tts("sk-test", "你好", resolved=resolved)

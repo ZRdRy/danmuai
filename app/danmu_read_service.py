@@ -29,10 +29,10 @@ from app.danmu_tts import (
 from app.danmu_tts_playback import DanmuTtsPlayback
 from app.model_providers import normalize_endpoint
 from app.tts_providers import (
-    TTS_PROVIDER_CUSTOM_OPENAI,
+    MIMO_TTS_MODEL,
     TTS_PROVIDER_DASHSCOPE_QWEN,
-    TTS_PROVIDER_DOUBAO,
     TTS_PROVIDER_MIMO,
+    _reject_removed_doubao_tts,
     validate_custom_tts_fields,
 )
 
@@ -77,13 +77,12 @@ def _normalize_tts_provider(value: object) -> str:
     raw = str(value or "").strip()
     if raw in ("", "mimo", TTS_PROVIDER_MIMO):
         return ""
-    if raw in (
-        TTS_PROVIDER_DOUBAO,
-        TTS_PROVIDER_DASHSCOPE_QWEN,
-        TTS_PROVIDER_CUSTOM_OPENAI,
-    ):
+    _reject_removed_doubao_tts(raw)
+    if raw == "custom_openai":
+        raise ValueError("不再支持自定义 OpenAI 兼容 TTS，请改选 MiMo/百炼")
+    if raw == TTS_PROVIDER_DASHSCOPE_QWEN:
         return raw
-    return TTS_PROVIDER_CUSTOM_OPENAI
+    raise ValueError(f"不支持的 TTS 平台：{raw}")
 
 
 class _DanmuTtsRunnable(QRunnable):
@@ -202,21 +201,36 @@ class DanmuReadService(QObject):
             items["danmu_read_interval_sec"] = str(
                 clamp_read_interval_sec(patch.get("interval_sec"))
             )
-        provider = _normalize_tts_provider(patch.get("provider", ""))
-        endpoint = normalize_endpoint(str(patch.get("endpoint") or ""))
-        model_id = str(patch.get("model_id") or "").strip()
+        provider = (
+            _normalize_tts_provider(patch.get("provider", ""))
+            if "provider" in patch
+            else (config.get("tts_provider") or "").strip()
+        )
+        endpoint = (
+            normalize_endpoint(str(patch.get("endpoint") or ""))
+            if "endpoint" in patch
+            else normalize_endpoint(config.get("tts_endpoint") or "")
+        )
+        model_id = (
+            str(patch.get("model_id") or "").strip()
+            if "model_id" in patch
+            else (config.get("tts_model_id") or "").strip()
+        )
         if "provider" in patch or "endpoint" in patch or "model_id" in patch:
+            if provider == "custom_openai":
+                raise ValueError("不再支持自定义 OpenAI 兼容 TTS，请改选 MiMo/百炼")
+            if endpoint and provider != TTS_PROVIDER_DASHSCOPE_QWEN:
+                raise ValueError("不再支持自定义 OpenAI 兼容 TTS，请改选 MiMo/百炼")
             if not provider and not endpoint and not model_id:
                 items["tts_provider"] = ""
                 items["tts_endpoint"] = ""
                 items["tts_model_id"] = ""
+            elif not provider and model_id:
+                raise ValueError("须选择 TTS 平台（百炼）")
             else:
-                resolved_provider = provider or TTS_PROVIDER_CUSTOM_OPENAI
-                validate_custom_tts_fields(resolved_provider, endpoint, model_id)
-                items["tts_provider"] = resolved_provider
-                items["tts_endpoint"] = (
-                    "" if resolved_provider in (TTS_PROVIDER_DOUBAO, TTS_PROVIDER_DASHSCOPE_QWEN) else endpoint
-                )
+                validate_custom_tts_fields(provider, "", model_id)
+                items["tts_provider"] = provider
+                items["tts_endpoint"] = ""
                 items["tts_model_id"] = model_id
 
         if "voice" in patch:
@@ -233,8 +247,6 @@ class DanmuReadService(QObject):
             )
         if "style_prompt" in patch:
             items["tts_style_prompt"] = str(patch.get("style_prompt", ""))
-        if "app_id" in patch:
-            items["tts_app_id"] = str(patch.get("app_id") or "").strip()
 
         if items:
             config.set_batch(items)
@@ -245,12 +257,16 @@ class DanmuReadService(QObject):
                 config.set_tts_api_key(key)
         self._skip_log_flags.discard("no_key")
         self._sync_timer()
+        try:
+            is_custom = resolve_tts_config(config).is_custom
+        except ValueError:
+            is_custom = True
         self._app.logger.info(
             "danmu read: config saved enabled=%s interval=%ss has_key=%s custom=%s",
             danmu_read_enabled(config),
             config.get("danmu_read_interval_sec", "10"),
             bool(config.get_tts_api_key()),
-            resolve_tts_config(config).is_custom,
+            is_custom,
         )
         return export_danmu_read_config(config)
 
@@ -379,10 +395,28 @@ class DanmuReadService(QObject):
 
 def export_danmu_read_config(config) -> dict[str, object]:
     key = config.get_tts_api_key()
-    resolved = resolve_tts_config(config)
     stored_provider = (config.get("tts_provider") or "").strip()
     stored_endpoint = normalize_endpoint(config.get("tts_endpoint") or "")
     stored_model_id = (config.get("tts_model_id") or "").strip()
+    try:
+        resolved = resolve_tts_config(config)
+    except ValueError:
+        return {
+            "enabled": danmu_read_enabled(config),
+            "interval_sec": clamp_read_interval_sec(
+                config.get("danmu_read_interval_sec", "10")
+            ),
+            "voice": normalize_tts_voice(config.get("tts_voice", "")),
+            "style_prompt": config.get("tts_style_prompt", ""),
+            "api_key": MASKED_API_KEY if key else "",
+            "provider": stored_provider,
+            "custom_endpoint": stored_endpoint,
+            "custom_model_id": stored_model_id,
+            "model_id": stored_model_id,
+            "model": stored_model_id or MIMO_TTS_MODEL,
+            "endpoint": stored_endpoint,
+            "use_custom_model": True,
+        }
     return {
         "enabled": danmu_read_enabled(config),
         "interval_sec": clamp_read_interval_sec(
@@ -393,7 +427,6 @@ def export_danmu_read_config(config) -> dict[str, object]:
             provider=resolved.provider,
             model_id=resolved.model,
         ),
-        "app_id": (config.get("tts_app_id") or "").strip(),
         "style_prompt": config.get("tts_style_prompt", ""),
         "api_key": MASKED_API_KEY if key else "",
         "provider": stored_provider,

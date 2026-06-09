@@ -14,7 +14,6 @@ DanmuApp 通过 from app.main_helpers import ... 使用这些常量和函数。
 from __future__ import annotations
 
 from app.danmu_engine import DanmuItem
-from app.memory.types import MEMORY_MODE_OFF
 from app.personae import persona_display_name
 
 VISUAL_INFLIGHT_WARN_SEC = 45.0
@@ -55,19 +54,8 @@ def density_right_target(min_n: int) -> int:
     return max(1, min_n // 3)
 
 
-def memory_tone_hint(persona_id: str) -> str:
-    if not persona_id:
-        return ""
-    return persona_display_name(persona_id)
-
-
-def memory_mode_from_value(raw: object) -> str:
-    value = raw if raw else MEMORY_MODE_OFF
-    return str(value).strip().lower()
-
-
-def memory_enabled(mode: str) -> bool:
-    return mode != MEMORY_MODE_OFF
+def config_flag_enabled(config, key: str, *, default: str = "0") -> bool:
+    return str(config.get(key, default) or default).strip() == "1"
 
 
 def queue_capacity(config, normal_reply_count: int) -> int:

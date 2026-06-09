@@ -1,15 +1,10 @@
 """AI 回复解析：多格式容错、标准化批次与本地弹幕池补齐。
 
-支持三种输入格式（按检测顺序）：
-  1. JSON 数组 — 直接作为弹幕列表
-  2. JSON 对象 — comments/replies/items/data 键，或 scene_memory 信封（含 memory 更新）
-  3. 纯文本 — 按换行拆分
-
-畸形 JSON 容错：流式截断导致 ``][`` 拼接时，只解析第一个完整数组段。
-
-normalize_reply_batch 将 AI 条数补齐到 scene_count + filler_count：
-  不足时从自定义公式化弹幕库轮换去重填充；池为空则保留短批次。
-  上屏截断在 danmu_engine.normalize_danmu_display_text（中文默认 15 字 / 英文 40 字符 + ``...``）。
+支持输入格式（按检测顺序）：
+  1. JSON 对象 — scene_brief + comments（主格式）
+  2. JSON 对象 — comments/replies/items/data 键（兼容信封）
+  3. JSON 数组 — 直接作为弹幕列表（兼容）
+  4. 纯文本 — 按换行拆分
 
 调用方：DanmuApp._on_ai_reply() → parse_ai_reply_with_memory → normalize_reply_batch
 """
@@ -17,12 +12,29 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from typing import TYPE_CHECKING
 
 from app.danmu_pool import load_danmu_pool_for_config, sample_danmu_for_config
+from app.memory.types import truncate_scene_brief
 
 if TYPE_CHECKING:
-    from app.memory.types import VisualMemoryUpdate
+    pass
+
+_COMMENT_KEYS = ("comments", "replies", "items", "data")
+_SCENE_BRIEF_RE = re.compile(r'"scene_brief"\s*:\s*"([^"]*)"')
+_COMMENTS_ARRAY_RE = re.compile(r'"comments"\s*:\s*\[([^\]]*)\]', re.DOTALL)
+_HEURISTIC_SKIP = frozenset({"comments", "scene_brief", ":", ""})
+
+
+def _is_usable_comment(value: str) -> bool:
+    """过滤 JSON 碎片、纯标点等不可上屏的伪弹幕。"""
+    text = str(value).strip()
+    if not text or text in _HEURISTIC_SKIP:
+        return False
+    if len(text) == 1 and not text.isalnum():
+        return False
+    return any(ch.isalnum() for ch in text)
 
 
 def _scene_fillers(config=None) -> list[str]:
@@ -37,6 +49,84 @@ def _generic_fillers(config=None) -> list[str]:
     if not pool:
         return []
     return sample_danmu_for_config(config, min(48, len(pool)), rng=random)
+
+
+def _try_parse_json_object(raw: str):
+    """解析 JSON 对象；遇 ``}{`` 拼接（流式重复）时只取第一段 ``{...}``。"""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    if not raw.startswith("{"):
+        return None
+    if "}{" in raw:
+        head = raw.split("}{", 1)[0] + "}"
+        try:
+            parsed = json.loads(head)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    stripped = raw.rstrip()
+    if not stripped.endswith("}"):
+        for suffix in ("]}", "}", '"]}'):
+            try:
+                parsed = json.loads(raw + suffix)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _heuristic_comments_from_malformed_json(raw: str) -> list[str]:
+    """模型偶发畸形 JSON（comments 非数组、重复对象拼接）时的兜底抽取。"""
+    if "}{" in raw:
+        raw = raw.split("}{", 1)[0] + "}"
+
+    scene_match = _SCENE_BRIEF_RE.search(raw)
+    scene_brief = scene_match.group(1) if scene_match else None
+
+    arr_match = _COMMENTS_ARRAY_RE.search(raw)
+    if arr_match:
+        items = re.findall(r'"((?:[^"\\]|\\.)*)"', arr_match.group(1))
+        normalized = _normalize_comment_list(items)
+        if normalized:
+            return normalized
+
+    open_arr = re.search(r'"comments"\s*:\s*\[(.*)$', raw, re.DOTALL)
+    if open_arr:
+        inner = open_arr.group(1)
+        items = re.findall(r'"((?:[^"\\]|\\.)*)"', inner)
+        normalized = _normalize_comment_list(items)
+        if normalized:
+            return normalized
+
+    if '"comments"' not in raw:
+        return []
+
+    filtered: list[str] = []
+    for value in re.findall(r'"((?:[^"\\]|\\.)*)"', raw):
+        if not value or value in _HEURISTIC_SKIP or value in _COMMENT_KEYS:
+            continue
+        if scene_brief and value == scene_brief:
+            continue
+        if len(value) == 1 and not value.isalnum():
+            continue
+        filtered.append(value)
+    return _normalize_comment_list(filtered)
+
+
+def _heuristic_scene_brief_from_raw(raw: str) -> str | None:
+    match = _SCENE_BRIEF_RE.search(raw)
+    if not match:
+        return None
+    text = match.group(1).strip()
+    if not text:
+        return None
+    return truncate_scene_brief(text)
 
 
 def _try_parse_json_array(raw: str):
@@ -58,57 +148,70 @@ def _try_parse_json_array(raw: str):
     return None
 
 
+def _normalize_comment_list(candidates) -> list[str]:
+    normalized: list[str] = []
+    for item in candidates:
+        value = str(item).strip().strip('"').strip("'")
+        if _is_usable_comment(value):
+            normalized.append(value)
+    return normalized
+
+
+def _extract_comments_from_dict(parsed: dict) -> list[str]:
+    for key in _COMMENT_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return _normalize_comment_list(value)
+        if isinstance(value, str) and value.strip():
+            return _normalize_comment_list([value])
+    return []
+
+
+def _extract_scene_brief(parsed: dict) -> str | None:
+    raw = parsed.get("scene_brief")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    return truncate_scene_brief(text)
+
+
 def parse_ai_reply_with_memory(
     text: str,
     scene_generation: int = 0,
-) -> tuple[list[str], VisualMemoryUpdate | None]:
-    """解析 AI 原始文本为弹幕列表，并提取可选的 scene_memory 视觉记忆更新。
+) -> tuple[list[str], str | None]:
+    """解析 AI 原始文本为弹幕列表，并提取可选 scene_brief。
 
-    返回 (normalized_comments, memory_update)；无记忆块时 memory_update 为 None。
-    scene_generation 用于回填信封内未带代际的记忆条目。
+    返回 (comments, scene_brief)；无 scene_brief 时第二项为 None。
+    scene_generation 保留兼容签名，当前未使用。
     """
-    from app.memory.visual_update import (
-        extract_comments_from_envelope,
-        parse_scene_memory_envelope,
-        visual_update_from_dict,
-    )
-
+    _ = scene_generation
     raw = str(text or "").strip()
     if not raw:
         return [], None
 
     parsed = None
-    memory_update: VisualMemoryUpdate | None = None
+    scene_brief: str | None = None
 
-    # 格式分支：数组 → 对象（多键或信封）→ 否则按行文本
     if raw.startswith("[") or raw.startswith("{"):
         if raw.startswith("["):
             parsed = _try_parse_json_array(raw)
         else:
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError:
-                parsed = None
+            parsed = _try_parse_json_object(raw)
 
     if isinstance(parsed, dict):
-        envelope_comments = extract_comments_from_envelope(parsed)
-        if envelope_comments is not None:
-            candidates = envelope_comments
-        else:
-            for key in ("comments", "replies", "items", "data"):
-                value = parsed.get(key)
-                if isinstance(value, list):
-                    candidates = value
-                    break
-            else:
-                candidates = []
-        memory_update = parse_scene_memory_envelope(parsed)
-        if memory_update is None and isinstance(parsed.get("scene_memory"), dict):
-            memory_update = visual_update_from_dict(parsed["scene_memory"], scene_generation)
-        if memory_update is not None and memory_update.scene_generation <= 0:
-            memory_update.scene_generation = scene_generation
+        candidates = _extract_comments_from_dict(parsed)
+        scene_brief = _extract_scene_brief(parsed)
+        if not candidates and raw.startswith("{"):
+            candidates = _heuristic_comments_from_malformed_json(raw)
+        if scene_brief is None and raw.startswith("{"):
+            scene_brief = _heuristic_scene_brief_from_raw(raw)
     elif isinstance(parsed, list):
         candidates = parsed
+    elif raw.startswith("{") and ('"comments"' in raw or '"scene_brief"' in raw):
+        candidates = _heuristic_comments_from_malformed_json(raw)
+        scene_brief = _heuristic_scene_brief_from_raw(raw)
     else:
         candidates = [
             part.strip(" -\t\r\n")
@@ -116,19 +219,11 @@ def parse_ai_reply_with_memory(
             if part.strip()
         ]
 
-    normalized: list[str] = []
-    for item in candidates:
-        value = str(item).strip().strip('"').strip("'")
-        if value:
-            normalized.append(value)
-    return normalized, memory_update
+    return _normalize_comment_list(candidates), scene_brief
 
 
 def parse_ai_reply_payload(text: str) -> list[str]:
-    """仅解析弹幕列表，忽略 scene_memory（测试与无记忆路径用）。
-
-    生产 mic / 视觉回复路径应使用 parse_ai_reply_with_memory 以合并 scene_memory 信封。
-    """
+    """仅解析弹幕列表，忽略 scene_brief（测试与无记忆路径用）。"""
     items, _ = parse_ai_reply_with_memory(text)
     return items
 
@@ -162,12 +257,8 @@ def normalize_reply_batch(
     allow_shortfall: bool = False,
     config=None,
 ) -> list[str]:
-    """将 AI 回复标准化为固定条数：前 scene_count 条视为场景相关，其余为填充条。
-
-    从公式化弹幕库轮换去重补齐；池为空或唯一句用尽时提前结束（allow_shortfall 保留兼容）。
-    scene_count / filler_count 由 DanmuApp._sync_reply_batch_config 从 normal_reply_count 派生。
-    """
-    _ = allow_shortfall  # API 兼容；补齐始终去重，池不足则短批次
+    """将 AI 回复标准化为固定条数：前 scene_count 条视为场景相关，其余为填充条。"""
+    _ = allow_shortfall
 
     scene_count = max(1, int(scene_count))
     filler_count = int(filler_count)
@@ -181,7 +272,7 @@ def normalize_reply_batch(
     seen: set[str] = set()
     for item in items:
         value = str(item).strip()
-        if not value or value in seen:
+        if not _is_usable_comment(value) or value in seen:
             continue
         seen.add(value)
         cleaned.append(value)

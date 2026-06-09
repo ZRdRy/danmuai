@@ -44,6 +44,7 @@ import {
   configureSettingsCore,
   fillForm,
   initFloatingPanelV2Controls,
+  initSceneMemoryIntervalControls,
   initRestoreDefaultsControls,
   loadConfigDefaults,
   reloadConfigFromServer,
@@ -116,6 +117,7 @@ export {
   collectFormData,
   fillForm,
   initFloatingPanelV2Controls,
+  initSceneMemoryIntervalControls,
   initRestoreDefaultsControls,
   loadConfigDefaults,
   reloadConfigFromServer,
@@ -521,7 +523,9 @@ export function bindSettingsControls(deps = {}) {
     else syncProviderPresetAfterEndpointEdit();
   });
 
-  document.getElementById('api_endpoint')?.addEventListener('change', syncProviderPresetAfterEndpointEdit);
+  document.getElementById('api_endpoint')?.addEventListener('change', () => {
+    syncProviderPresetAfterEndpointEdit();
+  });
   document.getElementById('api_mode')?.addEventListener('change', () => {
     syncProviderPresetAfterEndpointEdit();
     updateMicModeHint();

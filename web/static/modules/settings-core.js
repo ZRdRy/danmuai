@@ -55,20 +55,41 @@ export function initFloatingPanelV2Controls() {
   syncFloatingPanelV2FieldsVisibility();
 }
 
+function recognitionIntervalSecFromForm() {
+  const el = document.getElementById('normal_recognition_interval_sec');
+  const raw = parseInt(el?.value ?? '', 10);
+  const fallback = parseInt(configDefaultValue('normal_recognition_interval_sec') || '5', 10);
+  const sec = Number.isNaN(raw) || raw < 1 ? fallback : Math.min(60, raw);
+  return Math.max(1, sec);
+}
+
+export function syncSceneMemoryIntervalControl() {
+  const recognition = recognitionIntervalSecFromForm();
+  const intervalEl = document.getElementById('scene_memory_interval_sec');
+  const sceneMemory = document.getElementById('scene_memory_enabled');
+  if (!intervalEl) return;
+  intervalEl.min = String(recognition);
+  intervalEl.step = String(recognition);
+  intervalEl.max = String(recognition * 12);
+  intervalEl.disabled = !(sceneMemory?.checked);
+}
+
+export function initSceneMemoryIntervalControls() {
+  syncSceneMemoryIntervalControl();
+  document.getElementById('scene_memory_enabled')?.addEventListener('change', syncSceneMemoryIntervalControl);
+  document.getElementById('normal_recognition_interval_sec')?.addEventListener('input', syncSceneMemoryIntervalControl);
+  document.getElementById('normal_recognition_interval_sec')?.addEventListener('change', syncSceneMemoryIntervalControl);
+}
+
 function applyDefaultToField(key, rawValue) {
   const value = rawValue === undefined || rawValue === null ? '' : String(rawValue);
-  if (key === 'mic_mode_enabled' || key === 'mic_use_visual_model' || key === 'empty_accel' || key === 'danmu_font_bold' || key === 'floating_panel_font_bold') {
+  if (key === 'mic_mode_enabled' || key === 'mic_use_visual_model' || key === 'empty_accel' || key === 'danmu_font_bold' || key === 'floating_panel_font_bold' || key === 'scene_memory_enabled' || key === 'prompt_dedup_enabled') {
     const el = document.getElementById(key);
     if (el) el.checked = value === '1';
     return;
   }
   const el = document.getElementById(key);
   if (!el) return;
-  if (key === 'memory_mode') {
-    const allowed = ['off', 'dedup_only', 'scene_card', 'strong'];
-    el.value = allowed.includes(value) ? value : 'off';
-    return;
-  }
   if (key === 'layout_mode') {
     const allowed = ['fullscreen', '3/4', '1/2', '1/4'];
     el.value = allowed.includes(value) ? value : 'fullscreen';
@@ -171,6 +192,8 @@ export function collectFormData() {
     if (el) data[name] = el.value;
   });
   data.empty_accel = document.getElementById('empty_accel')?.checked ? '1' : '0';
+  data.scene_memory_enabled = document.getElementById('scene_memory_enabled')?.checked ? '1' : '0';
+  data.prompt_dedup_enabled = document.getElementById('prompt_dedup_enabled')?.checked ? '1' : '0';
   data.mic_mode_enabled = document.getElementById('mic_mode_enabled')?.checked ? '1' : '0';
   data.mic_use_visual_model = document.getElementById('mic_use_visual_model')?.checked ? '1' : '0';
   data.danmu_font_bold = document.getElementById('danmu_font_bold')?.checked ? '1' : '0';
@@ -226,14 +249,25 @@ export function fillForm(cfg) {
   }
   const emptyAccel = document.getElementById('empty_accel');
   if (emptyAccel) emptyAccel.checked = cfg.empty_accel !== '0';
-  const memoryMode = document.getElementById('memory_mode');
-  if (memoryMode) {
-    const allowed = ['off', 'dedup_only', 'scene_card', 'strong'];
-    const fallback = configDefaultValue('memory_mode') || 'off';
-    memoryMode.value = allowed.includes(cfg.memory_mode) ? cfg.memory_mode : fallback;
+  const sceneMemory = document.getElementById('scene_memory_enabled');
+  if (sceneMemory) sceneMemory.checked = cfg.scene_memory_enabled === '1';
+  const sceneMemoryInterval = document.getElementById('scene_memory_interval_sec');
+  if (sceneMemoryInterval) {
+    const recognition = parseInt(cfg.normal_recognition_interval_sec || configDefaultValue('normal_recognition_interval_sec') || '5', 10);
+    const fallback = Number.isNaN(recognition) || recognition < 1 ? 5 : recognition;
+    if (!cfg.scene_memory_interval_sec) {
+      sceneMemoryInterval.value = String(fallback);
+    }
   }
-  const memoryWindow = document.getElementById('memory_window');
-  if (memoryWindow && !cfg.memory_window) memoryWindow.value = configDefaultValue('memory_window') || '10';
+  syncSceneMemoryIntervalControl();
+  const promptDedup = document.getElementById('prompt_dedup_enabled');
+  if (promptDedup) {
+    if (cfg.prompt_dedup_enabled === undefined || cfg.prompt_dedup_enabled === '') {
+      promptDedup.checked = configDefaultValue('prompt_dedup_enabled') !== '0';
+    } else {
+      promptDedup.checked = cfg.prompt_dedup_enabled !== '0';
+    }
+  }
   coreDeps.setMicAudioLikelySupported(cfg.mic_audio_likely_supported !== false);
   const micMode = document.getElementById('mic_mode_enabled');
   if (micMode) micMode.checked = cfg.mic_mode_enabled === '1';

@@ -95,9 +95,9 @@ def save_settings(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, Any]:
         )
     if "collect_batch_size" in payload:
         try:
-            n = int(payload.get("collect_batch_size", 40))
+            n = int(payload.get("collect_batch_size", 2))
         except (TypeError, ValueError):
-            n = 40
+            n = 2
         items["meme_barrage_collect_batch_size"] = str(
             max(COLLECT_BATCH_MIN, min(n, COLLECT_BATCH_MAX))
         )
@@ -111,9 +111,9 @@ def save_settings(app: "DanmuApp", payload: dict[str, Any]) -> dict[str, Any]:
         )
     if "display_batch_size" in payload:
         try:
-            n = int(payload.get("display_batch_size", 20))
+            n = int(payload.get("display_batch_size", 2))
         except (TypeError, ValueError):
-            n = 20
+            n = 2
         items["meme_barrage_display_batch_size"] = str(
             max(DISPLAY_BATCH_MIN, min(n, DISPLAY_BATCH_MAX))
         )

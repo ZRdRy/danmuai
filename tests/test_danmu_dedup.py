@@ -411,7 +411,7 @@ def test_consume_reply_queue_dedup_reject_does_not_increment_danmu_count(
     object.__setattr__(app, "_total_output_tokens", 0)
     object.__setattr__(app, "_visible_display_count", lambda: 0)
     object.__setattr__(app, "_estimated_reply_gap_ms", lambda: 100)
-    object.__setattr__(app, "_record_scene_memory_display", lambda *a, **k: None)
+    object.__setattr__(app, "_record_prompt_dedup_display", lambda *a, **k: None)
     object.__setattr__(app, "_latest_displayed_round", 0)
     object.__setattr__(app, "_latest_displayed_screenshot_id", 0)
     object.__setattr__(app, "_current_batch", None)
@@ -447,7 +447,7 @@ def test_consume_reply_queue_skip_dedup_only_for_fallback(workspace_tmp, monkeyp
     object.__setattr__(app, "_update_stats", lambda *a, **k: None)
     object.__setattr__(app, "_visible_display_count", lambda: 0)
     object.__setattr__(app, "_estimated_reply_gap_ms", lambda: 100)
-    object.__setattr__(app, "_record_scene_memory_display", lambda *a, **k: None)
+    object.__setattr__(app, "_record_prompt_dedup_display", lambda *a, **k: None)
     object.__setattr__(app, "_current_batch", None)
 
     app.reply_buffer.push(

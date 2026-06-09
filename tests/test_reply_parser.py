@@ -39,17 +39,27 @@ def test_parse_ai_reply_payload_accepts_json_array():
     assert items == ["第一条", "第二条"]
 
 
-def test_parse_ai_reply_with_memory_envelope():
+def test_parse_ai_reply_with_scene_brief_object():
     raw = (
-        '{"comments": ["画面相关", "氛围弹幕"], '
-        '"scene_memory": {"scene_type": "game", "scene_summary": "团战中", "confidence": 0.9}}'
+        '{"scene_brief": "主播在打团", "comments": ["画面相关", "氛围弹幕"]}'
     )
-    items, update = parse_ai_reply_with_memory(raw, scene_generation=3)
+    items, brief = parse_ai_reply_with_memory(raw, scene_generation=3)
     assert items == ["画面相关", "氛围弹幕"]
-    assert update is not None
-    assert update.scene_type == "game"
-    assert update.scene_summary == "团战中"
-    assert update.scene_generation == 3
+    assert brief == "主播在打团"
+
+
+def test_parse_ai_reply_truncates_long_scene_brief():
+    raw = '{"scene_brief": "这是一句超过二十个字的中文场景描述应该被截断", "comments": ["A"]}'
+    _, brief = parse_ai_reply_with_memory(raw)
+    assert brief is not None
+    assert len(brief) == 20
+
+
+def test_parse_ai_reply_envelope_without_scene_brief():
+    raw = '{"comments": ["画面相关", "氛围弹幕"]}'
+    items, brief = parse_ai_reply_with_memory(raw)
+    assert items == ["画面相关", "氛围弹幕"]
+    assert brief is None
 
 
 def test_parse_ai_reply_payload_invalid_json_falls_back_to_plain_line():
@@ -82,6 +92,58 @@ def test_parse_ai_reply_payload_splits_duplicated_json_arrays():
     )
     items = parse_ai_reply_payload(raw)
     assert items == ["终于搞定这个bug啦", "修复方案挺清晰啊", "这代码界面好专业"]
+
+
+def test_parse_ai_reply_malformed_comments_as_bare_strings():
+    raw = (
+        '{"scene_brief":"代码工具界面运行中","comments":"这是啥代码工具？",'
+        '"弹弹幕好有意思","界面看着好专业","启动了？这是在干啥"'
+    )
+    items, brief = parse_ai_reply_with_memory(raw)
+    assert brief == "代码工具界面运行中"
+    assert items == [
+        "这是啥代码工具？",
+        "弹弹幕好有意思",
+        "界面看着好专业",
+        "启动了？这是在干啥",
+    ]
+
+
+def test_parse_ai_reply_malformed_comments_double_colon():
+    raw = (
+        '{"scene_brief":"弹幕工具界面待命状态","comments":"":"待命中？",'
+        '"这是啥工具啊？","生成弹幕按钮亮着","运行时长刚0分",'
+    )
+    items, brief = parse_ai_reply_with_memory(raw)
+    assert brief == "弹幕工具界面待命状态"
+    assert "待命中？" in items
+    assert "这是啥工具啊？" in items
+
+
+def test_parse_ai_reply_unclosed_comments_array():
+    raw = (
+        '{"scene_brief":"电脑端AI弹幕生成界面运行中","comments":["这弹幕生成挺有意思啊",'
+        '"这工具还能生成弹幕？","API Key报错'
+    )
+    items, brief = parse_ai_reply_with_memory(raw)
+    assert brief == "电脑端AI弹幕生成界面运行中"
+    assert items[:2] == ["这弹幕生成挺有意思啊", "这工具还能生成弹幕？"]
+
+
+def test_parse_ai_reply_rejects_punctuation_only_comments():
+    raw = '{"scene_brief":"x","comments":[",", "这工具真专业！", ":"]}'
+    items, _ = parse_ai_reply_with_memory(raw)
+    assert items == ["这工具真专业！"]
+
+
+def test_parse_ai_reply_splits_duplicated_json_objects():
+    obj = (
+        '{"scene_brief":"程序员调试代码遇API报错","comments":["这报错看着我头大",'
+        '"这日志也太详细了","API报错咋整啊"]}'
+    )
+    items, brief = parse_ai_reply_with_memory(obj + obj)
+    assert brief == "程序员调试代码遇API报错"
+    assert items == ["这报错看着我头大", "这日志也太详细了", "API报错咋整啊"]
 
 
 def test_normalize_reply_batch_pads_to_default_five_items(monkeypatch):

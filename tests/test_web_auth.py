@@ -176,10 +176,12 @@ def test_apply_config_patch_syncs_default_model_id_to_legacy_model():
 
 
 def test_extract_config_payload_accepts_wrapped_and_flat():
-    wrapped = extract_config_payload({"data": {"memory_mode": "off", "api_endpoint": "https://x"}})
-    assert wrapped["memory_mode"] == "off"
-    flat = extract_config_payload({"memory_mode": "scene_card"})
-    assert flat["memory_mode"] == "scene_card"
+    wrapped = extract_config_payload(
+        {"data": {"scene_memory_enabled": "0", "api_endpoint": "https://x"}}
+    )
+    assert wrapped["scene_memory_enabled"] == "0"
+    flat = extract_config_payload({"prompt_dedup_enabled": "1"})
+    assert flat["prompt_dedup_enabled"] == "1"
 
 
 def test_extract_config_payload_rejects_empty():
@@ -205,7 +207,9 @@ def test_web_config_keys_cover_core_settings():
     assert "image_max_width" in WEB_CONFIG_KEYS
     assert "image_quality" in WEB_CONFIG_KEYS
     assert "scene_probe_size" not in WEB_CONFIG_KEYS
-    assert "memory_mode" in WEB_CONFIG_KEYS
+    assert "scene_memory_enabled" in WEB_CONFIG_KEYS
+    assert "prompt_dedup_enabled" in WEB_CONFIG_KEYS
+    assert "scene_memory_interval_sec" in WEB_CONFIG_KEYS
     assert "mic_mode_enabled" in WEB_CONFIG_KEYS
     assert "mic_window_sec" in WEB_CONFIG_KEYS
     assert "mic_use_visual_model" in WEB_CONFIG_KEYS
@@ -385,40 +389,28 @@ def test_apply_config_patch_validates_memory_settings():
     apply_config_patch(
         app,
         {
-            "memory_mode": "evil",
-            "memory_window": "abc",
+            "scene_memory_enabled": "evil",
+            "prompt_dedup_enabled": "maybe",
         },
     )
 
-    assert config.get("memory_mode") == "off"
-    assert config.get("memory_window") == "10"
+    assert config.get("scene_memory_enabled") == "0"
+    assert config.get("prompt_dedup_enabled") == "1"
     assert "evil" not in config.values.values()
-    assert "abc" not in config.values.values()
-
-    apply_config_patch(app, {"memory_window": "-1"})
-    assert config.get("memory_window") == "1"
-
-    apply_config_patch(app, {"memory_window": "0"})
-    assert config.get("memory_window") == "1"
-
-    apply_config_patch(app, {"memory_window": "999"})
-    assert config.get("memory_window") == "20"
+    assert "maybe" not in config.values.values()
 
     apply_config_patch(
         app,
         {
-            "memory_mode": "scene_card",
-            "memory_window": "15",
+            "scene_memory_enabled": "1",
+            "prompt_dedup_enabled": "0",
         },
     )
-    assert config.get("memory_mode") == "scene_card"
-    assert config.get("memory_window") == "15"
+    assert config.get("scene_memory_enabled") == "1"
+    assert config.get("prompt_dedup_enabled") == "0"
 
-    apply_config_patch(app, {"memory_mode": "dedup_only"})
-    assert config.get("memory_mode") == "dedup_only"
-
-    apply_config_patch(app, {"memory_mode": "strong"})
-    assert config.get("memory_mode") == "strong"
+    apply_config_patch(app, {"prompt_dedup_enabled": "1"})
+    assert config.get("prompt_dedup_enabled") == "1"
 
 
 

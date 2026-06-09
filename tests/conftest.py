@@ -66,7 +66,7 @@ from app.application.request_timing_service import RequestTimingService
 from app.application.stats_state import StatsState
 from app.application.web_runtime_state import WebRuntimeState
 from app.reply_queue import AIReplyFIFOBuffer
-from app.scene_memory import SceneMemoryStore
+from app.scene_memory import SceneBriefStore
 
 from tests.fakes import (  # noqa: E402 — tests package (tests/__init__.py)
     FakeCapturer,
@@ -169,7 +169,7 @@ def bind_minimal_danmu_app(app, **overrides):
         "_is_generating": False,
         "_batch_id": 0,
         "_current_batch": None,
-        "_scene_memory": SceneMemoryStore(),
+        "_scene_memory": SceneBriefStore(),
         "mic_in_flight": 0,
         "_mic_request_seq": 0,
         "_mic_batch_id": 0,
@@ -357,7 +357,7 @@ def make_minimal_danmu_app():
     app._publish_live_status = lambda: None
     app.web_bridge = None
     app.ai_worker = Mock()
-    app._scene_memory = SceneMemoryStore()
+    app._scene_memory = SceneBriefStore()
     app.lifetime_stats = FakeLifetimeStats()
     app.session_run_log = Mock()
     app._lifetime_flush_timer = FakeTimer()
@@ -385,7 +385,7 @@ def make_minimal_danmu_app():
     app._ensure_stats_state = DanmuApp._ensure_stats_state.__get__(app, DanmuApp)
     app._update_stats = DanmuApp._update_stats.__get__(app, DanmuApp)
     app._estimated_reply_gap_ms = DanmuApp._estimated_reply_gap_ms.__get__(app, DanmuApp)
-    app._record_scene_memory_display = lambda *a, **k: None
+    app._record_prompt_dedup_display = lambda *a, **k: None
     app.state_changed = Mock()
     app._sync_reply_batch_config()
     return app

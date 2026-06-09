@@ -59,7 +59,7 @@ class PlatformCatalog:
             "platform_label": self.platform_label,
             "provider_id": self.provider_id,
             "default_model_id": default_catalog_model_id(self.provider_id),
-            "models": enrich_platform_models(self.models),
+            "models": enrich_platform_models(self.models, provider_id=self.provider_id),
         }
 
 
@@ -212,8 +212,12 @@ _CATALOG_BY_PROVIDER = {p.provider_id: p for p in PLATFORM_CATALOGS}
 _CATALOG_BY_PLATFORM = {p.platform_id: p for p in PLATFORM_CATALOGS}
 
 
-def enrich_platform_models(models: tuple[CatalogModel, ...] | list[CatalogModel]) -> list[dict[str, Any]]:
-    """Attach ``cheapest`` and ``supports_mic`` flags for API / UI consumption."""
+def enrich_platform_models(
+    models: tuple[CatalogModel, ...] | list[CatalogModel],
+    *,
+    provider_id: str = "",
+) -> list[dict[str, Any]]:
+    """Attach ``cheapest`` and ``supports_mic`` for API / UI."""
     items = list(models)
     if not items:
         return []
@@ -225,6 +229,7 @@ def enrich_platform_models(models: tuple[CatalogModel, ...] | list[CatalogModel]
             cheapest_id = model.id
             break
 
+    pid = (provider_id or "").strip()
     result: list[dict[str, Any]] = []
     for model in items:
         payload = model.to_dict()
@@ -265,7 +270,7 @@ def default_catalog_model_id(provider_id: str) -> str:
     platform = _CATALOG_BY_PROVIDER.get(pid)
     if platform is None or not platform.models:
         return ""
-    enriched = enrich_platform_models(platform.models)
+    enriched = enrich_platform_models(platform.models, provider_id=pid)
     for model in enriched:
         if model.get("cheapest"):
             return str(model["id"])
@@ -289,3 +294,4 @@ def catalog_model_supports_mic(model_id: str) -> bool:
             if model.id == mid and model.price.audio is not None:
                 return True
     return False
+

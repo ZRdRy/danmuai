@@ -23,6 +23,12 @@ DISPLAY_BATCH_MAX = 50
 DEFAULT_TAG = "06"
 MAX_SELECTED_TAGS = 3
 
+# 采集游标（不经 PUT /api/config；仅 MemeBarrageService 读写）
+CURSOR_KEY_LOCAL_OFFSET = "meme_barrage_local_read_offset"
+CURSOR_KEY_REMOTE_PAGE = "meme_barrage_remote_page_num"
+DEFAULT_LOCAL_READ_OFFSET = 0
+DEFAULT_REMOTE_PAGE_NUM = 1
+
 
 def normalize_meme_barrage_tags(tags: list[str]) -> list[str]:
     """Keep at most ``MAX_SELECTED_TAGS`` ids; remote API rejects four or more."""
@@ -74,6 +80,40 @@ def _parse_tag(raw: object) -> list[str]:
     return normalize_meme_barrage_tags(out)
 
 
+def load_meme_barrage_cursors(config: "ConfigStore") -> tuple[int, int]:
+    """Load persisted local-library offset and remote API page number."""
+    local_offset = _clamp_int(
+        config.get(CURSOR_KEY_LOCAL_OFFSET, str(DEFAULT_LOCAL_READ_OFFSET)),
+        DEFAULT_LOCAL_READ_OFFSET,
+        0,
+        10_000_000,
+    )
+    page_num = _clamp_int(
+        config.get(CURSOR_KEY_REMOTE_PAGE, str(DEFAULT_REMOTE_PAGE_NUM)),
+        DEFAULT_REMOTE_PAGE_NUM,
+        1,
+        10_000_000,
+    )
+    return local_offset, page_num
+
+
+def persist_meme_barrage_cursors(
+    config: "ConfigStore",
+    *,
+    local_offset: int,
+    page_num: int,
+) -> None:
+    """Persist cursors to config.db; not exposed via Web PUT /api/config."""
+    local_offset = max(0, int(local_offset))
+    page_num = max(1, int(page_num))
+    config.set_batch(
+        {
+            CURSOR_KEY_LOCAL_OFFSET: str(local_offset),
+            CURSOR_KEY_REMOTE_PAGE: str(page_num),
+        }
+    )
+
+
 def read_meme_barrage_settings(config: "ConfigStore") -> dict[str, object]:
     category = str(config.get("meme_barrage_category", "random") or "random").strip().lower()
     if category not in VALID_CATEGORIES:
@@ -94,8 +134,8 @@ def read_meme_barrage_settings(config: "ConfigStore") -> dict[str, object]:
             COLLECT_INTERVAL_MAX,
         ),
         "collect_batch_size": _clamp_int(
-            config.get("meme_barrage_collect_batch_size", "40"),
-            40,
+            config.get("meme_barrage_collect_batch_size", "2"),
+            2,
             COLLECT_BATCH_MIN,
             COLLECT_BATCH_MAX,
         ),
@@ -106,8 +146,8 @@ def read_meme_barrage_settings(config: "ConfigStore") -> dict[str, object]:
             DISPLAY_INTERVAL_MAX,
         ),
         "display_batch_size": _clamp_int(
-            config.get("meme_barrage_display_batch_size", "20"),
-            20,
+            config.get("meme_barrage_display_batch_size", "2"),
+            2,
             DISPLAY_BATCH_MIN,
             DISPLAY_BATCH_MAX,
         ),

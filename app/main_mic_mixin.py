@@ -182,7 +182,7 @@ class DanmuAppMicMixin:
         captured_at: float,
         scene_generation: int,
     ) -> None:
-        raw_items, memory_update = parse_ai_reply_with_memory(text, scene_generation)
+        raw_items, scene_brief = parse_ai_reply_with_memory(text, scene_generation)
         normalized_items = normalize_reply_batch(
             raw_items,
             scene_count=self._reply_scene_count,
@@ -193,10 +193,14 @@ class DanmuAppMicMixin:
             self.logger.debug("mic insert reply empty after parse")
             return
 
-        if self._memory_enabled() and memory_update is not None:
-            if memory_update.scene_generation <= 0:
-                memory_update.scene_generation = scene_generation
-            self._scene_memory.update_from_visual_result(memory_update)
+        if (
+            self._scene_memory_enabled()
+            and scene_brief
+            and self._scene_memory_update_due(request_round)
+        ):
+            from app.translations import Translator
+
+            self._scene_memory.set_brief(scene_brief, lang=Translator.get_language())
 
         self._enqueue_reply_batch(
             persona_id,

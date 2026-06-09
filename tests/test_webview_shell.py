@@ -10,6 +10,7 @@ from app.webview_shell import (
     _SIGNAL_LOADED,
     WebViewShell,
     _fallback_to_system_browser,
+    _maybe_prompt_slow_webview_start,
     _tray_icon_for_notify,
     _webview_worker,
     notify_web_console_failure,
@@ -536,3 +537,131 @@ def test_fail_start_is_idempotent(monkeypatch):
 
     assert shell._fail_start("again", "/") is False
     assert fallbacks == []
+
+
+def _slow_pending_shell(*, attach_elapsed_sec: float = 11.0):
+    server = MagicMock()
+    server.base_url = "http://127.0.0.1:18765"
+    server.startup_ok = True
+    server._slow_webview_prompt_shown = False
+    server._browser_launch_opened = False
+    server.bridge.danmu_app.logger = MagicMock()
+    shell = WebViewShell(server)
+    shell._process = MagicMock()
+    shell._process.is_alive.return_value = True
+    shell._attach_started_at = time.monotonic() - attach_elapsed_sec
+    shell._handshake_deadline = time.monotonic() + 20.0
+    shell._ready_queue = MagicMock()
+    shell._ready_queue.get_nowait.side_effect = queue.Empty()
+    return server, shell
+
+
+def _patch_message_box(monkeypatch, *, click_yes: bool):
+    yes_btn = MagicMock(name="yes_btn")
+    no_btn = MagicMock(name="no_btn")
+    fake_box = MagicMock()
+    fake_box.addButton.side_effect = [yes_btn, no_btn]
+    fake_box.clickedButton.return_value = yes_btn if click_yes else no_btn
+    mock_cls = MagicMock(return_value=fake_box)
+    mock_cls.Icon = MagicMock()
+    mock_cls.Icon.Question = 0
+    mock_cls.ButtonRole = MagicMock()
+    mock_cls.ButtonRole.YesRole = 0
+    mock_cls.ButtonRole.NoRole = 1
+    monkeypatch.setattr("PyQt6.QtWidgets.QMessageBox", mock_cls)
+    return fake_box
+
+
+def test_slow_start_prompt_yes_opens_browser(monkeypatch):
+    server, shell = _slow_pending_shell()
+    _patch_message_box(monkeypatch, click_yes=True)
+    browser_calls = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append((srv, p)),
+    )
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    assert server._slow_webview_prompt_shown is True
+    assert server._browser_launch_opened is True
+    assert browser_calls == [(server, "/")]
+
+
+def test_slow_start_prompt_no_does_not_open_browser(monkeypatch):
+    server, shell = _slow_pending_shell()
+    _patch_message_box(monkeypatch, click_yes=False)
+    browser_calls = []
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: browser_calls.append(p),
+    )
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    assert server._slow_webview_prompt_shown is True
+    assert browser_calls == []
+    assert server._browser_launch_opened is False
+
+
+def test_slow_start_prompt_skipped_before_10s(monkeypatch):
+    server, shell = _slow_pending_shell(attach_elapsed_sec=5.0)
+    fake_box = _patch_message_box(monkeypatch, click_yes=True)
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    fake_box.exec.assert_not_called()
+    assert server._slow_webview_prompt_shown is False
+
+
+def test_slow_start_prompt_skipped_when_browser_already_opened(monkeypatch):
+    server, shell = _slow_pending_shell()
+    server._browser_launch_opened = True
+    fake_box = _patch_message_box(monkeypatch, click_yes=True)
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    fake_box.exec.assert_not_called()
+
+
+def test_slow_start_prompt_skipped_when_http_not_ready(monkeypatch):
+    server, shell = _slow_pending_shell()
+    server.startup_ok = False
+    fake_box = _patch_message_box(monkeypatch, click_yes=True)
+    monkeypatch.setattr(
+        "app.webview_shell.wait_for_http_server",
+        lambda *a, **k: False,
+    )
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    fake_box.exec.assert_not_called()
+    assert server._slow_webview_prompt_shown is False
+
+
+def test_slow_start_prompt_only_once(monkeypatch):
+    server, shell = _slow_pending_shell()
+    fake_box = _patch_message_box(monkeypatch, click_yes=False)
+
+    _maybe_prompt_slow_webview_start(shell, "/")
+    _maybe_prompt_slow_webview_start(shell, "/")
+
+    assert fake_box.exec.call_count == 1
+
+
+def test_poll_handshake_slow_prompt_yes_stays_pending(monkeypatch):
+    server, shell = _slow_pending_shell()
+    _patch_message_box(monkeypatch, click_yes=True)
+    monkeypatch.setattr(
+        "app.web_console.open_web_console_browser",
+        lambda srv, p: None,
+    )
+    terminate_calls = []
+    monkeypatch.setattr(shell, "_terminate", lambda: terminate_calls.append(True))
+
+    result = shell.poll_handshake("/")
+
+    assert result == "pending"
+    assert shell._started is False
+    assert terminate_calls == []
+    assert server._browser_launch_opened is True

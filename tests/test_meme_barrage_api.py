@@ -26,8 +26,8 @@ def test_get_meta_defaults(meme_app):
     assert meta["enabled"] is False
     assert meta["category"] == "random"
     assert meta["display_mode"] == "full"
-    assert meta["collect_batch_size"] == 40
-    assert meta["display_batch_size"] == 20
+    assert meta["collect_batch_size"] == 2
+    assert meta["display_batch_size"] == 2
     assert meta["library_count"] == 0
     assert meta["display_queue_size"] == 0
 

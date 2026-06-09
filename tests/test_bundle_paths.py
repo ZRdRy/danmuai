@@ -195,7 +195,12 @@ def test_error_report_flow_in_app_js():
 def test_api_settings_visible_in_simplified_mode():
     """记忆与温度控件不得带 settings-full-only，否则简化模式下会被 CSS 隐藏。"""
     html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    for field_id in ("memory_mode", "memory_window", "temperature"):
+    for field_id in (
+        "scene_memory_enabled",
+        "prompt_dedup_enabled",
+        "scene_memory_interval_sec",
+        "temperature",
+    ):
         idx = html.index(f'id="{field_id}"')
         chunk = html[max(0, idx - 120) : idx]
         assert "settings-full-only" not in chunk, field_id
@@ -211,6 +216,17 @@ def test_mic_settings_tab_separate_from_api_panel():
     assert 'id="mic_mode_enabled"' not in api_panel
     assert 'id="mic_use_visual_model"' not in api_panel
     assert html.count('id="settingsTab-mic"') == 1
+
+
+def test_meme_source_credit_in_index_html():
+    html = (project_root() / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "https://github.com/SEhzm/sb6657/" in html
+    assert "meme-source-credit" in html
+    assert "我们的烂梗库内容来自开源项目" in html
+    meme_tab_idx = html.index('id="danmuPoolTab-meme"')
+    credit_idx = html.index("meme-source-credit", meme_tab_idx)
+    switch_idx = html.index('settings-section-title">总开关', meme_tab_idx)
+    assert credit_idx < switch_idx
 
 
 def test_pet_page_in_index_html():

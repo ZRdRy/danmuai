@@ -70,7 +70,7 @@ def _make_request_app(**overrides):
     object.__setattr__(app, "_log_api_schedule", lambda **_kwargs: None)
     object.__setattr__(app, "_publish_live_status", lambda: None)
     object.__setattr__(app, "_set_error_status_safe", lambda *_args, **_kwargs: None)
-    object.__setattr__(app, "_record_scene_memory_display", lambda *_args, **_kwargs: None)
+    object.__setattr__(app, "_record_prompt_dedup_display", lambda *_args, **_kwargs: None)
     object.__setattr__(app, "_memory_enabled", lambda: False)
     object.__setattr__(app, "_current_persona", "p1")
     object.__setattr__(app, "visible_display_count", lambda: 0)

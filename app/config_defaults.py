@@ -12,8 +12,7 @@
   - 遗留 ``display_mode`` 在 ConfigStore 启动时由 ``migrate_legacy_display_mode_to_render_mode`` 写回 ``danmu_render_mode``
 - 字体（``danmu_font_*`` + ``floating_panel_font_*`` + ``imported_fonts``；W-FONT-001/002/003）
 - API（``api_mode`` + ``api_endpoint`` + ``api_key`` + ``model`` + ``temperature`` + ``max_tokens`` + ``use_thinking``）
-- 记忆（``memory_mode`` + ``memory_window``） — 枚举 ``memory_mode``：
-  ``off`` / ``dedup_only`` / ``scene_card``（默认） / ``strong``
+- 记忆（``scene_memory_enabled`` + ``scene_memory_interval_sec`` + ``prompt_dedup_enabled``） — 场景简述刷新间隔与 prompt 层防重复
 - TTS / 读弹幕（``tts_*`` + ``danmu_read_*``）
 - 公告 / 主题 / 更新 / 用户（``user_nickname`` / ``live_topic`` + ``console_theme`` + ``app_update_state``）
 
@@ -70,9 +69,11 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "meme_barrage_tag": "06",
     "meme_barrage_display_mode": "full",
     "meme_barrage_collect_interval_sec": "5",
-    "meme_barrage_collect_batch_size": "40",
+    "meme_barrage_collect_batch_size": "2",
     "meme_barrage_display_interval_sec": "5",
-    "meme_barrage_display_batch_size": "20",
+    "meme_barrage_display_batch_size": "2",
+    "meme_barrage_local_read_offset": "0",
+    "meme_barrage_remote_page_num": "1",
     "empty_accel": "1",
     "eviction_mode": "natural",
     "danmu_pending_entry_cap": "0",
@@ -82,8 +83,9 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "image_quality": "85",
     "hotkey": "Ctrl+Shift+B",
     "language": DEFAULT_LANGUAGE,
-    "memory_mode": "off",
-    "memory_window": "10",
+    "scene_memory_enabled": "1",
+    "prompt_dedup_enabled": "1",
+    "scene_memory_interval_sec": "5",
     "mic_mode_enabled": "0",
     "mic_window_sec": "5",
     "mic_use_visual_model": "1",
@@ -103,7 +105,6 @@ CONFIG_DEFAULTS: dict[str, str] = {
     "tts_provider": "",
     "tts_endpoint": "",
     "tts_model_id": "",
-    "tts_app_id": "",
     "console_theme": "light",
     # W-FP-V2-001：弹幕渲染模式（互斥）
     "danmu_render_mode": "scrolling",
@@ -201,6 +202,31 @@ def config_value_with_default(config, key: str) -> str:
         mode = resolve_danmu_render_mode(config)
         return default_config_value_for_mode(key, mode)
     return CONFIG_DEFAULTS.get(key, "")
+
+
+def _legacy_memory_flags(mode: str) -> tuple[str, str]:
+    """Map legacy memory_mode to (scene_memory_enabled, prompt_dedup_enabled)."""
+    normalized = str(mode or "off").strip().lower()
+    if normalized == "dedup_only":
+        return "0", "1"
+    if normalized in ("scene_card", "strong"):
+        return "1", "1"
+    return "0", "0"
+
+
+def migrate_legacy_memory_mode(config: "ConfigStore") -> bool:
+    """Map legacy memory_mode to scene_memory_enabled / prompt_dedup_enabled."""
+    if "scene_memory_enabled" in config._cache:
+        return False
+    legacy_mode = str(config._cache.get("memory_mode", "off") or "off")
+    scene, dedup = _legacy_memory_flags(legacy_mode)
+    config.set_batch(
+        {
+            "scene_memory_enabled": scene,
+            "prompt_dedup_enabled": dedup,
+        }
+    )
+    return True
 
 
 def migrate_legacy_display_mode_to_render_mode(config) -> bool:

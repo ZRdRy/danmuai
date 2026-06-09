@@ -23,6 +23,7 @@ from app.danmu_engine import (
     DEFAULT_DANMU_MAX_CHARS_ZH,
     resolve_danmu_max_chars,
 )
+from app.memory.types import SCENE_BRIEF_MAX_LEN_EN, SCENE_BRIEF_MAX_LEN_ZH
 from app.translations import Translator
 
 REPLY_COUNT_MIN = 2
@@ -80,6 +81,22 @@ _CONTRACT_NORMAL_EN_LEGACY_RE = re.compile(
     r"Avoid repetition\. All comments MUST be written in English only\. "
     r"Each comment must stay within \d+ characters\. Output format: "
     r'\["[^"]*"(?:, "[^"]*")*\]\.'
+)
+_CONTRACT_OBJECT_ZH_RE = re.compile(
+    r"直播弹幕评论员。只输出 JSON 对象，无解释、无 Markdown。"
+    r"固定 \d+ 条 comments，每条≤\d+字；scene_brief 为不超过 \d+ 字的当前场景简述。"
+    r"像多位真实观众：短句口语碎片化；优先贴当前画面，可少量接梗或气氛句；条间口吻可不同。"
+    r"禁 AI腔/总结腔/客服腔/长句/说教/重复。"
+    r'格式：\{"scene_brief":"[^"]*","comments":\["[^"]*"(?:, "[^"]*")*\]\}。'
+)
+_CONTRACT_OBJECT_EN_RE = re.compile(
+    r"Live-stream danmu commentator\. JSON object only, no explanation, no Markdown\. "
+    r"Exactly \d+ comments, max \d+ chars each; scene_brief is a current-frame summary within \d+ characters\. "
+    r"Multiple real viewers: short, casual, fragmented; prioritize the current frame; "
+    r"a few meme or vibe lines OK; vary voice per line\. "
+    r"No AI tone, summaries, customer-service voice, long lines, preaching, or repetition\. "
+    r"All comments MUST be in English only\. "
+    r'Format: \{"scene_brief":"[^"]*","comments":\["[^"]*"(?:, "[^"]*")*\]\}\.'
 )
 
 REPLY_CONTRACT_ZH = ""
@@ -140,6 +157,16 @@ def _json_example_en(total: int) -> str:
     return '["' + '", "'.join(items) + '"]'
 
 
+def _json_object_example_zh(total: int) -> str:
+    items = [f"弹幕{i}" for i in range(1, total + 1)]
+    return '{"scene_brief":"当前场景简述","comments":["' + '", "'.join(items) + '"]}'
+
+
+def _json_object_example_en(total: int) -> str:
+    items = [f"comment {i}" for i in range(1, total + 1)]
+    return '{"scene_brief":"current scene","comments":["' + '", "'.join(items) + '"]}'
+
+
 def build_reply_contract_zh(
     scene_count: int,
     filler_count: int,
@@ -183,12 +210,13 @@ def build_normal_reply_contract_zh(
 ) -> str:
     total = _clamp_normal_reply_count(count, DEFAULT_NORMAL_REPLY_COUNT)
     limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_ZH
+    brief_limit = SCENE_BRIEF_MAX_LEN_ZH
     return (
-        "直播弹幕评论员。只输出 JSON 字符串数组，无解释、无 Markdown。"
-        f"固定 {total} 条，每条≤{limit}字。"
+        "直播弹幕评论员。只输出 JSON 对象，无解释、无 Markdown。"
+        f"固定 {total} 条 comments，每条≤{limit}字；scene_brief 为不超过 {brief_limit} 字的当前场景简述。"
         "像多位真实观众：短句口语碎片化；优先贴当前画面，可少量接梗或气氛句；条间口吻可不同。"
         "禁 AI腔/总结腔/客服腔/长句/说教/重复。"
-        f"格式：{_json_example_zh(total)}。"
+        f"格式：{_json_object_example_zh(total)}。"
     )
 
 
@@ -198,14 +226,16 @@ def build_normal_reply_contract_en(
 ) -> str:
     total = _clamp_normal_reply_count(count, DEFAULT_NORMAL_REPLY_COUNT)
     limit = max_chars if max_chars is not None else DEFAULT_DANMU_MAX_CHARS_EN
+    brief_limit = SCENE_BRIEF_MAX_LEN_EN
     return (
-        "Live-stream danmu commentator. JSON string array only, no explanation, no Markdown. "
-        f"Exactly {total} comments, max {limit} chars each. "
+        "Live-stream danmu commentator. JSON object only, no explanation, no Markdown. "
+        f"Exactly {total} comments, max {limit} chars each; "
+        f"scene_brief is a current-frame summary within {brief_limit} characters. "
         "Multiple real viewers: short, casual, fragmented; prioritize the current frame; "
         "a few meme or vibe lines OK; vary voice per line. "
         "No AI tone, summaries, customer-service voice, long lines, preaching, or repetition. "
         "All comments MUST be in English only. "
-        f"Format: {_json_example_en(total)}."
+        f"Format: {_json_object_example_en(total)}."
     )
 
 
@@ -247,6 +277,8 @@ def get_reply_contract(config: ConfigStore | None = None) -> str:
 def strip_reply_contract(system_pt: str) -> str:
     base = (system_pt or "").strip()
     for pattern in (
+        _CONTRACT_OBJECT_ZH_RE,
+        _CONTRACT_OBJECT_EN_RE,
         _CONTRACT_ZH_RE,
         _CONTRACT_EN_RE,
         _CONTRACT_NORMAL_ZH_RE,

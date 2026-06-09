@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Probe Volcano Doubao + DashScope Qwen3 TTS for danmu-read integration.
+"""Probe MiMo + DashScope Qwen3 TTS for danmu-read integration.
 
 Keys are read from environment variables only (never hardcode):
-  VOLCENGINE_TTS_API_KEY       - X-Api-Key (ark key)
-  VOLCENGINE_TTS_APP_ID        - optional X-Api-App-Id
-  VOLCENGINE_TTS_ACCESS_TOKEN  - optional X-Api-Access-Key
+  MIMO_TTS_API_KEY             - Xiaomi MiMo Bearer token
+  MIMO_TTS_ENDPOINT            - optional override (default https://api.xiaomimimo.com/v1)
   DASHSCOPE_API_KEY            - Bailian / DashScope API key
 
 Usage:
   python scripts/probe_tts_providers.py --out .pytest_tmp/tts_probe
+  python scripts/probe_tts_providers.py --quick --mimo-only
 """
 
 from __future__ import annotations
@@ -20,31 +20,28 @@ import json
 import os
 import sys
 import time
-import uuid
 import wave
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
 
 PROBE_TEXT = "你好，这是一条读弹幕试听。"
 
-DOUBAO_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+MIMO_TTS_ENDPOINT = "https://api.xiaomimimo.com/v1"
+MIMO_TTS_MODEL = "mimo-v2.5-tts"
 
-DOUBAO_RESOURCES = ("seed-tts-1.1", "seed-tts-1.0", "seed-tts-2.0")
-
-DOUBAO_VOICES: tuple[tuple[str, str], ...] = (
-    ("Vivi 2.0", "zh_female_vv_uranus_bigtts"),
-    ("儒雅逸辰 2.0", "zh_male_ruyayichen_uranus_bigtts"),
-    ("甜美小源 2.0", "zh_female_tianmeixiaoyuan_uranus_bigtts"),
-    ("云舟", "zh_male_m191_uranus_bigtts"),
-    ("灿灿 / Shiny", "zh_female_cancan_mars_bigtts"),
-    ("清爽男大", "zh_male_qingshuangnanda_mars_bigtts"),
-    ("邻家女孩", "zh_female_linjianvhai_moon_bigtts"),
-    ("渊博小叔", "zh_male_yuanboxiaoshu_moon_bigtts"),
-    ("霸道总裁", "ICL_zh_male_badaozongcai_v1_tob"),
-    ("温柔女神", "ICL_zh_female_wenrounvshen_239eff5e8ffa_tob"),
+MIMO_VOICES: tuple[tuple[str, str], ...] = (
+    ("MiMo-默认", "mimo_default"),
+    ("冰糖", "冰糖"),
+    ("茉莉", "茉莉"),
+    ("苏打", "苏打"),
+    ("白桦", "白桦"),
+    ("Mia", "Mia"),
+    ("Chloe", "Chloe"),
+    ("Milo", "Milo"),
+    ("Dean", "Dean"),
 )
 
 DASHSCOPE_MODELS = (
@@ -65,12 +62,6 @@ DASHSCOPE_VOICES: tuple[tuple[str, str], ...] = (
     ("龙安洋", "longanyang"),
     ("龙安欢 V3", "longanhuan_v3"),
 )
-
-
-def infer_doubao_resource(speaker: str) -> str:
-    if "_uranus_bigtts" in speaker or speaker.startswith("saturn_"):
-        return "seed-tts-2.0"
-    return "seed-tts-1.0"
 
 
 def pcm_to_wav(pcm: bytes, *, sample_rate: int = 24000, channels: int = 1) -> bytes:
@@ -112,193 +103,91 @@ class ProbeResult:
         return d
 
 
-def _parse_chunked_json_lines(raw: bytes) -> Iterator[dict[str, Any]]:
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            yield obj
-
-
-def _doubao_headers(auth_mode: str, resource_id: str, *, api_key: str, app_id: str, access_token: str) -> dict[str, str]:
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "X-Api-Resource-Id": resource_id,
-        "X-Api-Request-Id": str(uuid.uuid4()),
-    }
-    if auth_mode == "api_key":
-        headers["X-Api-Key"] = api_key
-    elif auth_mode == "app_token":
-        headers["X-Api-App-Id"] = app_id
-        headers["X-Api-Access-Key"] = access_token
-    else:
-        raise ValueError(f"unknown auth_mode: {auth_mode}")
-    return headers
-
-
-def probe_doubao_voice(
+def probe_mimo_voice(
     *,
-    speaker: str,
-    resource_id: str,
-    auth_mode: str,
     api_key: str,
-    app_id: str,
-    access_token: str,
+    endpoint: str,
+    voice: str,
     text: str = PROBE_TEXT,
     timeout: float = 60.0,
-) -> tuple[bytes | None, str, str]:
-    """Returns (wav_bytes, error, logid)."""
-    payload: dict[str, Any] = {
-        "user": {"uid": str(uuid.uuid4())},
-        "req_params": {
-            "text": text,
-            "speaker": speaker,
-            "audio_params": {
-                "format": "pcm",
-                "sample_rate": 24000,
-            },
-        },
+) -> tuple[bytes | None, str]:
+    """Returns (wav_bytes, error)."""
+    payload = {
+        "model": MIMO_TTS_MODEL,
+        "messages": [{"role": "assistant", "content": text}],
+        "audio": {"format": "wav", "voice": voice},
     }
-    headers = _doubao_headers(
-        auth_mode,
-        resource_id,
-        api_key=api_key,
-        app_id=app_id,
-        access_token=access_token,
-    )
-    logid = ""
+    url = f"{endpoint.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
     try:
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=15.0)) as client:
-            with client.stream("POST", DOUBAO_URL, headers=headers, json=payload) as resp:
-                logid = resp.headers.get("X-Tt-Logid", "")
-                if resp.status_code != 200:
-                    body = resp.read()
-                    return None, f"HTTP {resp.status_code}: {body[:500]!r}", logid
-                chunks: list[bytes] = []
-                buf = b""
-                for part in resp.iter_bytes():
-                    buf += part
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            obj = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        code = obj.get("code")
-                        if code == 0 and obj.get("data"):
-                            try:
-                                chunks.append(base64.b64decode(obj["data"]))
-                            except Exception as exc:
-                                return None, f"base64 decode: {exc}", logid
-                        elif code == 20000000:
-                            break
-                        elif code not in (0, 20000000) and code is not None:
-                            msg = obj.get("message") or str(code)
-                            return None, f"api code {code}: {msg}", logid
-                if buf.strip():
-                    for obj in _parse_chunked_json_lines(buf):
-                        code = obj.get("code")
-                        if code == 0 and obj.get("data"):
-                            chunks.append(base64.b64decode(obj["data"]))
-                if not chunks:
-                    return None, "no audio chunks in response", logid
-                pcm = b"".join(chunks)
-                if len(pcm) < 100:
-                    return None, f"pcm too short ({len(pcm)} bytes)", logid
-                wav = pcm_to_wav(pcm)
-                if not validate_wav(wav):
-                    return None, "invalid wav after pcm wrap", logid
-                return wav, "", logid
+            response = client.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                return None, f"HTTP {response.status_code}: {response.text[:500]!r}"
+            body = response.json()
     except httpx.TimeoutException:
-        return None, "timeout", logid
+        return None, "timeout"
     except httpx.HTTPError as exc:
-        return None, f"http error: {exc}", logid
+        return None, f"http error: {exc}"
+    except json.JSONDecodeError as exc:
+        return None, f"json decode: {exc}"
+
+    choices = body.get("choices") or []
+    if not choices:
+        return None, "no choices in response"
+    message = choices[0].get("message") or {}
+    audio = message.get("audio") or {}
+    data_b64 = audio.get("data") or ""
+    if not data_b64:
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return None, "text-only response (not a TTS model)"
+        return None, "no audio.data in response"
+    try:
+        wav = base64.b64decode(data_b64)
+    except Exception as exc:
+        return None, f"base64 decode: {exc}"
+    if not validate_wav(wav):
+        return None, "invalid wav"
+    return wav, ""
 
 
-def probe_doubao(
-    *,
-    api_key: str,
-    app_id: str,
-    access_token: str,
-    quick: bool,
-) -> list[ProbeResult]:
-    results: list[ProbeResult] = []
-    auth_modes: list[str] = []
-    if api_key:
-        auth_modes.append("api_key")
-    if app_id and access_token:
-        auth_modes.append("app_token")
-    if not auth_modes:
+def probe_mimo(*, api_key: str, endpoint: str, quick: bool) -> list[ProbeResult]:
+    if not api_key:
         return [
             ProbeResult(
-                provider="doubao",
+                provider="mimo",
                 model="*",
                 voice="*",
                 ok=False,
-                error="no VOLCENGINE_TTS_API_KEY or APP_ID+ACCESS_TOKEN",
+                error="no MIMO_TTS_API_KEY",
             )
         ]
 
-    voices = DOUBAO_VOICES[:1] if quick else DOUBAO_VOICES
-    for label, speaker in voices:
-        inferred = infer_doubao_resource(speaker)
-        resources = [inferred]
-        if not quick:
-            for r in DOUBAO_RESOURCES:
-                if r not in resources:
-                    resources.append(r)
-
-        best: ProbeResult | None = None
-        for auth_mode in auth_modes:
-            if best and best.ok:
-                break
-            for resource_id in resources:
-                t0 = time.perf_counter()
-                wav, err, logid = probe_doubao_voice(
-                    speaker=speaker,
-                    resource_id=resource_id,
-                    auth_mode=auth_mode,
-                    api_key=api_key,
-                    app_id=app_id,
-                    access_token=access_token,
-                )
-                ms = int((time.perf_counter() - t0) * 1000)
-                if wav:
-                    best = ProbeResult(
-                        provider="doubao",
-                        model=resource_id,
-                        voice=speaker,
-                        voice_label=label,
-                        auth_mode=auth_mode,
-                        ok=True,
-                        latency_ms=ms,
-                        audio_bytes=len(wav),
-                        logid=logid,
-                        wav_bytes=wav,
-                    )
-                    break
-                if best is None or not best.ok:
-                    best = ProbeResult(
-                        provider="doubao",
-                        model=resource_id,
-                        voice=speaker,
-                        voice_label=label,
-                        auth_mode=auth_mode,
-                        ok=False,
-                        latency_ms=ms,
-                        error=err,
-                        logid=logid,
-                    )
-        if best:
-            results.append(best)
+    results: list[ProbeResult] = []
+    voices = MIMO_VOICES[:1] if quick else MIMO_VOICES
+    for label, voice in voices:
+        t0 = time.perf_counter()
+        wav, err = probe_mimo_voice(api_key=api_key, endpoint=endpoint, voice=voice)
+        ms = int((time.perf_counter() - t0) * 1000)
+        results.append(
+            ProbeResult(
+                provider="mimo",
+                model=MIMO_TTS_MODEL,
+                voice=voice,
+                voice_label=label,
+                auth_mode="bearer",
+                ok=wav is not None,
+                latency_ms=ms,
+                audio_bytes=len(wav) if wav else 0,
+                error=err,
+                extra={"endpoint": endpoint},
+                wav_bytes=wav or b"",
+            )
+        )
     return results
 
 
@@ -572,30 +461,27 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Probe TTS providers for danmu-read")
     parser.add_argument("--out", type=Path, default=Path(".pytest_tmp/tts_probe"))
     parser.add_argument("--quick", action="store_true", help="one voice per provider/model")
-    parser.add_argument("--doubao-only", action="store_true")
+    parser.add_argument("--mimo-only", action="store_true")
     parser.add_argument("--dashscope-only", action="store_true")
     args = parser.parse_args()
 
-    api_key = os.environ.get("VOLCENGINE_TTS_API_KEY", "").strip()
-    app_id = os.environ.get("VOLCENGINE_TTS_APP_ID", "").strip()
-    access_token = os.environ.get("VOLCENGINE_TTS_ACCESS_TOKEN", "").strip()
+    if args.mimo_only and args.dashscope_only:
+        parser.error("cannot use --mimo-only and --dashscope-only together")
+
+    mimo_key = os.environ.get("MIMO_TTS_API_KEY", "").strip()
+    mimo_endpoint = os.environ.get("MIMO_TTS_ENDPOINT", MIMO_TTS_ENDPOINT).strip() or MIMO_TTS_ENDPOINT
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
 
     all_results: list[ProbeResult] = []
     wav_by_key: dict[str, bytes] = {}
 
     if not args.dashscope_only:
-        print("=== Probing Volcano Doubao TTS ===")
+        print("=== Probing Xiaomi MiMo TTS ===")
         all_results.extend(
-            probe_doubao(
-                api_key=api_key,
-                app_id=app_id,
-                access_token=access_token,
-                quick=args.quick,
-            )
+            probe_mimo(api_key=mimo_key, endpoint=mimo_endpoint, quick=args.quick)
         )
 
-    if not args.doubao_only:
+    if not args.mimo_only:
         print("=== Probing DashScope Qwen3 TTS ===")
         all_results.extend(probe_dashscope(api_key=dashscope_key, quick=args.quick))
 

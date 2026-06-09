@@ -351,7 +351,7 @@ class DanmuApp(
         now = datetime.now().strftime("%H:%M:%S")
         user_pt = user_pt.replace("{current_time}", now)
         user_pt = user_pt.replace("{round}", str(self.screenshot_round))
-        user_pt = self._append_scene_memory_to_user_pt(user_pt)
+        user_pt = self._append_scene_context_to_user_pt(user_pt)
 
         # PET-006：调度已通过且 record_trigger_time 完成，才消费桌宠待注入指令
         pet_svc = self.__dict__.get("pet_command_service")
@@ -475,7 +475,7 @@ class DanmuApp(
 
         self._consume_request_timing(request_round, screenshot_id, scene_generation)
 
-        raw_items, memory_update = parse_ai_reply_with_memory(text, scene_generation)
+        raw_items, scene_brief = parse_ai_reply_with_memory(text, scene_generation)
         normalized_items = normalize_reply_batch(
             raw_items,
             scene_count=self._reply_scene_count,
@@ -496,11 +496,14 @@ class DanmuApp(
             )
             return
 
-        if self._memory_enabled():
-            if memory_update is not None:
-                if memory_update.scene_generation <= 0:
-                    memory_update.scene_generation = scene_generation
-                self._scene_memory.update_from_visual_result(memory_update)
+        if (
+            self._scene_memory_enabled()
+            and scene_brief
+            and self._scene_memory_update_due(request_round)
+        ):
+            from app.translations import Translator
+
+            self._scene_memory.set_brief(scene_brief, lang=Translator.get_language())
 
         request_id = self._reply_request_id(request_round, screenshot_id, scene_generation)
         self.reply_buffer.drop_replaceable_fallbacks(
@@ -596,7 +599,7 @@ class DanmuApp(
             self._latest_displayed_round = max(self._latest_displayed_round, queued.screenshot_round)
             self._latest_displayed_screenshot_id = max(self._latest_displayed_screenshot_id, queued.screenshot_id)
             self.history_writer.enqueue(display_content, queued.persona_id, queued.batch_index)
-            self._record_scene_memory_display(queued)
+            self._record_prompt_dedup_display(queued)
             from app.danmu_engine_models import DanmuItem
 
             if isinstance(item, DanmuItem):

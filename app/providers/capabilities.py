@@ -58,7 +58,12 @@ def _register(
     )
 
 
-_register("doubao", transport="doubao", stream_usage_in_final_chunk=False, max_tokens_field="max_output_tokens")
+_register(
+    "doubao",
+    transport="doubao",
+    stream_usage_in_final_chunk=False,
+    max_tokens_field="max_output_tokens",
+)
 _register("dashscope", usage_token_style="dashscope")
 _register("zhipu")
 _register("moonshot")
@@ -72,7 +77,12 @@ _register(
     mic_audio=True,
 )
 _register("custom_openai")
-_register("custom_doubao", transport="doubao", stream_usage_in_final_chunk=False, max_tokens_field="max_output_tokens")
+_register(
+    "custom_doubao",
+    transport="doubao",
+    stream_usage_in_final_chunk=False,
+    max_tokens_field="max_output_tokens",
+)
 
 _DEFAULT_OPENAI = ProviderCapabilities()
 _DEFAULT_DOUBAO = ProviderCapabilities(

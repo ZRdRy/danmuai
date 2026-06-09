@@ -97,7 +97,8 @@ def test_normal_mode_contract_uses_single_reply_count():
 
 def test_build_normal_reply_contract_zh():
     text = build_normal_reply_contract_zh(6, 20)
-    assert "固定 6 条" in text
+    assert "固定 6 条 comments" in text
+    assert "scene_brief" in text
     assert "优先贴当前画面" in text
     assert '"弹幕6"' in text
 
@@ -133,12 +134,14 @@ def test_strip_reply_contract_removes_new_normal_contract():
 
 
 def test_test1_persona_strip_roundtrip():
-    body = BUILTIN_PERSONAE["测试1"]["system_zh"]
-    assert "【人格：真实直播间五人弹幕】" in body
+    system_zh = BUILTIN_PERSONAE["测试1"]["system_zh"]
+    user_zh = BUILTIN_PERSONAE["测试1"]["user_zh"]
+    assert len(system_zh) <= 28
+    assert "【人格：真实直播间五人弹幕】" in user_zh
     cfg = FakeConfig({"normal_reply_count": "5"})
-    merged = ensure_reply_contract(body, cfg)
+    merged = ensure_reply_contract(system_zh, cfg)
     assert "固定 5 条" in merged
-    assert strip_reply_contract(merged) == body
+    assert strip_reply_contract(merged) == system_zh
     assert "测试" not in BUILTIN_PERSONAE
 
 
