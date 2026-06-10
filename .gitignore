@@ -68,7 +68,9 @@ python-mss-main/
 开源项目/
 Danmaku-master/
 .cursor/
-docs/archive/
+docs/archive/architecture-phases/
+docs/archive/planning/
+docs/archive/*.md
 
 # Maintainer docs (local only — not published on GitHub)
 AGENTS.md
