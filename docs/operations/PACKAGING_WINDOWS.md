@@ -13,7 +13,7 @@ DanmuAI.exe（主进程）
 
 打包资源（PyInstaller datas）：
 ├─ web/static/          Web 控制台静态页
-└─ data/danmu_pool_zh.json
+└─ data/pet/default/    内置桌宠素材（可选）
 ```
 
 默认 UI 为 **pywebview 桌面窗**，不是系统浏览器。仅当 pywebview 启动失败或用户显式指定时，才回退/改用系统浏览器。
@@ -27,7 +27,6 @@ DanmuAI.exe（主进程）
 | 操作系统 | Windows 10/11（与产品目标一致） |
 | Python | 建议 **3.12**（`README` / CI 约定）；当前仓库曾在 **3.14** 下打包通过，但 PyInstaller 对 3.14 仍有「Pydantic V1 不兼容」等警告 |
 | 依赖 | `requirements.txt` + `requirements-dev.txt`（含 `pyinstaller`、`pyinstaller-hooks-contrib`） |
-| 数据文件 | 构建前需存在 `data/danmu_pool_zh.json` |
 | 应用图标 | `resources/icon.ico`（exe）、`resources/icon.png`（托盘）；缺失时 `build_exe.ps1` 会调用 `scripts/generate_app_icon.py` 生成 |
 | 分发依赖 | 最终用户机器需 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Win10/11 多数已预装） |
 
@@ -54,8 +53,6 @@ DanmuAI.exe（主进程）
 cd E:\test\danmu   # 换成你的仓库根目录
 pip install -r requirements.txt -r requirements-dev.txt
 ```
-
-确认存在 `data\danmu_pool_zh.json`（可由 `scripts/extract_danmu_pool.py` 生成）。
 
 ### 2. 关闭正在运行的 exe
 
@@ -100,6 +97,7 @@ python -m PyInstaller --noconfirm --clean DanmuAI.spec
 - 系统托盘图标出现
 - pywebview 窗口或（回退时）系统浏览器能打开 `http://127.0.0.1:18765`
 - 弹幕 Overlay 正常
+- 桌宠内置素材（`data/pet/default/pet.json` + `spritesheet.webp`）已随 `_internal/data/pet/default/` 分发（PET-009，桌宠窗口不再「宠物加载失败」）
 - `%APPDATA%\DanmuAI\startup.log` 无新错误栈
 
 可选：无 WebView2 或需排错时使用：
@@ -140,7 +138,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 - 开发：`Path(__file__).parent.parent`（仓库根）
 - 打包：`sys._MEIPASS`（PyInstaller 解压目录）
-- 使用方：`web/static`、`data/danmu_pool_zh.json`、`resources/icon.png`
+- 使用方：`web/static`、`data/pet/default`、`resources/icon.png`
 
 ### Web 控制台 `app/web_console.py`
 
@@ -390,7 +388,7 @@ build\DanmuAI\warn-DanmuAI.txt
 ## 参考
 
 - [docs/WEB_CONSOLE.md](WEB_CONSOLE.md) — Web API 与控制台
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — 线程模型
-- [AGENTS.md](../AGENTS.md) — 开发约定
+- [docs/core/ARCHITECTURE.md](../core/ARCHITECTURE.md) — 线程模型
+- [AGENTS.md](../../AGENTS.md) — 开发约定
 - [pywebview FAQ — main thread](https://pywebview.flowrl.com/guide/faq)
 - [PyInstaller spec files](https://pyinstaller.org/en/stable/spec-files.html)

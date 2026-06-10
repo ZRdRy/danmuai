@@ -12,7 +12,7 @@
 
 - [ ] `README.md` 中的环境要求、已知限制与代码一致
 - [ ] `docs/CHANGELOG.md` 已更新本次变更
-- [ ] `docs/ARCHITECTURE.md` 与实际代码结构一致（含场景指纹、`live_freshness` 时序）
+- [ ] `docs/core/ARCHITECTURE.md` 与实际代码结构一致（含场景指纹、`live_freshness` 时序）
 - [ ] `docs/PRIVACY.md`、`SECURITY.md`、`docs/OPEN_SOURCE_AUDIT.md` 与 `screen_index` 截图行为一致
 - [ ] `THIRD_PARTY_NOTICES.md` 与 `requirements.txt` 一致
 

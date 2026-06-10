@@ -2,7 +2,27 @@
 
 ## Unreleased
 
-（暂无条目；下一版本发布前在此累积变更。）
+### Changed
+
+- **W-DANMU-POOL-BUILTIN-REMOVE-001**：移除内置公式化弹幕库（`data/danmu_pool_zh.json`、bootstrap 数据、`danmu_pool_enabled` 配置键）；公式化补足与填充仅走自定义句库（`danmu_pool_use_custom` + `/api/danmu-pool/*`）；`/api/danmu-pool/meta` 不再返回 `builtin_enabled` / `builtin_count`
+- **W-FP-V2-002**：移除 V1 悬浮窗兼容层；`/api/status` **不再**返回 `display_mode`（请改用 `danmu_render_mode`）。遗留 W-FP 配置键 `display_mode` 在 `ConfigStore` 启动时写回 `danmu_render_mode`，运行时不再读取。
+
+### Added
+
+- 人格工坊新增「提示内容」全局直播主题输入框（`live_topic` 配置键，上限 200 字）；AI 主链路在 `system_pt` 末尾追加主题行，空值零侵入（W-LIVE-TOPIC-001）
+- 助手设置新增「麦克风模式」标签：麦克风开关、窗口、测试与独立 `mic_api_*` / `mic_model` 配置；默认「与识图模型相同」保持兼容（W-mic-settings-tab）
+
+### Fixed（P3 全量修复，W-P3-*，2026-06-03）
+
+- 移除 `danmu_queue` 遗留别名；`_pending_request_meta` 改用 tuple 键；JPEG 压缩共享 `app/jpeg_resize.py`
+- legacy `realtime` 显示模式归一化收口至 `ConfigStore.__init__`
+- Web：`btnToggle` 不再切换前额外 `GET /api/status`；框选超时重置 `selection_state`；save_config 超时 10s
+- 退出顺序：`history_writer.stop()` 先于 `ai_worker.close()`；`RequestTimingService` start/stop 统一 `reset_started`
+- 弹幕引擎：`needs_refill` 惰性可见计数重建；诊断/ pywebview 重试等见 [bug-audit/BUGS-OVERVIEW.md](bug-audit/BUGS-OVERVIEW.md) BUG-050–089
+
+### Documentation
+
+- README 依赖表与 i18n 说明；WEB_CONSOLE 明确错误反馈走 Supabase 前端直连
 
 ## 2026-05-29
 

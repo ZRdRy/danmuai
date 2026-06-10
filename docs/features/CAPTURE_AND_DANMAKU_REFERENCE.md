@@ -25,7 +25,7 @@ python-mss 和 Danmaku 都对 DanmuAI 有参考价值，但当前不应直接替
 screenshot_timer（Qt 主线程）
   -> ScreenCapturer.grab()              app/snipper.py
   -> QPixmap（按 screen_index 全屏）
-  -> _on_normal_capture_tick()          main.py（无 _probe_scene_change；见 ISSUE-014）
+  -> _on_normal_capture_tick()          main.py（固定间隔截图，无画面 hash 场景判定）
   -> _trigger_api_call()
   -> QThreadPool + AiRunnable
   -> compress_screenshot()              main.py（QPixmap -> PIL -> JPEG Base64）
@@ -237,7 +237,7 @@ capture_backend = "qt" | "mss"
 region 裁剪完成后：
 
 - 设置 region 后，发送给 AI 的截图尺寸应小于或等于 region 尺寸经过压缩后的结果。
-- 场景指纹基于裁剪后的图像计算。
+- 主链路不做截图 hash 场景变化判定。
 - 无效 region 不导致截图失败。
 - Web/README/隐私文案与真实行为一致。
 

@@ -32,6 +32,7 @@ python main.py
 | [app/reply_queue.py](../app/reply_queue.py) | `AIReplyFIFOBuffer`, adaptive dequeue delay |
 | [app/danmu_engine.py](../app/danmu_engine.py) | Tracks, dedup, collision-aware placement |
 | [app/overlay.py](../app/overlay.py) | Transparent topmost render loop (~60 fps when animating) |
+| [app/floating_panel_engine.py](../app/floating_panel_engine.py) + [app/floating_panel_overlay.py](../app/floating_panel_overlay.py) | V2/V3 侧边悬浮窗：连续上滚、竖向 min_gap 准入、独立 reply 节奏、右侧透明窄窗 |
 | [app/danmu_pool.py](../app/danmu_pool.py) | Built-in/custom formula pool for on-screen top-up |
 | [app/config_store.py](../app/config_store.py) | SQLite config, Fernet-encrypted keys (`%APPDATA%/DanmuAI`) |
 | [app/application/](../app/application/) | Read-only projections, status/diagnostics snapshots, scheduling/timing services |
@@ -80,29 +81,25 @@ Details: [MAIN_PIPELINE.md](MAIN_PIPELINE.md). Machine-checked sequence table: [
 - AI HTTP runs in **QThreadPool** (`MAX_IN_FLIGHT=1` for visual).
 - HTTP handlers must not touch Qt objects directly; use `WebConsoleBridge` signals or `QTimer.singleShot(0, ...)`.
 
-## Memory modes
+## Scene brief memory
 
-Process-local scene memory and bullet dedup (`app/memory/`, `app/memory_prompt_builder.py`). **Not persisted** across sessions; configured in the Web console (`memory_mode`, `memory_window`).
+Process-local scene brief + optional prompt dedup (`app/memory/`, `app/memory_prompt_builder.py`). **Not persisted** across sessions; configured in the Web console as two independent toggles:
 
-| `memory_mode` | Behavior |
-|---------------|----------|
-| `off` | No memory injection |
-| `dedup_only` | Dedup hints + output constraints |
-| `scene_card` | Scene state card + dedup + constraints (default-style) |
-| `strong` | Same as `scene_card` with larger prompt budget and scene-switch carryover |
+| Setting | Default | Behavior |
+|---------|---------|----------|
+| `scene_memory_enabled` | off | Saves `scene_brief` on refresh ticks and injects the latest brief into each visual user prompt |
+| `scene_memory_interval_sec` | same as recognition interval | Refresh period for `scene_brief`; snapped to an integer multiple of `normal_recognition_interval_sec` (max 12×) |
+| `prompt_dedup_enabled` | on | Records recently displayed bullets and injects a dedup hint block into the next visual user prompt |
 
-`memory_window` (1–20, default 10) bounds recent bullet history for dedup. Mic insert path does not inject memory. Web/API details: [WEB_CONSOLE.md](WEB_CONSOLE.md). Historical design notes: [archive/planning/MEMORY_SYSTEM_PLAN.md](archive/planning/MEMORY_SYSTEM_PLAN.md).
+AI replies use a single JSON object contract: `{"scene_brief":"…","comments":[…]}`. Mic insert does not inject either block but may still update `scene_brief` when scene memory is enabled. Engine-layer dedup (`dedup_threshold`) remains separate. Web/API details: [WEB_CONSOLE.md](WEB_CONSOLE.md).
 
 ## Scene metadata
 
-- Scene fingerprint helpers exist (`app/scene_fingerprint.py`); `scene_generation` is carried on requests/replies for memory and logging. Runtime scene-advance / API gate is **intentionally inactive** (`_scene_generation` stays `0`; `_scene_api_block_reason()` returns empty).
+- **No screenshot hash / scene-change gate**: the product does not compare consecutive frames to skip API calls. `scene_generation` is still carried on requests/replies for memory keys and logging; it stays `0` for the whole run.
 - **Normal mode reply policy** (current product):
-  - No scene-generation check before enqueue or consume.
-  - No hard drop of in-flight or queued replies by `screenshot_id`, `captured_at` TTL, or supersede.
+  - No hard drop of in-flight or queued replies by `screenshot_id`, `captured_at` TTL, scene generation, or supersede.
   - Slow models may show replies slightly behind the live picture; continuity is preferred over strict frame sync.
-  - `_is_reply_stale()` is kept as a compatibility hook and always returns not stale today.
-- `freshness` config still scales screenshot interval in `_calc_auto_interval()`; it does not drop replies.
-- Dormant stale-drop backoff counters (`_stale_drop_*`) and `app/live_freshness.py` helpers remain for tests/future policy.
+- `app/live_freshness.py` provides slow-model detection and local fallback batches only.
 
 ## Stability
 
@@ -119,5 +116,22 @@ Process-local scene memory and bullet dedup (`app/memory/`, `app/memory_prompt_b
 | Overlay / tracks | `app/overlay.py`, `app/danmu_engine.py` (high risk) |
 | Capture / AI orchestration | `main.py` (high risk; read pipeline docs first) |
 | Models / providers | `app/model_providers.py`, `app/model_catalog.py` |
+| Floating panel V2 | `app/floating_panel_engine.py` + `app/floating_panel_overlay.py` (W-FP-V2-001) |
 
-Contributors: [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md). Agents: [AGENTS.md](../AGENTS.md). Web API map: [WEB_CONSOLE.md](WEB_CONSOLE.md).
+## Floating panel mode V2 (W-FP-V2-001 / W-FP-V2-002)
+
+`danmu_render_mode`（默认 `scrolling`）互斥控制弹幕渲染：
+- `scrolling`：横向 `DanmuOverlay` + `DanmuEngine`（向后兼容）。
+- `floating_panel`：右侧窄窗 `FloatingPanelOverlay` + `FloatingPanelEngine`（底部进入、持续上滚、越顶移除）；**不显示**横向 Overlay。W-FP-V3-003：`can_accept_new_item` 按末条底边 + `min_gap=max(12, height*0.25)` 准入；`_consume_reply_queue` spacing 阻塞时 peek 不 pop；`_estimated_reply_gap_ms` 不复用横向 `visibility_counts`。
+
+遗留 W-FP `display_mode`（`overlay` / `floating_panel` / `both`）在 `ConfigStore.__init__` 由 `migrate_legacy_display_mode_to_render_mode()` 写回 `danmu_render_mode` 后不再读取；`both` 映射为 `scrolling`。
+
+显隐与生命周期：
+- `_sync_overlay_visibility()` / `_sync_floating_panel_visibility()` 按 `danmu_render_mode` 互斥显隐。
+- `stop()` → `floating_panel_overlay.reset_session_state()` + `floating_panel_engine.stop()`。
+- `/api/status`：`danmu_render_mode`；`display_count` 在 `floating_panel` 模式下为 `floating_panel_active_count`（**无** `display_mode` 字段）。
+
+数据流：
+- `_consume_reply_queue` →（floating_panel 且底部空间不足时 defer，条目留队）→ `_display_danmu_text()` 路由器 → `DanmuEngine.add_text` **或** `FloatingPanelOverlay.add_danmu_text`（互斥，无旁路 feed）。
+
+Contributors: [CONTRIBUTING_ARCHITECTURE.md](CONTRIBUTING_ARCHITECTURE.md). Web API map: [WEB_CONSOLE.md](WEB_CONSOLE.md).
